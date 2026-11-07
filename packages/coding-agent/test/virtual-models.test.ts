@@ -9,7 +9,7 @@ import {
 	InMemoryModelsStore,
 	type Model,
 } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -50,6 +50,63 @@ async function createRuntime(requests: ModelRouteRequest[] = []) {
 function assistantFrom(model: Model<string>, text: string): AssistantMessage {
 	return { ...fauxAssistantMessage(text), api: model.api, provider: model.provider, model: model.id };
 }
+
+describe("model refresh bursts", () => {
+	it("does not start a redundant scheduled refresh after an explicit awaited refresh", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		const refresh = vi.spyOn(runtime, "refresh");
+		try {
+			runtime.registerVirtualModel({
+				provider: "explicit-refresh",
+				id: "alias",
+				name: "Alias",
+				route: () => { throw new Error("unused"); },
+			});
+			await runtime.refresh({ allowNetwork: false });
+			await new Promise<void>((resolve) => queueMicrotask(resolve));
+			expect(refresh).toHaveBeenCalledTimes(1);
+		} finally {
+			refresh.mockRestore();
+		}
+	});
+
+	it("coalesces synchronous virtual registrations into one asynchronous refresh", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		const refresh = vi.spyOn(runtime, "refresh").mockResolvedValue({ aborted: false, errors: new Map() });
+		try {
+			for (let i = 0; i < 24; i++) {
+				runtime.registerVirtualModel({
+					provider: "batch-virtual",
+					id: `alias-${i}`,
+					name: `Alias ${i}`,
+					route: () => { throw new Error("unused"); },
+				});
+			}
+			expect(runtime.getModel("batch-virtual", "alias-23")).toBeDefined();
+			expect(refresh).toHaveBeenCalledTimes(0);
+			await new Promise<void>((resolve) => queueMicrotask(resolve));
+			expect(refresh).toHaveBeenCalledTimes(1);
+			for (let i = 0; i < 24; i++) runtime.unregisterVirtualModel("batch-virtual", `alias-${i}`);
+			expect(refresh).toHaveBeenCalledTimes(1);
+			await new Promise<void>((resolve) => queueMicrotask(resolve));
+			expect(refresh).toHaveBeenCalledTimes(2);
+		} finally {
+			refresh.mockRestore();
+		}
+	});
+});
 
 describe("getBranchSelection", () => {
 	function select(build: (sessionManager: SessionManager) => void, runtime: ModelRuntime) {

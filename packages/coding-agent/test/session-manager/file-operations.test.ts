@@ -95,6 +95,25 @@ describe("loadEntriesFromFile", () => {
 		expect(entries).toHaveLength(2);
 	});
 
+	it("preserves UTF-8 across read boundaries in multi-megabyte JSONL records", () => {
+		const file = join(tempDir, "large-utf8-record.jsonl");
+		const content = "🌍".repeat(800_000);
+		const header = { type: "session", version: 3, id: "large-utf8", timestamp: "2025-01-01T00:00:00Z", cwd: tempDir };
+		const entry = {
+			type: "custom",
+			id: "large-entry",
+			parentId: null,
+			timestamp: "2025-01-01T00:00:01Z",
+			customType: "large-record",
+			data: content,
+		};
+		writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}`);
+		const entries = loadEntriesFromFile(file);
+		expect(entries).toHaveLength(2);
+		expect(entries[1]).toMatchObject(entry);
+		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
+	});
+
 	it("adds a newline after an unterminated valid record", () => {
 		const file = join(tempDir, "unterminated.jsonl");
 		const content =

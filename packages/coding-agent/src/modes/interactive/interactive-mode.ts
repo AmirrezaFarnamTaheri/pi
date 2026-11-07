@@ -72,9 +72,9 @@ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-ser
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
-	collectCacheMisses,
+	collectActiveBranchCacheMisses,
 	computeCacheWaste,
-	detectCacheMiss,
+	detectCacheMissForSession,
 } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
@@ -4150,7 +4150,7 @@ export class InteractiveMode {
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
-			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
+			? collectActiveBranchCacheMisses(this.sessionManager, this.session.modelRuntime)
 			: new Map<AssistantMessage, CacheMiss>();
 
 		if (options.updateFooter) {
@@ -4361,7 +4361,9 @@ export class InteractiveMode {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
 		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
+		// The active branch is the only transcript sent to the provider. Scanning all
+		// stored branches is both expensive and wrong after a branch switch.
+		const miss = detectCacheMissForSession(this.sessionManager, message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
 	}
 
