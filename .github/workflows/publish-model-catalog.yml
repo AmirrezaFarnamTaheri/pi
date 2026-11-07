@@ -67,6 +67,18 @@ jobs:
       - name: Validate model catalog JSON
         run: npm run check:model-catalog
 
+      # Forks do not necessarily carry upstream's release tags. The compatibility
+      # checker archives the matching source tag, so fetch it from the canonical
+      # public repository when absent rather than skipping release verification.
+      - name: Fetch upstream source tag for the released client
+        run: |
+          set -euo pipefail
+          release="$(npm view @earendil-works/pi-ai version)"
+          if ! git rev-parse -q --verify "refs/tags/v${release}" > /dev/null; then
+            git fetch --no-tags https://github.com/earendil-works/pi.git \
+              "refs/tags/v${release}:refs/tags/v${release}"
+          fi
+
       # pi.dev serves the catalog to released pi >= MINIMUM_PI_VERSION. Fail before
       # publishing if the latest release's code cannot handle it.
       - name: Check the model catalog against the latest release
