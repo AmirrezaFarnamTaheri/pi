@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AnyModel, Model, Provider } from "@earendil-works/pi-ai";
+import type { AnyModel, Api, Model, Provider } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { RotationPool, type RotationHealth, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
 
@@ -153,7 +153,7 @@ function accountAlias(source: Provider, id: string, auth: Provider["auth"]): Pro
 	return {
 		...rest, id, name: `${source.name} (${id})`, auth,
 		getModels: () => (accountModels
-			? accountModels.filter((model): model is Model<AnyModel["api"] & Model<"openai-completions">["api"]> =>
+			? accountModels.filter((model): model is Model<Api> =>
 				model.type !== "image" && model.type !== "classifier")
 			: source.getModels()).map(toAlias),
 		getAllModels: () => (accountModels ?? source.getAllModels?.() ?? source.getModels()).map(toAlias),
