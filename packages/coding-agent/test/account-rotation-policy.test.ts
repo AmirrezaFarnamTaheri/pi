@@ -56,10 +56,84 @@ describe("AccountRotationPool", () => {
 
 	it("classifies provider failures conservatively", () => {
 		expect(classifyCredentialFailure("429 Too Many Requests")).toBe("rate-limit");
+		expect(classifyCredentialFailure("Usage Limit Reached")).toBe("rate-limit");
 		expect(classifyCredentialFailure("401 Unauthorized")).toBe("auth");
 		expect(classifyCredentialFailure("503 overloaded")).toBe("overload");
 		expect(classifyCredentialFailure("403 content policy")).toBeUndefined();
 		expect(classifyCredentialFailure("context window exceeded")).toBeUndefined();
+	});
+});
+
+
+describe("account strategies and quota-aware health (CortexKit / pi-antigravity-auth adoption)", () => {
+	it("supports sticky selection across user turns and skips a disabled identity on new requests", () => {
+		const pool = new RotationPool(accounts, 1_000, "sticky");
+		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(0);
+		expect(pool.choose({ reason: "user", now: 1 }).index).toBe(0);
+		pool.setEnabled(accounts[0]!, false);
+		expect(pool.choose({ reason: "user", now: 2 }).index).toBe(1);
+		// Never swap accounts mid-tool-continuation, even after a manual disable.
+		expect(pool.choose({ reason: "continuation", previous: accounts[0], now: 3 }).index).toBe(0);
+		pool.setEnabled(accounts[0]!, true);
+		expect(pool.status(4)[0]?.enabled).toBe(true);
+	});
+
+	it("uses deterministic random selection only across eligible accounts", () => {
+		const pool = new RotationPool(accounts, 1000, "random", () => 0.9999);
+		pool.setEnabled(accounts[2]!, false);
+		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(1);
+		pool.setEnabled(accounts[1]!, false);
+		expect(pool.choose({ reason: "user", now: 1 }).index).toBe(0);
+	});
+
+	it("prefers usable quota and healthier accounts in hybrid mode, with reset recovery", () => {
+		const pool = new RotationPool(accounts, 1000, "hybrid");
+		pool.reportQuota(accounts[0]!, 0.02, 5_000);
+		pool.reportQuota(accounts[1]!, 0.8, 5_000);
+		pool.reportQuota(accounts[2]!, 0, 5_000);
+		expect(pool.choose({ reason: "user", now: 100 }).index).toBe(1);
+		const entries = pool.status(100);
+		expect(entries[2]?.readyInMs).toBe(4_900);
+		expect(entries[2]?.quotaRemaining).toBe(0);
+		expect(pool.choose({ reason: "user", now: 5_001 }).index).toBe(2);
+	});
+
+	it("applies exponential credential-specific backoff and honours a server reset hint", () => {
+		const pool = new RotationPool(accounts, 1_000);
+		pool.choose({ reason: "retry", now: 0, failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false } });
+		expect(pool.status(0)[0]?.readyInMs).toBe(1_000);
+		pool.choose({ reason: "retry", now: 1_001, failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false } });
+		expect(pool.status(1_001)[0]?.readyInMs).toBe(2_000);
+		pool.choose({ reason: "retry", now: 3_002, failed: { target: accounts[0]!, errorMessage: "Usage Limit Reached; limit will reset in 10 minutes", hasOutput: false } });
+		expect(pool.status(3_002)[0]?.readyInMs).toBe(600_000);
+		expect(pool.status(3_002)[0]?.failureCount).toBe(3);
+		pool.markSuccess(accounts[0]!);
+		expect(pool.status(3_002)[0]?.failureCount).toBe(0);
+	});
+
+	it("pins an authorized account until unpinned and never exposes key material in status", () => {
+		const pool = new RotationPool(accounts);
+		pool.pin(accounts[2]!);
+		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(2);
+		expect(pool.choose({ reason: "user", now: 1 }).index).toBe(2);
+		pool.unpin();
+		expect(pool.choose({ reason: "user", now: 2 }).index).toBe(0);
+		expect(pool.status(2).map((s) => s.pinned)).toEqual([false, false, false]);
+	});
+
+	it("rejects bogus quota, strategy, and account references without mutating state", () => {
+		expect(() => new RotationPool(accounts, 1_000, "other" as never)).toThrow(/strategy/i);
+		const pool = new RotationPool(accounts);
+		expect(() => pool.reportQuota(accounts[0]!, -0.1)).toThrow(/quota/i);
+		expect(() => pool.setEnabled({ provider: "missing", model: "no" }, false)).toThrow(/unknown/i);
+		expect(pool.status().every((entry) => entry.enabled)).toBe(true);
+	});
+
+	it("keeps normal content, policy, and post-output failures in the original account", () => {
+		const pool = new RotationPool(accounts, 1000, "hybrid");
+		pool.reportQuota(accounts[0]!, 0.99);
+		expect(pool.choose({ reason: "retry", failed: { target: accounts[1]!, errorMessage: "429 rate limit", hasOutput: true } }).index).toBe(1);
+		expect(pool.status()[1]?.failureCount).toBe(0);
 	});
 });
 
