@@ -478,7 +478,11 @@ export function buildContextEntries(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionEntry[] {
-	const path = buildSessionPath(entries, leafId, byId);
+	return contextEntriesFromPath(buildSessionPath(entries, leafId, byId));
+}
+
+/** Reuse the already indexed active branch instead of traversing it a second time. */
+function contextEntriesFromPath(path: SessionEntry[]): SessionEntry[] {
 	let compaction: CompactionEntry | null = null;
 
 	for (const entry of path) {
@@ -507,7 +511,8 @@ export function buildContextEntries(
 			contextEntries.push(entry);
 		}
 	}
-	contextEntries.push(...path.slice(compactionIdx + 1));
+	// Spread-call arguments have an engine-specific limit (~100k+ entries).
+	for (let i = compactionIdx + 1; i < path.length; i++) contextEntries.push(path[i]!);
 	return contextEntries;
 }
 
@@ -546,9 +551,12 @@ export function buildSessionProjection(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionProjection {
-	const path = buildSessionPath(entries, leafId, byId);
+	return projectSessionPath(buildSessionPath(entries, leafId, byId));
+}
+
+function projectSessionPath(path: SessionEntry[]): SessionProjection {
 	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const contextEntries = buildContextEntries(entries, leafId, byId);
+	const contextEntries = contextEntriesFromPath(path);
 	const edits = new Map<string, ContextEditEntry>();
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
@@ -1094,6 +1102,8 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/** Cache the frame-time footer title until the append-only session array changes. */
+	private sessionNameCache?: { entries: FileEntry[]; length: number; name: string | undefined };
 
 	private constructor(
 		cwd: string,
@@ -1422,18 +1432,21 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Get the current session name from the latest session_info entry, if any. */
+	/** Get the latest session title in O(1) on repeated UI frames. */
 	getSessionName(): string | undefined {
-		// Walk entries in reverse to find the latest session_info entry.
-		// Empty names explicitly clear the session title. Reads fileEntries directly: the footer
-		// calls this on every frame, and getEntries() copies the whole session.
-		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
-			const entry = this.fileEntries[i];
+		const entries = this.fileEntries;
+		const cached = this.sessionNameCache;
+		if (cached?.entries === entries && cached.length === entries.length) return cached.name;
+		let name: string | undefined;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]!;
 			if (entry.type === "session_info") {
-				return entry.name?.trim() || undefined;
+				name = entry.name?.trim() || undefined;
+				break;
 			}
 		}
-		return undefined;
+		this.sessionNameCache = { entries, length: entries.length, name };
+		return name;
 	}
 
 	/**
@@ -1591,7 +1604,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildContextEntries(): SessionEntry[] {
-		return buildContextEntries(this.getEntries(), this.leafId, this.byId);
+		return contextEntriesFromPath(this.getBranch());
 	}
 
 	/**
@@ -1599,7 +1612,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildSessionProjection(): SessionProjection {
-		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
+		return projectSessionPath(this.getBranch());
 	}
 
 	buildSessionContext(): SessionContext {

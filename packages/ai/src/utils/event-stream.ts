@@ -30,7 +30,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private queue = new FifoQueue<T>();
 	private waiting = new FifoQueue<(value: IteratorResult<T>) => void>();
 	/** Producers are notified as buffered events are consumed. */
-	private waitingForCapacity = new FifoQueue<() => void>();
+	private waitingForCapacity = new Set<() => void>();
 	/** Only block a producer when there is an actual async iterator consuming events. */
 	private activeIterators = 0;
 	protected done = false;
@@ -54,6 +54,16 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		void this.finalResultPromise.catch(() => {});
 	}
 
+	/** Wake only the oldest live capacity waiter, preserving FIFO producer fairness. */
+	private wakeCapacityWaiter(): void {
+		this.waitingForCapacity.values().next().value?.();
+	}
+
+	/** Terminal/iterator cancellation must release every pending producer. */
+	private wakeAllCapacityWaiters(): void {
+		for (const wake of this.waitingForCapacity) wake();
+	}
+
 	/** Publish an event without waiting for consumers; a terminal event resolves result(). */
 	push(event: T): void {
 		if (this.done) return;
@@ -66,7 +76,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		// Terminal events also release producers waiting on queue capacity. Consumers
 		// can await result() without draining the remaining progress events.
 		if (this.done) {
-			while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
+			this.wakeAllCapacityWaiters();
 		}
 		// Deliver to waiting consumer or queue it
 		const waiter = this.waiting.dequeue();
@@ -93,18 +103,25 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		while (this.activeIterators > 0 && !this.done && this.queue.length >= maxBuffered) {
 			await new Promise<void>((resolve, reject) => {
 				const wake = () => {
+					if (!this.waitingForCapacity.delete(wake)) return;
 					signal?.removeEventListener("abort", onAbort);
 					resolve();
 				};
 				const onAbort = () => {
+					if (!this.waitingForCapacity.delete(wake)) return;
 					signal?.removeEventListener("abort", onAbort);
 					reject(new Error("Event stream publication aborted"));
 				};
+				this.waitingForCapacity.add(wake);
 				signal?.addEventListener("abort", onAbort, { once: true });
-				this.waitingForCapacity.enqueue(wake);
 				if (signal?.aborted) onAbort();
 			});
-			if (signal?.aborted) throw new Error("Event stream publication aborted");
+			if (signal?.aborted) {
+				// Cancellation can race a capacity wake before the producer publishes.
+				// Pass that freed slot to the next live producer instead of starving it.
+				if (this.queue.length < maxBuffered) this.wakeCapacityWaiter();
+				throw new Error("Event stream publication aborted");
+			}
 		}
 		this.push(event);
 	}
@@ -130,7 +147,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			waiter({ value: undefined as any, done: true });
 		}
 		// An ended stream must not strand producers blocked on queue capacity.
-		while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
+		this.wakeAllCapacityWaiters();
 	}
 
 	async *[Symbol.asyncIterator](): AsyncIterator<T> {
@@ -139,7 +156,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			while (true) {
 				if (this.queue.length > 0) {
 					const next = this.queue.dequeue()!;
-					this.waitingForCapacity.dequeue()?.();
+					this.wakeCapacityWaiter();
 					yield next;
 				} else if (this.done) {
 					if (this.hasFailed) throw this.failure;
@@ -156,7 +173,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		} finally {
 			this.activeIterators--;
 			// Breaking out of for-await no longer requires future consumption.
-			while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
+			this.wakeAllCapacityWaiters();
 		}
 	}
 
