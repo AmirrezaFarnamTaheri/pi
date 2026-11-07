@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { AnyModel, Model, Provider } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { RotationPool, type RotationHealth, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
 
@@ -148,10 +148,35 @@ function accountStream(stream: AssistantMessageEventStream, id: string): Assista
 /** Preserve source provider's custom stream, auth-header and transport behavior. */
 function accountAlias(source: Provider, id: string, auth: Provider["auth"]): Provider {
 	const { refreshModels: _refreshModels, ...rest } = source;
+	let accountModels: readonly AnyModel[] | undefined;
+	const toAlias = <T extends AnyModel>(model: T): T => ({ ...model, provider: id });
 	return {
 		...rest, id, name: `${source.name} (${id})`, auth,
-		getModels: () => source.getModels().map((model) => ({ ...model, provider: id })),
-		getAllModels: () => (source.getAllModels?.() ?? source.getModels()).map((model) => ({ ...model, provider: id })),
+		getModels: () => (accountModels
+			? accountModels.filter((model): model is Model<AnyModel["api"] & Model<"openai-completions">["api"]> =>
+				model.type !== "image" && model.type !== "classifier")
+			: source.getModels()).map(toAlias),
+		getAllModels: () => (accountModels ?? source.getAllModels?.() ?? source.getModels()).map(toAlias),
+		...(source.refreshModels ? { refreshModels: async (context: Parameters<NonNullable<Provider["refreshModels"]>>[0]) => {
+			// Dynamic provider refreshes publish through a shared source instance.
+			// Remap its persisted catalog to this alias without ever applying its update
+			// callback to the original account's in-memory model list.
+			const stored = context.stored ? {
+				...context.stored,
+				models: context.stored.models.map((model) => ({ ...model, provider: source.id })),
+			} : undefined;
+			await source.refreshModels!({
+				...context, stored,
+				publish: async (publication) => {
+					const models = publication.persist?.models ?? context.stored?.models;
+					const mapped = models?.map(toAlias);
+					return context.publish({
+						...(publication.persist ? { persist: { ...publication.persist, models: mapped! } } : {}),
+						update: () => { if (mapped) accountModels = mapped; },
+					});
+				},
+			});
+		} } : {}),
 		stream: (model, context, options) => accountStream(
 			source.stream({ ...model, provider: source.id }, context, options), id),
 		streamSimple: (model, context, options) => accountStream(

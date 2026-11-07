@@ -76,6 +76,38 @@ describe("account alias provider transport isolation", () => {
 		expect((await events.result()).provider).toBe("oauth-account-alias");
 	});
 
+	it("isolates a dynamic source's per-account model refresh without mutating the source catalog", async () => {
+		let sourceModels: Model<"openai-completions">[] = [];
+		const base = sourceProvider();
+		const dynamic = {
+			...base,
+			getModels: () => sourceModels,
+			refreshModels: async (context: Parameters<NonNullable<Provider["refreshModels"]>>[0]) => {
+				const name = context.credential?.type === "oauth" ? context.credential.access : "unknown";
+				const model = { ...base.getModels()[0]!, id: name, provider: "rotation-test" };
+				await context.publish({
+					persist: { models: [model], checkedAt: Date.now() },
+					update: () => { sourceModels = [model]; },
+				});
+			},
+		} as Provider;
+		const alias = createOAuthAccountAlias(dynamic, "work-models");
+		let saved: string | undefined;
+		await alias.refreshModels!({
+			credential: { type: "oauth", access: "work-only", refresh: "r", expires: Date.now() + 10000 },
+			allowNetwork: true, signal: new AbortController().signal,
+			publish: async ({ persist, update }) => {
+				saved = persist?.models[0]?.provider;
+				update?.();
+				return true;
+			},
+		});
+		expect(saved).toBe("work-models");
+		expect(alias.getModels().map((model) => model.id)).toEqual(["work-only"]);
+		expect(alias.getModels()[0]?.provider).toBe("work-models");
+		expect(dynamic.getModels()).toEqual([]);
+	});
+
 	it("never inherits stored credentials for an environment-only API key alias", async () => {
 		const alias = createApiKeyAccountAlias(sourceProvider(), "env-account", "ROTATION_TEST_SECRET");
 		const resolve = alias.auth.apiKey!.resolve;
