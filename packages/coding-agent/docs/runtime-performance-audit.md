@@ -17,15 +17,26 @@ Audit date: 2026-11-07. Base: PR #2 merged main. This is a targeted runtime audi
 
 Synthetic lookup benchmarks ran under Node.js v22.16.0 in the analysis container using arrays and Maps of 100,000 session-like entries and 250 lookups. They did not include I/O, React/TUI rendering, a production Pi session, or network calls. These are **not** end-to-end latency claims; actual gains depend on session size and workload.
 
-## Additional candidates requiring production profiling
+## Follow-up fixes after CodeRabbit review
 
-- The new `getChildren()` lazy index trades a small additional memory footprint and one index build for faster repeated navigation. Verify against large real branch graphs and loaded sessions.
-- Long JSONL entries use repeated string-buffer concatenation in `loadEntriesFromFile()`. Memory and time growth for unusually large single entries should be measured before changing the parser.
-- `ModelRuntime.registerNativeProvider()`, `registerProvider()`, and `registerVirtualModel()` each fire an asynchronous `refresh({ allowNetwork: false })`. Registering many aliases in one session can queue repeated model/config/availability recomposition. A coalesced refresh scheduler might help, but needs measurement and auth-snapshot ordering tests before changing behavior.
-- The core agent loop prepares parallel tool calls sequentially and then launches the resulting actions in an unbounded `Promise.all()`. Under unusually large model-generated tool batches, launch peaks and hook latency should be measured; introduce a concurrency budget only with ordering, cancellation and permission-hook coverage.
+The branch-local cache-miss reconstruction now excludes abandoned sibling responses from its re-billed token baseline. The idle-time explanation, however, also checks the latest *actual provider request* across stored branches: a recent abandoned-branch response may have refreshed a shared cache prefix. These concerns are computed separately for live notices and transcript rebuilds. Regression tests cover branch divergence, idle time after navigation and session reload, and incremental request-state caching.
+
+Further runtime changes:
+
+- `loadEntriesFromFile()` scans each newly decoded chunk exactly once and joins a multi-buffer JSONL line only when complete, preserving UTF-8 boundaries and unfinished-record repair. On isolated Node 22.16.0, 64 MiB newline-free synthetic text took approximately 952 ms with the previous accumulation/indexOf loop and 22 ms with chunk-local scanning; this is **not** a real-session performance measurement.
+- The lazy `getChildren()` index stores one entry directly for single-child parents, allocating child arrays only for genuinely branching parents. The public API still returns defensive arrays.
+- Repeated extension/native/virtual model registrations made synchronously in one turn schedule one asynchronous non-network model refresh. Model composition and provisional availability still update synchronously.
+- Parallel tool execution is bounded to eight active tools in a batch instead of launching every approved tool at once. Permission/preparation hooks remain ordered; tool results are still emitted in original call order.
+- `getTree()` now detects disconnected cyclic components instead of silently hiding entries. Wide-sibling sorting parses each child timestamp once rather than in every comparator call.
+
+## Remaining safety and profiling trade-offs
+
+
+- `SessionInfoCache.get()` still verifies file integrity using a full-file digest even when stat metadata matches. Dropping that check would weaken detection of same-size, same-timestamp rewrites. Profile real picker reopen frequency and I/O before revising its validity contract.
+- Ordered permission/preparation hooks and an eight-tool peak execution budget prioritize deterministic approvals and resource safety over shortest possible start latency; profile representative 10/50/100-tool batches before making the limit configurable.
 - Cache warming, compaction, model/auth refresh, extensions, and tool-output persistence may introduce latency under high concurrency; collect CPU, allocation, event-loop, and I/O traces rather than assuming they dominate.
 - `EventStream.push()` allows unbounded buffering for result-only consumers by design; changing that contract requires consumer-migration tests.
 
 ## Validation
 
-Focused regressions are in `packages/ai/test/event-stream-backpressure.test.ts`, `packages/coding-agent/test/session-manager/build-context.test.ts`, `packages/coding-agent/test/session-manager/tree-traversal.test.ts`, and `packages/coding-agent/test/cache-stats.test.ts`. Full repository build, type checks, and CI must pass before considering this PR ready. No external-service latency, live-account performance, or production flamegraphs were measured.
+Focused regressions are in `packages/ai/test/event-stream-backpressure.test.ts`, `packages/agent/test/agent-loop.test.ts`, `packages/coding-agent/test/virtual-models.test.ts`, `packages/coding-agent/test/session-manager/file-operations.test.ts`, `packages/coding-agent/test/session-manager/build-context.test.ts`, `packages/coding-agent/test/session-manager/tree-traversal.test.ts`, and `packages/coding-agent/test/cache-stats.test.ts`. Full repository build, type checks, and CI must pass before considering this PR ready. No external-service latency, live-account performance, or production flamegraphs were measured.
