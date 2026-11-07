@@ -780,6 +780,61 @@ describe("agentLoop with AgentMessage", () => {
 		expect(turnToolResultIds).toEqual(["tool-1", "tool-2"]);
 	});
 
+	it("bounds the number of simultaneously running tools in a large parallel batch", async () => {
+		const schema = obj({ value: str() });
+		let active = 0;
+		let peak = 0;
+		const tool: AgentTool<typeof schema, { value: string }> = {
+			name: "bounded",
+			label: "Bounded",
+			description: "Slow independent operation",
+			parameters: schema,
+			async execute(_toolCallId, params) {
+				active++;
+				peak = Math.max(peak, active);
+				try {
+					await new Promise<void>((resolve) => setTimeout(resolve, 1));
+					return { content: [{ type: "text", text: params.value }], details: { value: params.value } };
+				} finally {
+					active--;
+				}
+			},
+		};
+		let callIndex = 0;
+		const stream = agentLoop(
+			[createUserMessage("run many tools")],
+			{ messages: [], tools: [tool] },
+			{ model: createModel(), convertToLlm: identityConverter, toolExecution: "parallel" },
+			undefined,
+			() => {
+				const out = createAssistantMessageEventStream();
+				queueMicrotask(() => {
+					const first = callIndex++ === 0;
+					out.push({
+						type: "done",
+						reason: first ? "toolUse" : "stop",
+						message: createAssistantMessage(
+							first
+								? Array.from({ length: 24 }, (_, i) => ({
+									type: "toolCall" as const, id: `call-${i}`, name: "bounded", arguments: { value: String(i) },
+								}))
+								: [{ type: "text", text: "done" }],
+							first ? "toolUse" : "stop",
+						),
+					});
+				});
+				return out;
+			},
+		);
+		const ids: string[] = [];
+		for await (const event of stream) {
+			if (event.type === "message_end" && event.message.role === "toolResult") ids.push(event.message.toolCallId);
+		}
+		expect(peak).toBeGreaterThan(1);
+		expect(peak).toBeLessThanOrEqual(8);
+		expect(ids).toEqual(Array.from({ length: 24 }, (_, i) => `call-${i}`));
+	});
+
 	it("should inject queued messages after all tool calls complete", async () => {
 		const toolSchema = obj({ value: str() });
 		const executed: string[] = [];
