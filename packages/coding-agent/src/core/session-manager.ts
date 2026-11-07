@@ -658,7 +658,11 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 			let newlineIndex = chunk.indexOf("\n");
 			while (newlineIndex !== -1) {
 				const part = chunk.slice(lineStart, newlineIndex);
-				const line = lineParts.length === 0 ? part : (lineParts.push(part), lineParts.join(""));
+				let line = part;
+				if (lineParts.length > 0) {
+					lineParts.push(part);
+					line = lineParts.join("");
+				}
 				const entry = parseSessionEntryLine(line);
 				if (entry) entries.push(entry);
 				lineParts.length = 0;
