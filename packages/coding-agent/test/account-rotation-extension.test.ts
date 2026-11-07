@@ -22,13 +22,13 @@ function createHarness(configuration: unknown) {
 		on(event: string, handler: (...args: never[]) => Promise<void>) { handlers.set(event, handler); },
 		registerProvider(provider: string, providerConfig: { apiKey?: string }) {
 			registered.push({ provider, apiKey: providerConfig.apiKey });
-			models.set(provider + "/sonnet", { ...physical, provider });
+			models.set(`${provider}/sonnet`, { ...physical, provider });
 		},
 		registerVirtualModel(value: typeof virtual) { virtual = value; },
 		registerCommand() {},
 	} as unknown as ExtensionAPI;
 	const ctx = { modelRegistry: {
-		find(provider: string, id: string) { return models.get(provider + "/" + id); },
+		find(provider: string, id: string) { return models.get(`${provider}/${id}`); },
 		hasConfiguredAuth() { return true; },
 		async refresh() {},
 	} };

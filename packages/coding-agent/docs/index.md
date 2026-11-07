@@ -12,6 +12,7 @@ If Pi is already installed, choose what you want to do:
 
 - [Use Pi interactively](usage.md) to add files, run commands, direct ongoing work, and export results.
 - [Choose a model](models.md) or connect a subscription, API key, local model, or compatible endpoint.
+- [Rotate independently authenticated accounts](account-rotation.md) with the optional account-rotation extension.
 - [Continue or branch a session](sessions.md) to resume work or explore another approach without losing history.
 - [Configure Pi](configuration.md) for your preferences, working folders, instructions, and reusable resources.
 - [Understand how Pi works](how-pi-works.md), including tools, context, sessions, and the agent loop.

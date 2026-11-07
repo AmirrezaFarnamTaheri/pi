@@ -5,7 +5,7 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = String.raw`
+const REGEX_WORKER_CODE = `
 "use strict";
 const { parentPort } = require("node:worker_threads");
 const { createReadStream } = require("node:fs");
