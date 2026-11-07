@@ -204,6 +204,42 @@ describe("SessionManager append and tree traversal", () => {
 		});
 	});
 
+
+	describe("tree correctness and timestamp sorting", () => {
+		it("rejects cycles in a disconnected component even when another root is valid", () => {
+			const session = SessionManager.inMemory();
+			session.appendCustomEntry("valid-root");
+			session.resetLeaf();
+			const first = session.appendCustomEntry("cycle-a");
+			const second = session.appendCustomEntry("cycle-b");
+			session.getEntry(first)!.parentId = second;
+			expect(() => session.getTree()).toThrow(/cycle/i);
+		});
+
+		it("reads each child timestamp once while sorting wide siblings", () => {
+			const session = SessionManager.inMemory();
+			const root = session.appendCustomEntry("root");
+			const backing = session as unknown as { fileEntries: unknown[] };
+			const rows = backing.fileEntries.slice();
+			let timestampReads = 0;
+			for (let i = 0; i < 160; i++) {
+				const timestamp = new Date(Date.UTC(2025, 0, 1, 0, 0, 160 - i)).toISOString();
+				const item = { type: "custom", customType: "wide", id: "child-" + i, parentId: root };
+				Object.defineProperty(item, "timestamp", {
+					get: () => { timestampReads++; return timestamp; },
+					enumerable: true,
+				});
+				rows.push(item);
+			}
+			backing.fileEntries = rows;
+			const tree = session.getTree();
+			expect(tree[0]!.children.map(({ entry }) => entry.id)).toEqual(
+				Array.from({ length: 160 }, (_, i) => "child-" + (159 - i)),
+			);
+			expect(timestampReads).toBeLessThanOrEqual(160);
+		});
+	});
+
 	describe("getPath", () => {
 		it("returns empty array for empty session", () => {
 			const session = SessionManager.inMemory();
