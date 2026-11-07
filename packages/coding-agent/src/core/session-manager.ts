@@ -407,7 +407,11 @@ function buildSessionPath(
 
 	const path: SessionEntry[] = [];
 	let current: SessionEntry | undefined = leaf;
+	// A corrupt JSONL session can contain cyclic parent IDs. A valid ancestry
+	// cannot visit more entries than the index contains.
+	let remaining = Math.max(1, index.size);
 	while (current) {
+		if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 		path.push(current);
 		current = current.parentId ? index.get(current.parentId) : undefined;
 	}
@@ -1607,7 +1611,9 @@ export class SessionManager {
 		const path: SessionEntry[] = [];
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
+		let remaining = this.byId.size;
 		while (current) {
+			if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 			path.push(current);
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
@@ -1697,7 +1703,8 @@ export class SessionManager {
 		while (stack.length > 0) {
 			const node = stack.pop()!;
 			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-			stack.push(...node.children);
+			// A root may have more siblings than V8 permits as function arguments.
+			for (const child of node.children) stack.push(child);
 		}
 
 		return roots;
