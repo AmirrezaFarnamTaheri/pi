@@ -642,7 +642,7 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	if (!existsSync(resolvedFilePath)) return [];
 
 	const entries: FileEntry[] = [];
-	let pending = "";
+	const lineParts: string[] = [];
 	const fd = openSync(resolvedFilePath, "r");
 	try {
 		const decoder = new StringDecoder("utf8");
@@ -652,24 +652,29 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
 			if (bytesRead === 0) break;
 
-			pending += decoder.write(buffer.subarray(0, bytesRead));
+			// Scan newly decoded bytes only: never rescan a growing JSONL record.
+			const chunk = decoder.write(buffer.subarray(0, bytesRead));
 			let lineStart = 0;
-			let newlineIndex = pending.indexOf("\n", lineStart);
+			let newlineIndex = chunk.indexOf("\n");
 			while (newlineIndex !== -1) {
-				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+				const part = chunk.slice(lineStart, newlineIndex);
+				const line = lineParts.length === 0 ? part : (lineParts.push(part), lineParts.join(""));
+				const entry = parseSessionEntryLine(line);
 				if (entry) entries.push(entry);
+				lineParts.length = 0;
 				lineStart = newlineIndex + 1;
-				newlineIndex = pending.indexOf("\n", lineStart);
+				newlineIndex = chunk.indexOf("\n", lineStart);
 			}
-			pending = pending.slice(lineStart);
+			if (lineStart < chunk.length) lineParts.push(chunk.slice(lineStart));
 		}
-
-		pending += decoder.end();
-		const finalEntry = parseSessionEntryLine(pending);
-		if (finalEntry) entries.push(finalEntry);
+		const last = decoder.end();
+		if (last) lineParts.push(last);
 	} finally {
 		closeSync(fd);
 	}
+	const pending = lineParts.join("");
+	const finalEntry = parseSessionEntryLine(pending);
+	if (finalEntry) entries.push(finalEntry);
 
 	// Validate session header before repairing the file.
 	if (entries.length === 0) return entries;
@@ -1083,6 +1088,24 @@ async function listSessionsFromDir(
 	}
 }
 
+/** Return the timestamp only for requests that actually reached a provider. */
+function providerRequestTimestamp(entry: SessionEntry): number | undefined {
+	if (entry.type === "message" && entry.message.role === "assistant") {
+		const usage = entry.message.usage;
+		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(entry.message.timestamp)
+			? entry.message.timestamp
+			: undefined;
+	}
+	if (entry.type === "usage" && entry.kind === "cache_warm") {
+		const usage = entry.usage;
+		const timestamp = Date.parse(entry.timestamp);
+		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(timestamp)
+			? timestamp
+			: undefined;
+	}
+	return undefined;
+}
+
 /**
  * Manages conversation sessions as append-only trees stored in JSONL files.
  *
@@ -1104,12 +1127,13 @@ export class SessionManager {
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	/** Lazily built, append-maintained index for branch navigation. */
-	private childrenByParent?: Map<string, SessionEntry[]>;
+	private childrenByParent?: Map<string, SessionEntry | SessionEntry[]>;
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 	/** Cache the frame-time footer title until the append-only session array changes. */
 	private sessionNameCache?: { entries: FileEntry[]; length: number; name: string | undefined };
+	private latestProviderRequestTimestamp: number | undefined;
 
 	private constructor(
 		cwd: string,
@@ -1186,6 +1210,7 @@ export class SessionManager {
 		this.byId.clear();
 		this.childrenByParent = undefined;
 		this.sessionNameCache = undefined;
+		this.latestProviderRequestTimestamp = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1220,6 +1245,7 @@ export class SessionManager {
 		this.byId.clear();
 		this.childrenByParent = undefined;
 		this.sessionNameCache = undefined;
+		this.latestProviderRequestTimestamp = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1227,6 +1253,7 @@ export class SessionManager {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;
+			this.trackProviderRequest(entry);
 			if (entry.type === "label") {
 				if (entry.label) {
 					this.labelsById.set(entry.targetId, entry.label);
@@ -1306,6 +1333,13 @@ export class SessionManager {
 		}
 	}
 
+	private trackProviderRequest(entry: SessionEntry): void {
+		const timestamp = providerRequestTimestamp(entry);
+		if (timestamp !== undefined) {
+			this.latestProviderRequestTimestamp = Math.max(this.latestProviderRequestTimestamp ?? -Infinity, timestamp);
+		}
+	}
+
 	private _appendEntry(entry: SessionEntry): void {
 		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
@@ -1325,9 +1359,11 @@ export class SessionManager {
 		// failed append has already rolled back its in-memory parent/leaf state.
 		if (entry.parentId !== null && this.childrenByParent) {
 			const siblings = this.childrenByParent.get(entry.parentId);
-			if (siblings) siblings.push(entry);
-			else this.childrenByParent.set(entry.parentId, [entry]);
+			if (!siblings) this.childrenByParent.set(entry.parentId, entry);
+			else if (Array.isArray(siblings)) siblings.push(entry);
+			else this.childrenByParent.set(entry.parentId, [siblings, entry]);
 		}
+		this.trackProviderRequest(entry);
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1551,22 +1587,29 @@ export class SessionManager {
 		return this.byId.get(id);
 	}
 
+	/** Latest provider request across all branches, independent of the active prompt. */
+	getLatestProviderRequestTimestamp(): number | undefined {
+		return this.latestProviderRequestTimestamp;
+	}
+
 	/**
 	 * Get all direct children of an entry.
 	 */
 	getChildren(parentId: string): SessionEntry[] {
 		if (!this.childrenByParent) {
-			const index = new Map<string, SessionEntry[]>();
+			const index = new Map<string, SessionEntry | SessionEntry[]>();
 			for (const entry of this.byId.values()) {
 				if (entry.parentId === null) continue;
 				const siblings = index.get(entry.parentId);
-				if (siblings) siblings.push(entry);
-				else index.set(entry.parentId, [entry]);
+				if (!siblings) index.set(entry.parentId, entry);
+				else if (Array.isArray(siblings)) siblings.push(entry);
+				else index.set(entry.parentId, [siblings, entry]);
 			}
 			this.childrenByParent = index;
 		}
-		// Preserve the old shallow-copy contract; caller changes must not corrupt the index.
-		return this.childrenByParent.get(parentId)?.slice() ?? [];
+		// Preserve the shallow-copy contract without keeping a singleton array per parent.
+		const children = this.childrenByParent.get(parentId);
+		return children ? (Array.isArray(children) ? children.slice() : [children]) : [];
 	}
 
 	/**
