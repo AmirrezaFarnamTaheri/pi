@@ -235,8 +235,17 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
 				const exitCode = await Promise.race([waitForChildProcess(child), cancelOutput]);
-				// A never-settling sink promise must not block abort or timeout.
-				await Promise.race([Promise.all(pendingOutput), cancelOutput]);
+				// A pending write can schedule another write from a previously queued chunk.
+				// Promise.all(pendingOutput) snapshots only the first batch; loop until no
+				// queued or in-flight chunks remain, including writes started by a drain.
+				// Abort and timeout still win against a sink that never settles.
+				while (pendingOutput.size > 0 || queuedChunks.length > 0) {
+					if (pendingOutput.size === 0) {
+						deliverChunk(queuedChunks.shift()!);
+						continue;
+					}
+					await Promise.race([Promise.all([...pendingOutput]), cancelOutput]);
+				}
 				if (hasOutputFailure) throw outputFailure;
 				if (signal?.aborted) {
 					throw new Error("aborted");
