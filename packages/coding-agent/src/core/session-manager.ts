@@ -1095,7 +1095,9 @@ async function listSessionsFromDir(
 /** Return the timestamp only for requests that actually reached a provider. */
 function providerRequestTimestamp(entry: SessionEntry): number | undefined {
 	if (entry.type === "message" && entry.message.role === "assistant") {
+		// Older or partially recovered transcripts may lack usage metadata.
 		const usage = entry.message.usage;
+		if (!usage) return undefined;
 		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(entry.message.timestamp)
 			? entry.message.timestamp
 			: undefined;
