@@ -36,6 +36,7 @@ This table covers providers with a single primary API-key variable. Providers th
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY` |
+| Antigravity Manager gateway | `ANTIGRAVITY_API_KEY` (optional alternative to `/login`) |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 | Mistral | `MISTRAL_API_KEY` |
 | Groq | `GROQ_API_KEY` |
@@ -112,6 +113,14 @@ Radius also has an MCP server, so Pi can manage Radius for you.
 Radius is currently in early alpha and evolving quickly. See [radius.earendil.com](https://radius.earendil.com) for more.
 
 Radius authentication uses its gateway catalog and caches refreshed model metadata for later offline startup. A custom Radius gateway configured in `models.json` uses its own catalog rather than inheriting the public `radius.pi.dev` catalog.
+
+### Antigravity Manager gateway
+
+Pi includes an `antigravity` provider for an **Antigravity Manager gateway that you operate**. Run the manager's local OpenAI-compatible API relay, enable its access key, and use `/login antigravity` in Pi. Supply the gateway URL (default `http://127.0.0.1:8045/v1`) and the gateway access key. Models advertised by the manager at `/v1/models` will appear as `antigravity/<model-id>` after refresh. The login works through Pi's standard credential store; use `/logout antigravity` to remove it.
+
+Alternatively, supply `ANTIGRAVITY_API_KEY` and `ANTIGRAVITY_BASE_URL` in the environment. For a remote gateway, HTTPS is required; plaintext HTTP is accepted only on loopback addresses. The endpoint must support the standard OpenAI `/v1/chat/completions` and `/v1/models` interfaces. Any model-specific functionality beyond this compatibility surface depends on the gateway implementation.
+
+**This is not direct Google Antigravity OAuth.** Google account sign-in and quota management occur in Antigravity Manager itself, not in Pi. Pi does not read session files, request an unofficial Google client token, or translate Google-only internal protocols. The gateway's own license and the service provider's usage terms apply. The manager is a separate application and is not bundled with Pi.
 
 ### OpenRouter
 

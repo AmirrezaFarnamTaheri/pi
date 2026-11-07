@@ -138,7 +138,7 @@ export function antigravityProvider(): Provider<"openai-completions"> {
 			const credential = context.credential;
 			const key = credential?.type === "api_key" ? credential.key : undefined;
 			if (!key) return;
-			const url = gatewayFor(credential);
+			const url = gatewayFor(credential?.type === "api_key" ? credential : undefined);
 			const next = await discoverAntigravityModels(url, key, context.signal);
 			if (context.signal.aborted) return;
 			await context.publish({

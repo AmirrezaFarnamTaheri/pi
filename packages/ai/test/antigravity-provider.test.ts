@@ -45,7 +45,7 @@ describe("built-in Antigravity Manager gateway", () => {
 	it("discovers gateway models with a scoped key and preserves model IDs", async () => {
 		const provider = antigravityProvider();
 		const oldFetch = globalThis.fetch;
-		const fetcher = vi.fn(async () => new Response(JSON.stringify({
+		const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
 			object: "list",
 			data: [
 				{ id: "gemini-3.1-pro-high", name: "Gemini Pro" },
