@@ -1,12 +1,14 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	collectActiveBranchCacheMisses,
 	collectCacheMisses,
 	computeCacheWaste,
 	detectCacheMiss,
+	detectCacheMissForSession,
 	type ModelPriceSource,
 } from "../src/core/cache-stats.ts";
-import type { SessionEntry } from "../src/core/session-manager.ts";
+import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
@@ -150,6 +152,60 @@ describe("incremental cache-miss hot path", () => {
 		expect(detectCacheMiss([entry(turn1), entry(afterCold)], nextMiss, models)?.missedTokens).toBe(110_000);
 		const compact = { type: "compaction", id: "reset", parentId: null, timestamp: "" } as SessionEntry;
 		expect(detectCacheMiss([entry(turn1), compact, entry(afterCold)], nextMiss, models)).toBeUndefined();
+	});
+});
+
+
+describe("branch-aware cache-miss notices", () => {
+	it("replays only misses on the selected branch, not abandoned siblings", () => {
+		const session = SessionManager.inMemory();
+		const root = session.appendMessage(turn1);
+		const abandoned = assistant({ cacheRead: 100_000, cacheWrite: 400_000, timestamp: 60_000 });
+		session.appendMessage(abandoned);
+		session.branch(root);
+		const active = assistant({ cacheWrite: 120_000, cost: { cacheWrite: 0.45 }, timestamp: 120_000 });
+		session.appendMessage(active);
+
+		const replay = collectActiveBranchCacheMisses(session, models);
+		expect(replay.get(active)?.missedTokens).toBe(100_000);
+		expect(replay.has(abandoned)).toBe(false);
+		// A file-order scan incorrectly uses the abandoned 500k prompt as predecessor.
+		expect(collectCacheMisses(session.getEntries(), models).get(active)?.missedTokens).toBe(120_000);
+	});
+
+	it("memoizes previous requests per branch and updates after an append", () => {
+		const session = SessionManager.inMemory();
+		const root = session.appendMessage(turn1);
+		for (let i = 0; i < 100; i++) session.appendCustomEntry("metadata", i);
+		const miss = assistant({ cacheWrite: 120_000, cost: { cacheWrite: 0.45 }, timestamp: 120_000 });
+		expect(detectCacheMissForSession(session, miss, models)?.missedTokens).toBe(100_000);
+		const getEntry = vi.spyOn(session, "getEntry");
+		try {
+			session.appendCustomEntry("more-metadata");
+			expect(detectCacheMissForSession(session, miss, models)?.missedTokens).toBe(100_000);
+			expect(getEntry).toHaveBeenCalledTimes(1);
+		} finally {
+			getEntry.mockRestore();
+		}
+		session.branch(root);
+		expect(detectCacheMissForSession(session, miss, models)?.idleMs).toBe(120_000);
+	});
+
+	it("remembers negative cache evidence and respects branch-summary resets", () => {
+		const session = SessionManager.inMemory();
+		session.appendMessage(assistant({ input: 100_000, timestamp: 0 }));
+		const noCache = assistant({ input: 110_000, timestamp: 60_000 });
+		expect(detectCacheMissForSession(session, noCache, models)).toBeUndefined();
+		const getEntry = vi.spyOn(session, "getEntry");
+		try {
+			session.appendCustomEntry("more-metadata");
+			expect(detectCacheMissForSession(session, noCache, models)).toBeUndefined();
+			expect(getEntry).toHaveBeenCalledTimes(1);
+		} finally {
+			getEntry.mockRestore();
+		}
+		session.branchWithSummary(session.getLeafId(), "reset");
+		expect(detectCacheMissForSession(session, noCache, models)).toBeUndefined();
 	});
 });
 
