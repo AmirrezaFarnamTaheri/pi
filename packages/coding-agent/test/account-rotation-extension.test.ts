@@ -17,6 +17,7 @@ function createHarness(configuration: unknown) {
 	const models = new Map<string, typeof physical>([["anthropic/sonnet", physical]]);
 	const handlers = new Map<string, (...args: never[]) => Promise<void>>();
 	const registered: Array<{ provider: string; apiKey?: string }> = [];
+	const commands = new Map<string, { handler: (args: string, context: unknown) => Promise<void> }>();
 	let virtual: { route: (request: Record<string, unknown>, context: unknown) => Promise<{ model: typeof physical }> } | undefined;
 	const pi = {
 		on(event: string, handler: (...args: never[]) => Promise<void>) { handlers.set(event, handler); },
@@ -25,7 +26,7 @@ function createHarness(configuration: unknown) {
 			models.set(`${provider}/sonnet`, { ...physical, provider });
 		},
 		registerVirtualModel(value: typeof virtual) { virtual = value; },
-		registerCommand() {},
+		registerCommand(name: string, command: { handler: (args: string, context: unknown) => Promise<void> }) { commands.set(name, command); },
 	} as unknown as ExtensionAPI;
 	const ctx = { modelRegistry: {
 		find(provider: string, id: string) { return models.get(`${provider}/${id}`); },
@@ -33,7 +34,7 @@ function createHarness(configuration: unknown) {
 		async refresh() {},
 	} };
 	registerAccountRotation(pi, parseRotationConfiguration(configuration));
-	return { handlers, registered, ctx, virtual: () => virtual! };
+	return { handlers, registered, commands, ctx, virtual: () => virtual! };
 }
 
 describe("account rotation extension", () => {
@@ -60,6 +61,44 @@ describe("account rotation extension", () => {
 		expect(() => parseRotationConfiguration({ pools: [{ id: "bad", members: [
 			{ provider: "anthropic", sourceProvider: "anthropic", model: "sonnet" },
 		] }] })).toThrow(/distinct|alias/i);
+	});
+
+	it("validates and retains configurable account-selection strategies", () => {
+		const parsed = parseRotationConfiguration({ pools: [{
+			id: "google", strategy: "hybrid", members: [{ provider: "antigravity", model: "gemini" }],
+		}] });
+		expect(parsed.pools[0]?.strategy).toBe("hybrid");
+		expect(() => parseRotationConfiguration({ pools: [{
+			id: "bad", strategy: "unsupported", members: [{ provider: "antigravity", model: "gemini" }],
+		}] })).toThrow(/strategy/i);
+	});
+
+	it("enables account controls and success healing without exposing secret material", async () => {
+		const previous = process.env.PI_TEST_ALT_KEY;
+		process.env.PI_TEST_ALT_KEY = "test-secret-command";
+		try {
+			const app = createHarness(config);
+			await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+			const route = { reason: "user", thinkingLevel: "off", messages: [] };
+			await app.virtual().route(route, app.ctx);
+			const command = app.commands.get("account-rotation")!;
+			const notices: string[] = [];
+			const ui = { hasUI: true, ui: { notify: (message: string) => { notices.push(message); } } };
+			await command.handler("disable claude anthropic", ui);
+			expect((await app.virtual().route(route, app.ctx)).model.provider).toBe("anthropic-key-2");
+			await command.handler("enable claude anthropic", ui);
+			await command.handler("pin claude anthropic", ui);
+			expect((await app.virtual().route(route, app.ctx)).model.provider).toBe("anthropic");
+			await command.handler("quota claude anthropic 0.5", ui);
+			await command.handler("status", ui);
+			expect(notices.join("\n")).toContain("quota 50%");
+			expect(notices.join("\n")).not.toContain("test-secret-command");
+			await command.handler("unpin claude", ui);
+			await command.handler("reset claude", ui);
+		} finally {
+			if (previous === undefined) delete process.env.PI_TEST_ALT_KEY;
+			else process.env.PI_TEST_ALT_KEY = previous;
+		}
 	});
 
 	it("registers alias by env-variable reference without copying the secret", async () => {

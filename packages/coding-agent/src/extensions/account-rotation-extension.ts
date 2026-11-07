@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
-import { RotationPool, type RotationTarget } from "./account-rotation-policy.ts";
+import { RotationPool, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
 
 export interface RotationMember extends RotationTarget {
 	/** Environment variable name holding an API key, never its value. */
@@ -18,6 +18,7 @@ export interface RotationGroup {
 	id: string;
 	name?: string;
 	cooldownMs?: number;
+	strategy?: RotationStrategy;
 	members: RotationMember[];
 }
 
@@ -50,6 +51,10 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			throw new Error(`Rotation pool ${raw.id} has an invalid cooldownMs`);
 		}
 		if (raw.name !== undefined && typeof raw.name !== "string") throw new Error(`Rotation pool ${raw.id} has an invalid name`);
+		if (raw.strategy !== undefined && (typeof raw.strategy !== "string" ||
+			!["round-robin", "sticky", "random", "hybrid"].includes(raw.strategy))) {
+			throw new Error(`Rotation pool ${raw.id} has an invalid strategy`);
+		}
 		const members: RotationMember[] = [];
 		const slots = new Set<string>();
 		const credentials = new Set<string>();
@@ -91,7 +96,8 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			members.push(target);
 		}
 		pools.push({ id: raw.id, ...(raw.name === undefined ? {} : { name: raw.name }),
-			...(cooldownMs === undefined ? {} : { cooldownMs: cooldownMs as number }), members });
+			...(cooldownMs === undefined ? {} : { cooldownMs: cooldownMs as number }),
+			...(raw.strategy === undefined ? {} : { strategy: raw.strategy as RotationStrategy }), members });
 	}
 	return { pools };
 }
@@ -119,11 +125,18 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			const next = active.map((target) => `${target.provider}\u0000${target.model}`).join("\u0001");
 			if (!pool || fingerprint !== next) {
 				if (active.length === 0) throw new Error(`Account rotation ${group.id}: no configured accounts`);
-				pool = new RotationPool(active, group.cooldownMs);
+				pool = new RotationPool(active, group.cooldownMs, group.strategy);
 				fingerprint = next;
 			}
 			return pool;
-		}, reset() { pool?.reset(); }, status() { return pool?.status() ?? []; } };
+		}, reset() { pool?.reset(); }, status() { return pool?.status() ?? []; },
+			withAccount(provider: string, fn: (pool: RotationPool, target: RotationTarget) => void): void {
+				if (!pool) throw new Error("Select the pool virtual model before managing its accounts");
+				const match = pool.status().find((entry) => entry.target.provider === provider);
+				if (!match) throw new Error(`Unknown or unavailable account: ${provider}`);
+				fn(pool, match.target);
+			},
+		};
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -207,25 +220,73 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 		});
 	}
 
+	// A successful physical response restores the credential's health after failures.
+	// This event never reads, copies, or exposes OAuth tokens.
+	pi.on("message_end", async (event) => {
+		const message = event.message;
+		if (message.role !== "assistant" ||
+			!["stop", "length", "toolUse"].includes(message.stopReason)) return;
+		for (const entry of state) {
+			const status = entry.status();
+			const match = status.find((candidate) =>
+				candidate.target.provider === message.provider && candidate.target.model === message.model);
+			if (match) entry.get(status.map((candidate) => candidate.target)).markSuccess(match.target);
+		}
+	});
+
 	pi.registerCommand("account-rotation", {
-		description: "Show account/key rotation pools, or reset their cooldowns",
+		description: "Inspect, pin, enable, disable, or update quota for authenticated account pools",
 		async handler(args, ctx) {
-			const command = args.trim();
+			const [command = "status", poolId, provider, fraction, resetTime] = args.trim().split(/\s+/);
+			const notify = (message: string, level: "info" | "warning" = "info") => {
+				if (ctx.hasUI) ctx.ui.notify(message, level);
+			};
+			if (!command || command === "status") {
+				const lines = state.flatMap(({ group, status }) => [
+					`${group.id} (${group.strategy ?? "round-robin"}):`,
+					...(status().length > 0 ? status().map((entry) => {
+						const details = [
+							entry.enabled ? "enabled" : "disabled",
+							`health ${entry.healthScore}`,
+							...(entry.quotaRemaining === undefined ? [] : [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
+							...(entry.readyInMs ? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`] : []),
+							...(entry.pinned ? ["pinned"] : []),
+						];
+						return `  ${entry.target.provider}: ${details.join(", ")}`;
+					}) : [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
+				]);
+				notify(lines.join("\n") || "No rotation pools configured");
+				return;
+			}
+			const entry = state.find(({ group }) => group.id === poolId);
 			if (command === "reset") {
-				for (const entry of state) entry.reset();
-				if (ctx.hasUI) ctx.ui.notify("Account rotation cooldowns cleared", "info");
+				if (poolId && !entry) { notify(`Unknown rotation pool: ${poolId}`, "warning"); return; }
+				for (const item of poolId ? [entry!] : state) item.reset();
+				notify(`Account rotation health and cooldown state reset${poolId ? ` for ${poolId}` : ""}`);
 				return;
 			}
-			if (command && command !== "status") {
-				if (ctx.hasUI) ctx.ui.notify("Usage: /account-rotation [status|reset]", "warning");
-				return;
+			if (!entry) { notify("Specify a known account pool", "warning"); return; }
+			try {
+				if (command === "unpin") {
+					entry.withAccount(entry.status()[0]?.target.provider ?? "", (pool) => { pool.unpin(); });
+				} else if (command === "disable" || command === "enable" || command === "pin") {
+					if (!provider) throw new Error("Specify an account alias");
+					entry.withAccount(provider, (pool, target) => {
+						if (command === "pin") pool.pin(target);
+						else pool.setEnabled(target, command === "enable");
+					});
+				} else if (command === "quota") {
+					if (!provider || fraction === undefined) throw new Error("Use: quota <pool> <account> <fraction> [reset-epoch-ms]");
+					const remaining = Number(fraction);
+					const resetAt = resetTime === undefined ? undefined : Number(resetTime);
+					entry.withAccount(provider, (pool, target) => { pool.reportQuota(target, remaining, resetAt); });
+				} else {
+					throw new Error("Usage: /account-rotation [status|reset [pool]|enable|disable|pin|unpin|quota]");
+				}
+				notify(`Account rotation ${command} applied to pool ${entry.group.id}`);
+			} catch (error) {
+				notify(error instanceof Error ? error.message : String(error), "warning");
 			}
-			const lines = state.flatMap(({ group, status }) => [
-				`${group.id}: ${group.members.map((member) => member.provider).join(", ")}`,
-				...status().filter((candidate) => candidate.readyInMs > 0)
-					.map((candidate) => `  ${candidate.target.provider}: cooling down for ${Math.ceil(candidate.readyInMs / 1_000)}s`),
-			]);
-			if (ctx.hasUI) ctx.ui.notify(lines.join("\n") || "No rotation pools configured", "info");
 		},
 	});
 }
