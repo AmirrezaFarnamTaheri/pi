@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it, vi } from "vitest";
-import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
+import { type CustomEntry, type SessionEntry, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
 
 describe("SessionManager append and tree traversal", () => {
@@ -163,6 +163,44 @@ describe("SessionManager append and tree traversal", () => {
 			} finally {
 				spy.mockRestore();
 			}
+		});
+	});
+
+	describe("malformed and extreme session trees", () => {
+		it("detects a cyclic parent chain instead of hanging the agent", () => {
+			const manager = SessionManager.inMemory();
+			const root = manager.appendCustomEntry("root");
+			const leaf = manager.appendCustomEntry("leaf");
+			manager.getEntry(root)!.parentId = leaf;
+			const index = (manager as unknown as { byId: Map<string, SessionEntry> }).byId;
+			const originalGet = index.get.bind(index);
+			let reads = 0;
+			const guard = vi.spyOn(index, "get").mockImplementation((key) => {
+				if (++reads > 20) throw new Error("Fixture traversal guard exceeded");
+				return originalGet(key);
+			});
+			try {
+				expect(() => manager.getBranch()).toThrow(/cycle|cyclic/i);
+			} finally {
+				guard.mockRestore();
+			}
+		});
+
+		it("renders a root with 140,000 children without stack-argument overflow", () => {
+			const manager = SessionManager.inMemory();
+			const root = manager.appendCustomEntry("root");
+			const backing = manager as unknown as { fileEntries: unknown[] };
+			const rows = backing.fileEntries.slice();
+			for (let index = 0; index < 140_000; index++) {
+				rows.push({
+					type: "custom", customType: "branch", id: `child-${index}`,
+					parentId: root, timestamp: "2025-01-01T00:00:00Z",
+				});
+			}
+			backing.fileEntries = rows;
+			const tree = manager.getTree();
+			expect(tree).toHaveLength(1);
+			expect(tree[0]!.children).toHaveLength(140_000);
 		});
 	});
 

@@ -305,6 +305,27 @@ describe("buildSessionContext", () => {
 	});
 });
 
+describe("corrupt session parent chains", () => {
+	it("fails promptly when the indexed entry ancestry contains a cycle", () => {
+		const entries: SessionEntry[] = [
+			custom("node-a", "node-b", "cycle"),
+			custom("node-b", "node-a", "cycle"),
+		];
+		const index = new Map(entries.map((entry) => [entry.id, entry]));
+		const originalGet = index.get.bind(index);
+		let reads = 0;
+		const guard = vi.spyOn(index, "get").mockImplementation((id) => {
+			if (++reads > 20) throw new Error("Fixture parent-chain traversal exceeded");
+			return originalGet(id);
+		});
+		try {
+			expect(() => buildSessionContext(entries, "node-b", index)).toThrow(/cycle|cyclic/i);
+		} finally {
+			guard.mockRestore();
+		}
+	});
+});
+
 describe("long-running agent session hot paths", () => {
 	it("projects the active branch without copying the complete persisted event history", () => {
 		const manager = SessionManager.inMemory();
