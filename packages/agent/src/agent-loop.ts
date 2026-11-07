@@ -643,6 +643,9 @@ async function executeToolCallsSequential(
 	};
 }
 
+/** A bounded worker pool prevents large model-generated batches from exhausting resources. */
+const MAX_PARALLEL_TOOL_EXECUTIONS = 8;
+
 /** Prepare calls in order, run the allowed ones concurrently, and emit results in call order. */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
@@ -704,9 +707,18 @@ async function executeToolCallsParallel(
 		}
 	}
 
-	const orderedFinalizedCalls = await Promise.all(
-		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
-	);
+	// Preparation remains ordered (especially permission hooks), but execution
+	// only runs a bounded number of independent tools at once.
+	const orderedFinalizedCalls = new Array<FinalizedToolCallOutcome>(finalizedCalls.length);
+	let nextCall = 0;
+	const runNext = async (): Promise<void> => {
+		while (nextCall < finalizedCalls.length) {
+			const index = nextCall++;
+			const entry = finalizedCalls[index]!;
+			orderedFinalizedCalls[index] = typeof entry === "function" ? await entry() : entry;
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_TOOL_EXECUTIONS, finalizedCalls.length) }, runNext));
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);
