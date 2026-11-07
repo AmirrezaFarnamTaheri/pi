@@ -115,7 +115,7 @@ export async function discoverAntigravityModels(
 	const seen = new Set<string>();
 	for (const item of json.data as GatewayModelData[]) {
 		if (!item || typeof item.id !== "string" || !item.id.trim() ||
-			item.id.length > 256 || /[\\x00-\\x1f\\x7f]/u.test(item.id) || seen.has(item.id)) continue;
+			item.id.length > 256 || /[\x00-\x1f\x7f]/u.test(item.id) || seen.has(item.id)) continue;
 		if (models.length >= MAX_MODELS) break;
 		seen.add(item.id);
 		const contextWindow = modelNumber(item.context_window ?? item.context_length, 32_768);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { antigravityProvider, normalizeAntigravityGatewayUrl } from "../src/providers/antigravity.ts";
+import { antigravityProvider, discoverAntigravityModels, normalizeAntigravityGatewayUrl } from "../src/providers/antigravity.ts";
 
 describe("built-in Antigravity Manager gateway", () => {
 	it("registers as a native provider with an interactive login", async () => {
@@ -45,16 +45,14 @@ describe("built-in Antigravity Manager gateway", () => {
 	});
 
 	it("uses explicit gateway model capacities and modalities, rejecting unsafe model identifiers", async () => {
-		const provider = antigravityProvider();
 		const originalFetch = globalThis.fetch;
-		globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [
+		globalThis.fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ data: [
 			{ id: "gemini-3-pro", context_length: 1_048_576, max_output_tokens: 65_536,
 				input_modalities: ["text", "image"], reasoning: true },
-			{ id: "bad\\nmodel", context_window: 128_000 },
+			{ id: "bad\nmodel", context_window: 128_000 },
 		] }), { status: 200 }));
 		try {
-			const models = await import("../src/providers/antigravity.ts").then((mod) =>
-				mod.discoverAntigravityModels("http://127.0.0.1:8045/v1", "test", new AbortController().signal));
+			const models = await discoverAntigravityModels("http://127.0.0.1:8045/v1", "test", new AbortController().signal);
 			expect(models.map((model) => model.id)).toEqual(["gemini-3-pro"]);
 			expect(models[0]).toMatchObject({
 				contextWindow: 1_048_576, maxTokens: 65_536, reasoning: true,
