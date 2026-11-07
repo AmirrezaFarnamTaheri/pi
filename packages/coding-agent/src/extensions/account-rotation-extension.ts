@@ -1,5 +1,6 @@
 /** Optional per-request account/key rotation extension for Pi. */
 
+import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -185,9 +186,17 @@ function accountAlias(source: Provider, id: string, auth: Provider["auth"]): Pro
 }
 
 /** A named provider with independent OAuth credentials and the source's native SDK. */
-export function createOAuthAccountAlias(source: Provider, id: string): Provider {
-	if (!source.auth.oauth) throw new Error(`Provider ${source.id} does not support OAuth login`);
-	return accountAlias(source, id, { oauth: source.auth.oauth });
+export function createOAuthAccountAlias(source: Provider, id: string, onLogin?: () => void): Provider {
+	const oauth = source.auth.oauth;
+	if (!oauth) throw new Error(`Provider ${source.id} does not support OAuth login`);
+	return accountAlias(source, id, { oauth: {
+		...oauth,
+		login: async (interaction, options) => {
+			const credentials = await oauth.login(interaction, options);
+			onLogin?.();
+			return credentials;
+		},
+	} });
 }
 
 /** Environment-backed identity that ignores stale credentials saved under its alias. */
@@ -220,6 +229,15 @@ export function createApiKeyAccountAlias(source: Provider, id: string, envVar: s
 export function registerAccountRotation(pi: ExtensionAPI, configuration: RotationConfiguration): void {
 	const health = new Map<string, RotationHealth>();
 	const ownedAliases = new Set<string>();
+	// A keyed fingerprint detects API key replacement without storing plaintext keys.
+	const salt = randomBytes(32);
+	const keyFingerprints = new Map<string, string | null>();
+	const onReauthenticated = (provider: string) => {
+		for (const { group, pool } of state) {
+			const member = group.members.find((entry) => entry.provider === provider);
+			if (member) pool.markReauthenticated(member);
+		}
+	};
 	const state = configuration.pools.map((group) => {
 		const pool = new RotationPool(group.members, group.cooldownMs, group.strategy, Math.random, health);
 		return {
@@ -248,7 +266,7 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 				if (!source) continue;
 				const alias = member.apiKeyEnv
 					? createApiKeyAccountAlias(source, member.provider, member.apiKeyEnv)
-					: createOAuthAccountAlias(source, member.provider);
+					: createOAuthAccountAlias(source, member.provider, () => onReauthenticated(member.provider));
 				pi.registerProvider(alias);
 				ownedAliases.add(member.provider);
 				added = true;
@@ -266,9 +284,20 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			async route(request, ctx) {
 				if (request.signal?.aborted) throw new Error("Account rotation request cancelled");
 				for (const member of group.members) {
+					if (member.apiKeyEnv) {
+						const key = process.env[member.apiKeyEnv];
+						const fingerprint = key ? createHmac("sha256", salt).update(key).digest("hex") : null;
+						const previousFingerprint = keyFingerprints.get(member.provider);
+						if (keyFingerprints.has(member.provider) && previousFingerprint !== fingerprint && key) {
+							onReauthenticated(member.provider);
+						}
+						keyFingerprints.set(member.provider, fingerprint);
+					}
 					const model = ctx.modelRegistry.find(member.provider, member.model);
 					entry.pool.setAvailable(member, model !== undefined &&
-						model.api !== "pi-virtual" && ctx.modelRegistry.hasConfiguredAuth(model));
+						model.api !== "pi-virtual" &&
+						(!member.apiKeyEnv || !!process.env[member.apiKeyEnv]) &&
+						ctx.modelRegistry.hasConfiguredAuth(model));
 				}
 				const pool = entry.pool;
 				const failed = request.failed;

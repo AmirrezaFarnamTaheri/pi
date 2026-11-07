@@ -34,6 +34,17 @@ function sourceProvider(): Provider {
 }
 
 describe("account alias provider transport isolation", () => {
+	it("reactivates the account after its own successful interactive OAuth login", async () => {
+		let logins = 0;
+		const alias = createOAuthAccountAlias(sourceProvider(), "work-login", () => { logins++; });
+		await alias.auth.oauth!.login({
+			signal: new AbortController().signal,
+			prompt: async () => "work",
+			notify() {},
+		});
+		expect(logins).toBe(1);
+	});
+
 	it("forwards the original upstream provider identity and restores the alias in streaming events", async () => {
 		const source = sourceProvider();
 		const model = source.getModels()[0]!;

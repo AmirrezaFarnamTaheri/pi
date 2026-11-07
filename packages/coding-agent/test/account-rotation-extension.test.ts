@@ -146,6 +146,29 @@ describe("account rotation extension", () => {
 		}
 	});
 
+	it("clears an API-key account quarantine when its environment key is replaced", async () => {
+		const old = process.env.PI_TEST_ALT_KEY;
+		process.env.PI_TEST_ALT_KEY = "first-key";
+		try {
+			const app = createHarness(config);
+			await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+			const request = { reason: "user", thinkingLevel: "off", messages: [] };
+			await app.virtual().route(request, app.ctx);
+			const second = await app.virtual().route(request, app.ctx);
+			expect(second.model.provider).toBe("anthropic-key-2");
+			await app.virtual().route({ ...request, reason: "retry", failed: {
+				model: second.model, message: { content: [], errorMessage: "HTTP 429", stopReason: "error" },
+			} }, app.ctx);
+			await app.commands.get("account-rotation")!.handler("disable claude anthropic",
+				{ hasUI: true, ui: { notify() {} } });
+			process.env.PI_TEST_ALT_KEY = "second-key";
+			expect((await app.virtual().route(request, app.ctx)).model.provider).toBe("anthropic-key-2");
+		} finally {
+			if (old === undefined) delete process.env.PI_TEST_ALT_KEY;
+			else process.env.PI_TEST_ALT_KEY = old;
+		}
+	});
+
 	it("rejects provider collisions and never registers an alias twice after session reload", async () => {
 		const collision = createHarness({ pools: [{ id: "collision", members: [
 			{ provider: "anthropic", sourceProvider: "another-provider", model: "sonnet" },
