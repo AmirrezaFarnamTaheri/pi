@@ -46,6 +46,19 @@ describe("row layout", () => {
 		assert.equal(layout.total, 10_055, "a measurement correctly invalidates the prefix sums");
 	});
 
+	it("preserves each append batch estimator through measurements and invalidation", () => {
+		const layout = new RowLayout();
+		layout.setRows(["a", "b"], () => 10);
+		layout.appendRows(["c"], () => 20);
+		layout.appendRows(["d", "e"], () => 30);
+		assert.equal(layout.total, 100);
+		layout.measure("d", 7);
+		assert.equal(layout.total, 77);
+		layout.invalidate();
+		assert.equal(layout.offsetOf(4), 47);
+		assert.equal(layout.total, 77);
+	});
+
 	it("appends a large batch without relying on argument-spread limits", () => {
 		const layout = new RowLayout();
 		layout.setRows(["first"], () => 1);

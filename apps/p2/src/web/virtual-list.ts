@@ -10,7 +10,7 @@ export class RowLayout {
 	readonly #sizes: Map<string, number>;
 	#keys: string[] = [];
 	#index = new Map<string, number>();
-	#estimate: (index: number) => number = () => 0;
+	#estimates: Array<{ start: number; estimate: (index: number) => number }> = [];
 	/** `offsets[i]` is where row `i` starts; `offsets[count]` is the total height. Rebuilt lazily after a change. */
 	#offsets = new Float64Array(1);
 	#dirty = false;
@@ -22,7 +22,7 @@ export class RowLayout {
 	/** Replaces the rows; `estimate` gives the height of a row that has never been measured. */
 	setRows(keys: readonly string[], estimate: (index: number) => number): void {
 		this.#keys = [...keys];
-		this.#estimate = estimate;
+		this.#estimates = [{ start: 0, estimate }];
 		this.#index = new Map(keys.map((key, index) => [key, index]));
 		this.#dirty = true;
 	}
@@ -35,7 +35,7 @@ export class RowLayout {
 	appendRows(keys: readonly string[], estimate: (index: number) => number): void {
 		const start = this.#keys.length;
 		for (const key of keys) this.#keys.push(key);
-		this.#estimate = estimate;
+		if (keys.length > 0) this.#estimates.push({ start, estimate });
 		for (let index = 0; index < keys.length; index++) this.#index.set(keys[index]!, start + index);
 		if (keys.length === 0 || this.#dirty) return;
 		// Keep spare prefix-sum capacity so repeatedly appending one row is amortized O(1),
@@ -91,7 +91,17 @@ export class RowLayout {
 	sizeOf(index: number): number {
 		const key = this.#keys[index];
 		if (key === undefined) return 0;
-		return this.#sizes.get(key) ?? this.#estimate(index);
+		const measured = this.#sizes.get(key);
+		if (measured !== undefined) return measured;
+		// Appending must preserve older rows' estimators, including after invalidate().
+		let low = 0;
+		let high = this.#estimates.length - 1;
+		while (low < high) {
+			const middle = (low + high + 1) >> 1;
+			if (this.#estimates[middle]!.start <= index) low = middle;
+			else high = middle - 1;
+		}
+		return this.#estimates[low]!.estimate(index);
 	}
 
 	/** Where row `index` starts; `count` gives the total height. */
