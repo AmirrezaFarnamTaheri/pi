@@ -47,6 +47,21 @@ describe("account rotation extension", () => {
 		] }] })).toThrow(/duplicate/i);
 	});
 
+	it("accepts OAuth account aliases while rejecting duplicate credential slots", () => {
+		const config = parseRotationConfiguration({ pools: [{ id: "oauth", members: [
+			{ provider: "account-one", sourceProvider: "anthropic", model: "sonnet" },
+			{ provider: "account-two", sourceProvider: "anthropic", model: "sonnet" },
+		] }] });
+		expect(config.pools[0]?.members).toHaveLength(2);
+		expect(() => parseRotationConfiguration({ pools: [{ id: "bad", members: [
+			{ provider: "anthropic", model: "sonnet" },
+			{ provider: "anthropic", model: "opus" },
+		] }] })).toThrow(/duplicate/i);
+		expect(() => parseRotationConfiguration({ pools: [{ id: "bad", members: [
+			{ provider: "anthropic", sourceProvider: "anthropic", model: "sonnet" },
+		] }] })).toThrow(/distinct|alias/i);
+	});
+
 	it("registers alias by env-variable reference without copying the secret", async () => {
 		const before = process.env.PI_TEST_ALT_KEY;
 		process.env.PI_TEST_ALT_KEY = "test-secret-must-not-leak";
