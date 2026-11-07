@@ -64,6 +64,19 @@ describe("getBranchSelection", () => {
 	}
 
 	// #10198: the selection must not cost one catalog lookup per assistant message.
+	it("lets a virtual model opt into safe credential-failure retry without changing physical retry policy", async () => {
+		const { runtime, virtual } = await createRuntime();
+		expect(runtime.shouldRetryVirtualFailure(virtual, { ...fauxAssistantMessage(""), stopReason: "error" })).toBe(false);
+		runtime.registerVirtualModel({
+			provider: "router", id: "auto", name: "Safe credentials", route: () => ({
+				model: runtime.getModel("faux", "small")!, thinkingLevel: "off",
+			}),
+			shouldRetry: (message) => message.stopReason === "error" && message.errorMessage === "401",
+		});
+		expect(runtime.shouldRetryVirtualFailure(virtual, { ...fauxAssistantMessage(""), stopReason: "error", errorMessage: "401" })).toBe(true);
+		expect(runtime.shouldRetryVirtualFailure(runtime.getModel("faux", "small")!, { ...fauxAssistantMessage(""), stopReason: "error", errorMessage: "401" })).toBe(false);
+	});
+
 	it("looks up only the last model_change", async () => {
 		const { runtime, virtual } = await createRuntime();
 		const small = runtime.getModel("faux", "small")!;

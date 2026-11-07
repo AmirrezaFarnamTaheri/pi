@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { parseRotationConfiguration, registerAccountRotation } from "../src/extensions/account-rotation-extension.ts";
 
@@ -29,7 +29,7 @@ function createHarness(configuration: unknown) {
 	const handlers = new Map<string, (...args: never[]) => Promise<void>>();
 	const registered: Array<{ provider: string; apiKey?: string }> = [];
 	const commands = new Map<string, { handler: (args: string, context: unknown) => Promise<void> }>();
-	let virtual: { route: (request: Record<string, unknown>, context: unknown) => Promise<{ model: typeof physical }> } | undefined;
+	let virtual: { route: (request: Record<string, unknown>, context: unknown) => Promise<{ model: typeof physical }>; shouldRetry?: (message: AssistantMessage) => boolean } | undefined;
 	const pi = {
 		on(event: string, handler: (...args: never[]) => Promise<void>) { handlers.set(event, handler); },
 		registerProvider(provider: Provider) {
@@ -84,6 +84,23 @@ describe("account rotation extension", () => {
 		expect(() => parseRotationConfiguration({ pools: [{ id: "bad", members: [
 			{ provider: "anthropic", sourceProvider: "anthropic", model: "sonnet" },
 		] }] })).toThrow(/distinct|alias/i);
+	});
+
+	it("retries unauthorized and exhausted-quota accounts only before any output", () => {
+		const app = createHarness(config);
+		const failure = (provider: string, errorMessage: string, content: AssistantMessage["content"] = []): AssistantMessage => ({
+			role: "assistant", provider, model: "sonnet", api: "anthropic-messages",
+			content, stopReason: "error", errorMessage, timestamp: Date.now(),
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		});
+		expect(app.virtual().shouldRetry!(failure("anthropic", "HTTP 401 Unauthorized"))).toBe(true);
+		expect(app.virtual().shouldRetry!(failure("anthropic-key-2", "insufficient_quota"))).toBe(true);
+		expect(app.virtual().shouldRetry!(failure("anthropic", "HTTP 503 overloaded"))).toBe(true);
+		expect(app.virtual().shouldRetry!(failure("anthropic", "HTTP 429 rate limited",
+			[{ type: "text", text: "partial output" }]))).toBe(false);
+		expect(app.virtual().shouldRetry!(failure("anthropic", "403 content policy"))).toBe(false);
+		expect(app.virtual().shouldRetry!(failure("unrelated", "HTTP 401 Unauthorized"))).toBe(false);
 	});
 
 	it("validates and retains configurable account-selection strategies", () => {
