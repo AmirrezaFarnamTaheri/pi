@@ -173,6 +173,28 @@ describe("branch-aware cache-miss notices", () => {
 		expect(collectCacheMisses(session.getEntries(), models).get(active)?.missedTokens).toBe(120_000);
 	});
 
+	it("uses the latest provider request for idle time after branching, without changing token baseline", () => {
+		const session = SessionManager.inMemory();
+		const root = session.appendMessage(turn1);
+		const abandoned = assistant({ cacheRead: 100_000, cacheWrite: 400_000, timestamp: 119_000 });
+		session.appendMessage(abandoned);
+		session.branch(root);
+		const resumed = assistant({ cacheWrite: 120_000, cost: { cacheWrite: 0.45 }, timestamp: 120_000 });
+		expect(detectCacheMissForSession(session, resumed, models)).toMatchObject({
+			missedTokens: 100_000,
+			idleMs: 1_000,
+		});
+		session.appendMessage(resumed);
+		expect(collectActiveBranchCacheMisses(session, models).get(resumed)).toMatchObject({
+			missedTokens: 100_000,
+			idleMs: 1_000,
+		});
+		const reopened = SessionManager.inMemory("/project", undefined, session.getEntries());
+		expect(reopened.getLatestProviderRequestTimestamp()).toBe(120_000);
+		reopened.newSession();
+		expect(reopened.getLatestProviderRequestTimestamp()).toBeUndefined();
+	});
+
 	it("memoizes previous requests per branch and updates after an append", () => {
 		const session = SessionManager.inMemory();
 		const root = session.appendMessage(turn1);
