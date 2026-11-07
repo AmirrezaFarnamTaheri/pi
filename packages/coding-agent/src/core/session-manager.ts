@@ -888,7 +888,7 @@ async function buildSessionInfo(
 		// JSONL file a second time on every cold cache fill.
 		const input = createReadStream(filePath, { signal });
 		const hash = createHash("sha256");
-		input.on("data", (bytes: Buffer) => hash.update(bytes));
+		input.on("data", (bytes) => { hash.update(bytes); });
 		const rl = createInterface({ input, crlfDelay: Infinity });
 
 		for await (const line of rl) {
@@ -1063,6 +1063,7 @@ async function listSessionsFromDir(
 			},
 			signal,
 		);
+		signal?.throwIfAborted();
 		return results.filter((info): info is SessionInfo => info !== null);
 	} catch {
 		signal?.throwIfAborted();
@@ -2116,6 +2117,7 @@ export class SessionManager {
 				abortSignal,
 			);
 
+			abortSignal?.throwIfAborted();
 			return sortSessionInfos(results.filter((info): info is SessionInfo => info !== null));
 		} catch {
 			abortSignal?.throwIfAborted();

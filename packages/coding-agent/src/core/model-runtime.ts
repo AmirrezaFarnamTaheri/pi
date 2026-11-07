@@ -97,6 +97,7 @@ import {
 interface RegisteredVirtualModel {
 	model: Model<Api>;
 	route: VirtualModelDefinition["route"];
+	shouldRetry?: VirtualModelDefinition["shouldRetry"];
 }
 
 interface ModelRuntimeSnapshot {
@@ -1006,7 +1007,11 @@ export class ModelRuntime implements Models {
 			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
 		}
 		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
-		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		models.set(id, {
+			model: createVirtualModel(definition),
+			route: (request) => definition.route(request),
+			...(definition.shouldRetry ? { shouldRetry: definition.shouldRetry } : {}),
+		});
 		this.virtualModels.set(providerId, models);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
@@ -1026,6 +1031,12 @@ export class ModelRuntime implements Models {
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
+	}
+
+	/** Allow opt-in, scoped recovery without changing ordinary provider retry policy. */
+	shouldRetryVirtualFailure(model: Model<Api>, message: AssistantMessage): boolean {
+		if (!isVirtualModel(model) || message.stopReason !== "error") return false;
+		return this.virtualModels.get(model.provider)?.get(model.id)?.shouldRetry?.(message) ?? false;
 	}
 
 	/**

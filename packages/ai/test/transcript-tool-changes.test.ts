@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
 import type { Api, AssistantMessage, Context, Message, Model, SystemMessage, Tool } from "../src/types.ts";
 import { declarationsEqual, getCurrentTools, getToolStateChanges, resolveTranscriptTools } from "../src/utils/transcript.ts";

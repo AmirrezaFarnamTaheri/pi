@@ -104,7 +104,15 @@ export function useElapsed(startedAt: number | undefined, endedAt: number | unde
 export function ActivityLayer({ rows }: { rows: readonly { item: ChatItem }[] }) {
 	const top = useSheet(SHEET);
 	const place = top && placeOf(top.locator);
-	const item = place && rows.find((row) => row.item.type === "activity" && row.item.key === place.row)?.item;
+	// By its row's key, else (the rows were made again, keyed differently: another detail level, new code after a
+	// reload) by the call it shows.
+	const item =
+		place &&
+		(rows.find((row) => row.item.type === "activity" && row.item.key === place.row)?.item ??
+			(place.step
+				? rows.find((row) => row.item.type === "activity" && row.item.steps.some((step) => step.id === place.step))
+						?.item
+				: undefined));
 	return item?.type === "activity" && place ? <ActivitySheet activity={item} place={place} /> : null;
 }
 
@@ -119,7 +127,10 @@ function ActivitySheet({ activity, place }: { activity: Activity; place: Place }
 	const step = place.step === undefined ? undefined : steps.find((each) => each.id === place.step);
 	// Thinking or a text on the wheel (detail 1 and 2): its page is its words.
 	const words = entries.find((entry) => entry.kind !== "call" && entry.id === place.step);
-	const group = step && place.group !== undefined ? groupCalls(step.tool.calls ?? [], tools)[place.group] : undefined;
+	const group =
+		step && place.group !== undefined
+			? groupCalls(step.tool.calls ?? [], tools, step.tool.name)[place.group]
+			: undefined;
 	const time = useElapsed(activity.startedAt, activity.endedAt, activity.working);
 	const count = `${entries.length} ${entries.length === 1 ? "step" : "steps"}`;
 	const title = group

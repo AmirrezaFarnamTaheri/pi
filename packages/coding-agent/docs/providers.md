@@ -36,6 +36,7 @@ This table covers providers with a single primary API-key variable. Providers th
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | NVIDIA NIM | `NVIDIA_API_KEY` |
 | Google Gemini | `GEMINI_API_KEY` |
+| Antigravity Manager gateway | `ANTIGRAVITY_MANAGER_API_KEY` (optional alternative to `/login`) |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 | Mistral | `MISTRAL_API_KEY` |
 | Groq | `GROQ_API_KEY` |
@@ -112,6 +113,26 @@ Radius also has an MCP server, so Pi can manage Radius for you.
 Radius is currently in early alpha and evolving quickly. See [radius.earendil.com](https://radius.earendil.com) for more.
 
 Radius authentication uses its gateway catalog and caches refreshed model metadata for later offline startup. A custom Radius gateway configured in `models.json` uses its own catalog rather than inheriting the public `radius.pi.dev` catalog.
+
+### Antigravity CLI (official Google sign-in)
+
+Google's documented `agy acp` interface uses the Antigravity CLI's **own Google sign-in** and credentials. The MIT-licensed [realagy extension](https://github.com/st0nie/realagy) integrates the official ACP client with Pi's tools, transcript and model picker. This transport is distinct from the Antigravity Manager gateway below.
+
+1. Install [Antigravity CLI](https://antigravity.google/docs/cli/acp/), run `agy acp --help` to confirm ACP support, and sign in using `agy` or `agy acp --login`.
+2. Install the optional integration using `pi install git:github.com/st0nie/realagy` and restart Pi.
+3. Run `/realagy setup`, then select an `antigravity/<model>` entry from `/model`.
+
+The official CLI stores and refreshes its **own** credentials. Pi does not extract OAuth tokens or install unauthorized Google OAuth clients. The upstream `realagy` package is installed separately, not bundled into this repository; it remains responsible for ACP bridge, tool permissions and session lifecycle.
+
+The [pi-antigravity-auth](https://github.com/windowsrefundday/pi-antigravity-auth) and [cortexkit/antigravity-auth](https://github.com/cortexkit/antigravity-auth) projects were also reviewed. Their direct Cloud Code OAuth transports are not merged into the built-in provider: they use unofficial service endpoints and warn about Google account and terms-of-service risks. See [Google's Antigravity terms](https://antigravity.google/terms).
+
+### Antigravity Manager gateway
+
+Pi includes an `antigravity-manager` provider for an **Antigravity Manager gateway that you operate**. Run the manager's local OpenAI-compatible API relay, enable its access key, and use `/login antigravity-manager` in Pi. Supply the gateway URL (default `http://127.0.0.1:8045/v1`) and the gateway access key. Models advertised by the manager at `/v1/models` will appear as `antigravity-manager/<model-id>` after refresh. The gateway model list may omit context limits, modality support, reasoning, and pricing; Pi uses conservative fallback limits (32,768 context/8,192 output) and labels estimated models accordingly. Zero prices here mean **unknown billing**, not a guarantee that usage is free. Customize catalog metadata when your gateway provides accurate values. The login works through Pi's standard credential store; use `/logout antigravity-manager` to remove it.
+
+Alternatively, supply `ANTIGRAVITY_MANAGER_API_KEY` and `ANTIGRAVITY_MANAGER_BASE_URL` in the environment. For a remote gateway, HTTPS is required; plaintext HTTP is accepted only on loopback addresses. The endpoint must support the standard OpenAI `/v1/chat/completions` and `/v1/models` interfaces. Any model-specific functionality beyond this compatibility surface depends on the gateway implementation.
+
+**This is not direct Google Antigravity OAuth.** Google account sign-in and quota management occur in Antigravity Manager itself, not in Pi. Pi does not read session files, request an unofficial Google client token, or translate Google-only internal protocols. The gateway's own license and the service provider's usage terms apply. The manager is a separate application and is not bundled with Pi.
 
 ### OpenRouter
 

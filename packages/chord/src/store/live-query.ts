@@ -224,7 +224,9 @@ export class LiveQuery extends Source {
 		try {
 			this.#count(context);
 			const { sql, params } = this.#statement;
-			const key = JSON.stringify([sql, params]);
+			const key = JSON.stringify([sql, params.map((value) =>
+				typeof value === "bigint" ? ["bigint", value.toString()] : ["value", value],
+			)]);
 			let stored = reads?.get(key);
 			if (!stored) {
 				stored = step.all<StoredRow>(sql, ...params);

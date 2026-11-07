@@ -15,7 +15,6 @@ import {
 	type SystemMessage,
 	type ToolResultMessage,
 	type ToolStateChanges,
-	toToolDeclaration,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
 import { getDefaultStreamFn } from "./stream-fn.ts";

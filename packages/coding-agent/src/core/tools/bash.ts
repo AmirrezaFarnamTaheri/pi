@@ -162,7 +162,12 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
 						exitedBeforeDeadlineAfterMs = shellExitedAfterMs;
-						cancelOutputWait?.(new ShellTimeoutError(timeout, undefined));
+						cancelOutputWait?.(new ShellTimeoutError(
+							timeout,
+							shellExitedAfterMs !== undefined
+								? { exitCode: child.exitCode ?? 1, afterSeconds: Math.round(shellExitedAfterMs / 100) / 10 }
+								: undefined,
+						));
 						child.stdout?.resume();
 						child.stderr?.resume();
 						// Also when the shell already exited: on Unix the group kill still reaches background
@@ -183,7 +188,9 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					child.stderr?.resume();
 					onAbort();
 				};
-				const onChunk = (data: Buffer) => {
+				// A chunk queued before pause() can arrive while its predecessor still drains.
+				const queuedChunks: Buffer[] = [];
+				const deliverChunk = (data: Buffer): void => {
 					if (hasOutputFailure) return;
 					let result: unknown;
 					try {
@@ -192,8 +199,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 						failOutput(error);
 						return;
 					}
-					// Custom callbacks may return a non-Promise value such as
-					// Array#push's numeric length; only async handlers need throttling.
+					// Synchronous callbacks do not need throttling.
 					if (!result || typeof (result as PromiseLike<unknown>).then !== "function") return;
 					child.stdout?.pause();
 					child.stderr?.pause();
@@ -204,11 +210,20 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					).finally(() => {
 						pendingOutput.delete(pending);
 						if (pendingOutput.size === 0 && !hasOutputFailure) {
-							child.stdout?.resume();
-							child.stderr?.resume();
+							while (queuedChunks.length > 0 && pendingOutput.size === 0 && !hasOutputFailure) {
+								deliverChunk(queuedChunks.shift()!);
+							}
+							if (pendingOutput.size === 0 && !hasOutputFailure) {
+								child.stdout?.resume();
+								child.stderr?.resume();
+							}
 						}
 					});
 					pendingOutput.add(pending);
+				};
+				const onChunk = (data: Buffer) => {
+					if (pendingOutput.size > 0) queuedChunks.push(data);
+					else deliverChunk(data);
 				};
 				child.stdout?.on("data", onChunk);
 				child.stderr?.on("data", onChunk);
@@ -220,8 +235,17 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
 				const exitCode = await Promise.race([waitForChildProcess(child), cancelOutput]);
-				// A never-settling sink promise must not block abort or timeout.
-				await Promise.race([Promise.all(pendingOutput), cancelOutput]);
+				// A pending write can schedule another write from a previously queued chunk.
+				// Promise.all(pendingOutput) snapshots only the first batch; loop until no
+				// queued or in-flight chunks remain, including writes started by a drain.
+				// Abort and timeout still win against a sink that never settles.
+				while (pendingOutput.size > 0 || queuedChunks.length > 0) {
+					if (pendingOutput.size === 0) {
+						deliverChunk(queuedChunks.shift()!);
+						continue;
+					}
+					await Promise.race([Promise.all([...pendingOutput]), cancelOutput]);
+				}
 				if (hasOutputFailure) throw outputFailure;
 				if (signal?.aborted) {
 					throw new Error("aborted");
