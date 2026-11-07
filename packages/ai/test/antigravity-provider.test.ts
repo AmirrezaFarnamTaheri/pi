@@ -26,11 +26,13 @@ describe("built-in Antigravity Manager gateway", () => {
 			apiKey: "test-local-secret",
 			baseUrl: "http://127.0.0.1:8045/v1",
 		});
+		expect(resolution?.env).toEqual({ ANTIGRAVITY_BASE_URL: "http://127.0.0.1:8045/v1" });
 	});
 
 	it("defaults to loopback and requires HTTPS for non-loopback URLs", () => {
 		expect(normalizeAntigravityGatewayUrl("")).toBe("http://127.0.0.1:8045/v1");
 		expect(normalizeAntigravityGatewayUrl("https://gateway.example/v1/")).toBe("https://gateway.example/v1");
+		expect(normalizeAntigravityGatewayUrl("http://localhost:8045/")).toBe("http://localhost:8045/v1");
 		expect(() => normalizeAntigravityGatewayUrl("http://gateway.example/v1")).toThrow(/HTTPS/);
 		expect(() => normalizeAntigravityGatewayUrl("http://user:pass@127.0.0.1:8045")).toThrow(/credentials/);
 	});
@@ -69,6 +71,7 @@ describe("built-in Antigravity Manager gateway", () => {
 			expect(provider.getModels().map((model) => model.id)).toEqual(["gemini-3.1-pro-high", "claude-sonnet-4-6"]);
 			expect(provider.getModels()[0]).toMatchObject({
 				provider: "antigravity", api: "openai-completions", baseUrl: "http://127.0.0.1:8045/v1",
+				contextWindow: 128_000, maxTokens: 8_192,
 			});
 		} finally {
 			globalThis.fetch = oldFetch;

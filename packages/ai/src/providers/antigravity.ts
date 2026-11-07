@@ -30,8 +30,8 @@ export function normalizeAntigravityGatewayUrl(input: string): string {
 	if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
 		throw new Error("HTTPS is required for non-loopback Antigravity gateways");
 	}
-	url.pathname = url.pathname.replace(/\/+$/u, "");
-	if (!url.pathname.endsWith("/v1")) url.pathname += "/v1";
+	const path = url.pathname.replace(/\/+$/u, "");
+	url.pathname = path.endsWith("/v1") ? path : `${path}/v1`;
 	return url.toString().replace(/\/+$/u, "");
 }
 
@@ -69,7 +69,11 @@ const gatewayAuth: ApiKeyAuth = {
 			credential?.env?.[GATEWAY_URL_ENV] ?? (await ctx.env(GATEWAY_URL_ENV)) ?? DEFAULT_GATEWAY,
 		);
 		signal.throwIfAborted();
-		return { auth: { apiKey: key, baseUrl }, source: credential?.key ? "stored gateway key" : GATEWAY_KEY_ENV };
+		return {
+			auth: { apiKey: key, baseUrl },
+			env: { [GATEWAY_URL_ENV]: baseUrl },
+			source: credential?.key ? "stored gateway key" : GATEWAY_KEY_ENV,
+		};
 	},
 };
 
@@ -111,8 +115,9 @@ export async function discoverAntigravityModels(
 			input: ["text"],
 			reasoning: false,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: modelNumber(item.context_window, 0),
-			maxTokens: modelNumber(item.max_tokens, 0),
+			// Conservative estimates if /models provides no limits; not upstream guarantees.
+			contextWindow: modelNumber(item.context_window, 128_000),
+			maxTokens: modelNumber(item.max_tokens, 8_192),
 		});
 	}
 	return models;
