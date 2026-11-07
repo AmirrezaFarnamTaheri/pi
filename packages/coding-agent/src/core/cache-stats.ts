@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "./session-manager.ts";
+import type { SessionEntry, SessionManager } from "./session-manager.ts";
 
 /**
  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
@@ -161,6 +161,14 @@ export function collectCacheMisses(
 	return scan(entries, models).misses;
 }
 
+/** Rebuild notices from the selected conversation only, never abandoned sibling paths. */
+export function collectActiveBranchCacheMisses(
+	session: Pick<SessionManager, "getBranch">,
+	models: ModelPriceSource,
+): Map<AssistantMessage, CacheMiss> {
+	return collectCacheMisses(session.getBranch(), models);
+}
+
 /**
  * The latest request's cache-miss inputs can normally be found at the tail:
  * a recent cache-reading or cache-writing turn provides all sticky cache
@@ -195,6 +203,58 @@ function lastRequestForMiss(entries: SessionEntry[]): PreviousRequest | undefine
 		if (latest && reportedCache) break;
 	}
 	return latest ? { ...latest, reportedCache } : undefined;
+}
+
+/**
+ * The last known request for each ancestry node is immutable for an append-only
+ * session. Only previously unseen nodes are visited after each append or branch.
+ */
+const requestStatesBySession = new WeakMap<SessionManager, WeakMap<SessionEntry, PreviousRequest | undefined>>();
+
+function lastRequestForSession(session: SessionManager): PreviousRequest | undefined {
+	let states = requestStatesBySession.get(session);
+	if (!states) {
+		states = new WeakMap();
+		requestStatesBySession.set(session, states);
+	}
+	const unseen: SessionEntry[] = [];
+	let current = session.getLeafEntry();
+	let remaining = session.getEntryCount();
+	while (current && !states.has(current)) {
+		if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
+		unseen.push(current);
+		current = current.parentId ? session.getEntry(current.parentId) : undefined;
+	}
+	let prev = current ? states.get(current) : undefined;
+	for (let index = unseen.length - 1; index >= 0; index--) {
+		const entry = unseen[index]!;
+		if (entry.type === "compaction" || entry.type === "branch_summary") {
+			prev = undefined;
+		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+			if (promptTokens > 0) {
+				prev = {
+					promptTokens,
+					modelKey: `${entry.provider}/${entry.model}`,
+					timestamp: Date.parse(entry.timestamp),
+					reportedCache: true,
+				};
+			}
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+		}
+		states.set(entry, prev);
+	}
+	return prev;
+}
+
+/** Detect the next message's miss without building the full active branch. */
+export function detectCacheMissForSession(
+	session: SessionManager,
+	message: AssistantMessage,
+	models: ModelPriceSource,
+): CacheMiss | undefined {
+	return detectMiss(lastRequestForSession(session), message, models);
 }
 
 /**
