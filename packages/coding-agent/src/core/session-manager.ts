@@ -1702,12 +1702,21 @@ export class SessionManager {
 		// Sort children by timestamp (oldest first, newest at bottom)
 		// Use iterative approach to avoid stack overflow on deep trees
 		const stack: SessionTreeNode[] = [...roots];
+		let visited = 0;
 		while (stack.length > 0) {
 			const node = stack.pop()!;
-			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
+			visited++;
+			// Parse each timestamp once rather than O(siblings * log siblings) times.
+			if (node.children.length > 1) {
+				const sorted = node.children.map((child) => ({ child, time: Date.parse(child.entry.timestamp) }));
+				sorted.sort((a, b) => a.time - b.time);
+				for (let i = 0; i < sorted.length; i++) node.children[i] = sorted[i]!.child;
+			}
 			// A root may have more siblings than V8 permits as function arguments.
 			for (const child of node.children) stack.push(child);
 		}
+		// Disconnected cyclic components have no root, and must not disappear silently.
+		if (visited !== nodeMap.size) throw new Error("Cycle detected in session entry parent chain");
 
 		return roots;
 	}
