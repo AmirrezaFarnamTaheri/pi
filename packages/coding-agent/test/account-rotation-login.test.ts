@@ -1,10 +1,10 @@
-import { InMemoryModelsStore, type Model, type Provider } from "@earendil-works/pi-ai";
+import { AssistantMessageEventStream, InMemoryModelsStore, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
-import { parseRotationConfiguration, registerAccountRotation } from "../src/extensions/account-rotation-extension.ts";
+import { createApiKeyAccountAlias, createOAuthAccountAlias, parseRotationConfiguration, registerAccountRotation } from "../src/extensions/account-rotation-extension.ts";
 
 function sourceProvider(): Provider {
 	const model: Model<"openai-completions"> = {
@@ -31,6 +31,51 @@ function sourceProvider(): Provider {
 		getModels: () => [model], stream: unused, streamSimple: unused,
 	};
 }
+
+describe("account alias provider transport isolation", () => {
+	it("forwards the original upstream provider identity and restores the alias in streaming events", async () => {
+		const source = sourceProvider();
+		const model = source.getModels()[0]!;
+		const requests: string[] = [];
+		const message: AssistantMessage = {
+			role: "assistant", content: [{ type: "text", text: "hello" }],
+			provider: source.id, model: model.id, api: model.api, stopReason: "stop",
+			timestamp: Date.now(),
+			usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		};
+		const streamProvider = {
+			...source,
+			streamSimple: (requestModel: Model<"openai-completions">) => {
+				requests.push(requestModel.provider);
+				const stream = new AssistantMessageEventStream();
+				stream.push({ type: "start", partial: { ...message, content: [] } });
+				stream.push({ type: "done", reason: "stop", message: { ...message } });
+				return stream;
+			},
+		} as Provider;
+		const alias = createOAuthAccountAlias(streamProvider, "oauth-account-alias");
+		expect(alias.getModels()[0]?.provider).toBe("oauth-account-alias");
+		const events = alias.streamSimple(alias.getModels()[0]!, { messages: [] } as never);
+		const values = [];
+		for await (const event of events) values.push(event);
+		expect(requests).toEqual(["rotation-test"]);
+		expect(values[0]).toMatchObject({ type: "start", partial: { provider: "oauth-account-alias" } });
+		expect((await events.result()).provider).toBe("oauth-account-alias");
+	});
+
+	it("never inherits stored credentials for an environment-only API key alias", async () => {
+		const alias = createApiKeyAccountAlias(sourceProvider(), "env-account", "ROTATION_TEST_SECRET");
+		const resolve = alias.auth.apiKey!.resolve;
+		const credential = { type: "api_key" as const, key: "wrong-stored-token" };
+		const unavailable = await resolve({ ctx: { env: async () => undefined, fileExists: async () => false },
+			credential, signal: new AbortController().signal });
+		expect(unavailable).toBeUndefined();
+		const available = await resolve({ ctx: { env: async () => "expected-env-token", fileExists: async () => false },
+			credential, signal: new AbortController().signal });
+		expect(available?.auth.apiKey).toBe("expected-env-token");
+	});
+});
 
 describe("account rotation native OAuth login", () => {
 	it("isolates two logins of an extension-registered Google OAuth provider", async () => {
