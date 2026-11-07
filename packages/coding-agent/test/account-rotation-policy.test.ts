@@ -62,3 +62,16 @@ describe("AccountRotationPool", () => {
 		expect(classifyCredentialFailure("context window exceeded")).toBeUndefined();
 	});
 });
+
+describe("rotation state restored after another provider was selected", () => {
+	it("uses the saved pool slot when the most recent physical model is outside the pool", () => {
+		const pool = new RotationPool(accounts);
+		const chosen = pool.choose({
+			reason: "continuation",
+			previous: { provider: "unrelated", model: "outside" },
+			active: accounts[2],
+			now: 0,
+		});
+		expect(chosen.index).toBe(2);
+	});
+});

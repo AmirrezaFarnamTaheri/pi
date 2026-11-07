@@ -81,7 +81,8 @@ export class RotationPool {
 			return this.#choice(failedIndex);
 		}
 		if (input.reason === "continuation" || input.reason === "retry") {
-			const sticky = this.#indexOf(input.previous ?? input.active);
+			const previous = this.#indexOf(input.previous);
+			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
 			if (sticky >= 0) return this.#choice(sticky);
 		}
 		if (input.reason === "direct") return this.#pick(this.#cursor, now, false);

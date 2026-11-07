@@ -44,7 +44,8 @@ The slash commands `/account-rotation status` and `/account-rotation reset` show
 
 - A new user turn selects the next available credential slot in round-robin order.
 - Tool follow-ups retain the account that produced the prior successful response, preserving continuity and prompt caching.
-- On Pi's **automatic retry**, a pre-output 429, quota-exhaustion, 401/invalid-key, or transient 5xx failure quarantines that slot and tries another. No retry happens automatically unless Pi's retry feature is enabled.
+- On Pi's **automatic retry**, a pre-output retryable 429 or transient 5xx failure quarantines the slot and tries another. Automatic retry must be enabled in Pi settings.
+- Pi's built-in retry classifier deliberately excludes authentication failures (401) and exhausted quota/billing errors, so these errors **do not cause automatic failover**. If another caller explicitly retries such an attempt, the rotation policy also understands invalid-key and exhausted-quota failures and quarantines those credentials.
 - Credentials are never switched automatically after a response has produced text, reasoning, or tool calls, or for context-limit and policy errors.
 - If all accounts are cooling down, the request fails instead of silently reusing a blocked key. A 401 authentication failure gets at least one hour of quarantine; other failures use `cooldownMs`.
 - Direct requests (e.g. compaction) use an available credential without advancing the turn-robin index.
