@@ -45,7 +45,7 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			throw new Error(`Rotation pool ${raw.id} needs between 1 and 64 account slots`);
 		}
 		const cooldownMs = raw.cooldownMs;
-		if (cooldownMs !== undefined && (!Number.isSafeInteger(cooldownMs) || (cooldownMs as number) < 1 || (cooldownMs as number) > 86_400_000)) {
+		if (cooldownMs !== undefined && (typeof cooldownMs !== "number" || !Number.isSafeInteger(cooldownMs) || cooldownMs < 1 || cooldownMs > 86_400_000)) {
 			throw new Error(`Rotation pool ${raw.id} has an invalid cooldownMs`);
 		}
 		if (raw.name !== undefined && typeof raw.name !== "string") throw new Error(`Rotation pool ${raw.id} has an invalid name`);
