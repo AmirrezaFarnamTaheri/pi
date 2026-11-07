@@ -161,7 +161,7 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 					name: `${member.provider} (rotation)`,
 					api: source.api,
 					baseUrl: source.baseUrl,
-					apiKey: `${member.apiKeyEnv}`,
+					apiKey: `$${member.apiKeyEnv}`,
 					authHeader: source.api === "openai-completions" || source.api === "openai-responses",
 					models: [model],
 				});

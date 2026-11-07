@@ -46,7 +46,7 @@ Create `~/.pi/agent/account-rotation.json` (or the equivalent folder reported by
 }
 ```
 
-Each `sourceProvider` plus a distinct `provider` alias registers an independent OAuth identity with its own credential-store entry. Pi\u0027s existing `/login` interface can sign in to each alias independently. Refresh uses the source provider\u0027s native OAuth code and Pi\u0027s existing credential-store locking. The original provider account remains unchanged.
+Each `sourceProvider` plus a distinct `provider` alias registers an independent OAuth identity with its own credential-store entry. Pi's existing `/login` interface can sign in to each alias independently. Refresh uses the source provider\u0027s native OAuth code and Pi's existing credential-store locking. The original provider account remains unchanged.
 
 Start `pi`, then run `/login` and select each named account. Repeat for all aliases. The CLI `pi auth login` may not load extension-provided aliases, so use interactive `/login` unless your installation loads extensions for CLI auth commands. Restart Pi after changing the configuration.
 
@@ -64,7 +64,7 @@ The slash commands `/account-rotation status` and `/account-rotation reset` show
 
 The [Antigravity Manager](providers.md#antigravity-manager-gateway) endpoint is a built-in `antigravity-manager` **gateway-key** provider. Its Google account connections and any internal account rotation remain in the separate manager. For direct Google sign-in, the optional MIT-licensed [realagy](https://github.com/st0nie/realagy) integration uses Google's official `agy acp` client and registers `antigravity/*` models after the Antigravity CLI is signed in.
 
-The official ACP provider does not expose per-account OAuth tokens to Pi. The `sourceProvider` field in this rotation extension is for providers that supply native Pi OAuth login methods (e.g. Anthropic and Codex), **not** for cloning `realagy`'s CLI session or bypassing Google's quota enforcement. Use separate realagy/CLI profiles for separate sign-ins under the extension's own configuration; this rotation extension does not currently manage them.
+The official ACP provider does not expose per-account OAuth tokens to Pi. The `sourceProvider` field in this rotation extension is for providers that supply native Pi OAuth login methods (e.g. Anthropic and Codex), **not** for cloning `realagy`'s CLI session or bypassing Google's quota enforcement. A separate Antigravity CLI installation or data directory may carry a different Google sign-in, but the generic rotation extension does not currently launch or coordinate multiple ACP sessions.
 
 ## Routing and failure behavior
 
