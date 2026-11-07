@@ -120,6 +120,34 @@ describe("capacity waiter correctness", () => {
 		expect(await stream.result()).toBe(10);
 		await reader.return?.();
 	});
+	it("aborted capacity waiters cannot strand a later live publisher", async () => {
+		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const reader = stream[Symbol.asyncIterator]();
+		const first = reader.next();
+		stream.push(1);
+		await first;
+		await stream.pushWithBackpressure(2, 1);
+		const controller = new AbortController();
+		const cancelled = stream.pushWithBackpressure(3, 1, controller.signal);
+		const live = stream.pushWithBackpressure(4, 1);
+		let published = false;
+		void live.then(() => { published = true; });
+		controller.abort();
+		await expect(cancelled).rejects.toThrow(/abort/i);
+		try {
+			expect((await reader.next()).value).toBe(2);
+			// Only the live waiter may consume the newly available capacity.
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(published).toBe(true);
+			expect((await reader.next()).value).toBe(4);
+		} finally {
+			stream.end(5);
+			await reader.return?.();
+			await live;
+		}
+	});
+
 	it("rejects a blocked publisher immediately when its abort signal fires", async () => {
 		const stream = new EventStream<number, number>(() => false, (event) => event);
 		const reader = stream[Symbol.asyncIterator]();

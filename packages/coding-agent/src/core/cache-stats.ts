@@ -162,6 +162,42 @@ export function collectCacheMisses(
 }
 
 /**
+ * The latest request's cache-miss inputs can normally be found at the tail:
+ * a recent cache-reading or cache-writing turn provides all sticky cache
+ * evidence. Unlike scan(), this does not collect a map or totals for every
+ * historical turn. It visits older entries only when cache support has not
+ * yet been established in the current compaction segment.
+ */
+function lastRequestForMiss(entries: SessionEntry[]): PreviousRequest | undefined {
+	let latest: PreviousRequest | undefined;
+	let reportedCache = false;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type === "compaction" || entry.type === "branch_summary") break;
+		if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+			if (promptTokens > 0) {
+				if (!latest) latest = {
+					promptTokens,
+					modelKey: `${entry.provider}/${entry.model}`,
+					timestamp: Date.parse(entry.timestamp),
+					reportedCache: true,
+				};
+				reportedCache = true;
+			}
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			const request = asPreviousRequest(entry.message, false);
+			if (request) {
+				latest ??= request;
+				if (request.reportedCache) reportedCache = true;
+			}
+		}
+		if (latest && reportedCache) break;
+	}
+	return latest ? { ...latest, reportedCache } : undefined;
+}
+
+/**
  * Detect a cache miss on a just-completed assistant message.
  * `entries` must not yet contain `message` (message_end fires before persistence).
  */
@@ -170,5 +206,5 @@ export function detectCacheMiss(
 	message: AssistantMessage,
 	models: ModelPriceSource,
 ): CacheMiss | undefined {
-	return detectMiss(scan(entries, models).prev, message, models);
+	return detectMiss(lastRequestForMiss(entries), message, models);
 }

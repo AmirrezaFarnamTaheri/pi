@@ -407,7 +407,11 @@ function buildSessionPath(
 
 	const path: SessionEntry[] = [];
 	let current: SessionEntry | undefined = leaf;
+	// A corrupt JSONL session can contain cyclic parent IDs. A valid ancestry
+	// cannot visit more entries than the index contains.
+	let remaining = Math.max(1, index.size);
 	while (current) {
+		if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 		path.push(current);
 		current = current.parentId ? index.get(current.parentId) : undefined;
 	}
@@ -478,7 +482,11 @@ export function buildContextEntries(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionEntry[] {
-	const path = buildSessionPath(entries, leafId, byId);
+	return contextEntriesFromPath(buildSessionPath(entries, leafId, byId));
+}
+
+/** Reuse the already indexed active branch instead of traversing it a second time. */
+function contextEntriesFromPath(path: SessionEntry[]): SessionEntry[] {
 	let compaction: CompactionEntry | null = null;
 
 	for (const entry of path) {
@@ -507,7 +515,8 @@ export function buildContextEntries(
 			contextEntries.push(entry);
 		}
 	}
-	contextEntries.push(...path.slice(compactionIdx + 1));
+	// Spread-call arguments have an engine-specific limit (~100k+ entries).
+	for (let i = compactionIdx + 1; i < path.length; i++) contextEntries.push(path[i]!);
 	return contextEntries;
 }
 
@@ -546,9 +555,12 @@ export function buildSessionProjection(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionProjection {
-	const path = buildSessionPath(entries, leafId, byId);
+	return projectSessionPath(buildSessionPath(entries, leafId, byId));
+}
+
+function projectSessionPath(path: SessionEntry[]): SessionProjection {
 	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const contextEntries = buildContextEntries(entries, leafId, byId);
+	const contextEntries = contextEntriesFromPath(path);
 	const edits = new Map<string, ContextEditEntry>();
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
@@ -1091,9 +1103,13 @@ export class SessionManager {
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
+	/** Lazily built, append-maintained index for branch navigation. */
+	private childrenByParent?: Map<string, SessionEntry[]>;
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/** Cache the frame-time footer title until the append-only session array changes. */
+	private sessionNameCache?: { entries: FileEntry[]; length: number; name: string | undefined };
 
 	private constructor(
 		cwd: string,
@@ -1168,6 +1184,8 @@ export class SessionManager {
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
+		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1200,6 +1218,8 @@ export class SessionManager {
 
 	private _buildIndex(): void {
 		this.byId.clear();
+		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1300,6 +1320,13 @@ export class SessionManager {
 			this.byId.delete(entry.id);
 			this.leafId = previousLeafId;
 			throw error;
+		}
+		// Publish to the navigation cache only after persistence succeeds. A
+		// failed append has already rolled back its in-memory parent/leaf state.
+		if (entry.parentId !== null && this.childrenByParent) {
+			const siblings = this.childrenByParent.get(entry.parentId);
+			if (siblings) siblings.push(entry);
+			else this.childrenByParent.set(entry.parentId, [entry]);
 		}
 	}
 
@@ -1422,18 +1449,21 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Get the current session name from the latest session_info entry, if any. */
+	/** Get the latest session title in O(1) on repeated UI frames. */
 	getSessionName(): string | undefined {
-		// Walk entries in reverse to find the latest session_info entry.
-		// Empty names explicitly clear the session title. Reads fileEntries directly: the footer
-		// calls this on every frame, and getEntries() copies the whole session.
-		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
-			const entry = this.fileEntries[i];
+		const entries = this.fileEntries;
+		const cached = this.sessionNameCache;
+		if (cached?.entries === entries && cached.length === entries.length) return cached.name;
+		let name: string | undefined;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]!;
 			if (entry.type === "session_info") {
-				return entry.name?.trim() || undefined;
+				name = entry.name?.trim() || undefined;
+				break;
 			}
 		}
-		return undefined;
+		this.sessionNameCache = { entries, length: entries.length, name };
+		return name;
 	}
 
 	/**
@@ -1525,13 +1555,18 @@ export class SessionManager {
 	 * Get all direct children of an entry.
 	 */
 	getChildren(parentId: string): SessionEntry[] {
-		const children: SessionEntry[] = [];
-		for (const entry of this.byId.values()) {
-			if (entry.parentId === parentId) {
-				children.push(entry);
+		if (!this.childrenByParent) {
+			const index = new Map<string, SessionEntry[]>();
+			for (const entry of this.byId.values()) {
+				if (entry.parentId === null) continue;
+				const siblings = index.get(entry.parentId);
+				if (siblings) siblings.push(entry);
+				else index.set(entry.parentId, [entry]);
 			}
+			this.childrenByParent = index;
 		}
-		return children;
+		// Preserve the old shallow-copy contract; caller changes must not corrupt the index.
+		return this.childrenByParent.get(parentId)?.slice() ?? [];
 	}
 
 	/**
@@ -1578,7 +1613,9 @@ export class SessionManager {
 		const path: SessionEntry[] = [];
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
+		let remaining = this.byId.size;
 		while (current) {
+			if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 			path.push(current);
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
@@ -1591,7 +1628,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildContextEntries(): SessionEntry[] {
-		return buildContextEntries(this.getEntries(), this.leafId, this.byId);
+		return contextEntriesFromPath(this.getBranch());
 	}
 
 	/**
@@ -1599,7 +1636,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildSessionProjection(): SessionProjection {
-		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
+		return projectSessionPath(this.getBranch());
 	}
 
 	buildSessionContext(): SessionContext {
@@ -1668,7 +1705,8 @@ export class SessionManager {
 		while (stack.length > 0) {
 			const node = stack.pop()!;
 			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-			stack.push(...node.children);
+			// A root may have more siblings than V8 permits as function arguments.
+			for (const child of node.children) stack.push(child);
 		}
 
 		return roots;
