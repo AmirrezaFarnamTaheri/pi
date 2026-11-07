@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { parseRotationConfiguration, registerAccountRotation } from "../src/extensions/account-rotation-extension.ts";
 
@@ -15,26 +16,38 @@ function createHarness(configuration: unknown) {
 		reasoning: true, contextWindow: 10_000, maxTokens: 1_000,
 	};
 	const models = new Map<string, typeof physical>([["anthropic/sonnet", physical]]);
+	const providers = new Map<string, Provider>();
+	providers.set("anthropic", {
+		id: "anthropic", name: "Anthropic test source", auth: {
+			apiKey: { name: "Key", resolve: async ({ credential }) => credential?.key
+				? { auth: { apiKey: credential.key }, source: "stored" } : undefined },
+		},
+		getModels: () => [physical as never],
+		stream: () => { throw new Error("no streaming in this test"); },
+		streamSimple: () => { throw new Error("no streaming in this test"); },
+	});
 	const handlers = new Map<string, (...args: never[]) => Promise<void>>();
 	const registered: Array<{ provider: string; apiKey?: string }> = [];
 	const commands = new Map<string, { handler: (args: string, context: unknown) => Promise<void> }>();
 	let virtual: { route: (request: Record<string, unknown>, context: unknown) => Promise<{ model: typeof physical }> } | undefined;
 	const pi = {
 		on(event: string, handler: (...args: never[]) => Promise<void>) { handlers.set(event, handler); },
-		registerProvider(provider: string, providerConfig: { apiKey?: string }) {
-			registered.push({ provider, apiKey: providerConfig.apiKey });
-			models.set(`${provider}/sonnet`, { ...physical, provider });
+		registerProvider(provider: Provider) {
+			registered.push({ provider: provider.id });
+			providers.set(provider.id, provider);
+			models.set(`${provider.id}/sonnet`, { ...physical, provider: provider.id });
 		},
 		registerVirtualModel(value: typeof virtual) { virtual = value; },
 		registerCommand(name: string, command: { handler: (args: string, context: unknown) => Promise<void> }) { commands.set(name, command); },
 	} as unknown as ExtensionAPI;
 	const ctx = { modelRegistry: {
 		find(provider: string, id: string) { return models.get(`${provider}/${id}`); },
+		getProvider(provider: string) { return providers.get(provider); },
 		hasConfiguredAuth() { return true; },
 		async refresh() {},
 	} };
 	registerAccountRotation(pi, parseRotationConfiguration(configuration));
-	return { handlers, registered, commands, ctx, virtual: () => virtual! };
+	return { handlers, registered, providers, commands, ctx, virtual: () => virtual! };
 }
 
 describe("account rotation extension", () => {
@@ -117,12 +130,43 @@ describe("account rotation extension", () => {
 		try {
 			const app = createHarness(config);
 			await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
-			expect(app.registered).toEqual([{ provider: "anthropic-key-2", apiKey: "$PI_TEST_ALT_KEY" }]);
+			expect(app.registered).toEqual([{ provider: "anthropic-key-2" }]);
+			const auth = app.providers.get("anthropic-key-2")!.auth.apiKey!;
+			const resolved = await auth.resolve({
+				ctx: { env: async (name) => process.env[name], fileExists: async () => false },
+				credential: { type: "api_key", key: "stale-stored-key" },
+				signal: new AbortController().signal,
+			});
+			expect(resolved?.auth.apiKey).toBe("test-secret-must-not-leak");
+			expect(resolved?.auth.apiKey).not.toBe("stale-stored-key");
 			expect(JSON.stringify(app.registered)).not.toContain("test-secret-must-not-leak");
 		} finally {
 			if (before === undefined) delete process.env.PI_TEST_ALT_KEY;
 			else process.env.PI_TEST_ALT_KEY = before;
 		}
+	});
+
+	it("rejects provider collisions and never registers an alias twice after session reload", async () => {
+		const collision = createHarness({ pools: [{ id: "collision", members: [
+			{ provider: "anthropic", sourceProvider: "another-provider", model: "sonnet" },
+		] }] });
+		await expect(collision.handlers.get("session_start")!({ type: "session_start" } as never, collision.ctx as never))
+			.rejects.toThrow(/conflicts with existing provider/i);
+		const app = createHarness(config);
+		await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+		await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+		expect(app.registered).toEqual([{ provider: "anthropic-key-2" }]);
+	});
+
+	it("fails closed when the original account loses authentication during a tool continuation", async () => {
+		const app = createHarness(config);
+		await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+		const request = { reason: "user", thinkingLevel: "off", messages: [] };
+		const first = await app.virtual().route(request, app.ctx);
+		app.ctx.modelRegistry.hasConfiguredAuth = (model: { provider: string }) => model.provider !== "anthropic";
+		await expect(app.virtual().route({
+			...request, reason: "continuation", previous: { model: first.model },
+		}, app.ctx)).rejects.toThrow(/original account.*unavailable/i);
 	});
 
 	it("rotates user turns, holds account for tools and fails over on pre-output 429", async () => {
