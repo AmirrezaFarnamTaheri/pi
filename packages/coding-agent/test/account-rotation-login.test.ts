@@ -1,4 +1,4 @@
-import { InMemoryModelsStore, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
+import { InMemoryModelsStore, type Api, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -77,7 +77,7 @@ describe("account alias provider transport isolation", () => {
 	});
 
 	it("isolates a dynamic source's per-account model refresh without mutating the source catalog", async () => {
-		let sourceModels: Model<"openai-completions">[] = [];
+		let sourceModels: Model<Api>[] = [];
 		const base = sourceProvider();
 		const dynamic = {
 			...base,
