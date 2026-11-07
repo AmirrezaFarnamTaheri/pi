@@ -161,12 +161,38 @@ export function collectCacheMisses(
 	return scan(entries, models).misses;
 }
 
-/** Rebuild notices from the selected conversation only, never abandoned sibling paths. */
+/**
+ * Replay token misses only along the active branch. Idle-time labels consider
+ * intervening provider requests from other branches, which may have refreshed
+ * a shared cache prefix before the current branch resumed.
+ */
 export function collectActiveBranchCacheMisses(
-	session: Pick<SessionManager, "getBranch">,
+	session: Pick<SessionManager, "getBranch" | "getEntries">,
 	models: ModelPriceSource,
 ): Map<AssistantMessage, CacheMiss> {
-	return collectCacheMisses(session.getBranch(), models);
+	const misses = collectCacheMisses(session.getBranch(), models);
+	if (misses.size === 0) return misses;
+	let latestRequestTime: number | undefined;
+	for (const entry of session.getEntries()) {
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			const message = entry.message;
+			const miss = misses.get(message);
+			if (miss && latestRequestTime !== undefined) {
+				miss.idleMs = Math.min(miss.idleMs, Math.max(0, message.timestamp - latestRequestTime));
+			}
+			const usage = message.usage;
+			if (usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
+				latestRequestTime = Math.max(latestRequestTime ?? -Infinity, message.timestamp);
+			}
+		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const usage = entry.usage;
+			const time = Date.parse(entry.timestamp);
+			if (usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(time)) {
+				latestRequestTime = Math.max(latestRequestTime ?? -Infinity, time);
+			}
+		}
+	}
+	return misses;
 }
 
 /**
@@ -254,7 +280,12 @@ export function detectCacheMissForSession(
 	message: AssistantMessage,
 	models: ModelPriceSource,
 ): CacheMiss | undefined {
-	return detectMiss(lastRequestForSession(session), message, models);
+	const miss = detectMiss(lastRequestForSession(session), message, models);
+	const latestRequestTime = session.getLatestProviderRequestTimestamp();
+	if (miss && latestRequestTime !== undefined) {
+		miss.idleMs = Math.min(miss.idleMs, Math.max(0, message.timestamp - latestRequestTime));
+	}
+	return miss;
 }
 
 /**
