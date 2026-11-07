@@ -135,7 +135,7 @@ export class QueryRefresh {
 		// Identical query subscriptions in one transaction see exactly the same
 		// snapshot. Share the backend read while retaining each query's independent
 		// decoding, error state, diff, owner and adoption semantics.
-		const reads = new Map<string, Promise<StoredRow[]>>();
+		const reads = new Map<string, Array<{ params: readonly SqliteValue[]; result: Promise<StoredRow[]> }>>();
 		for (const query of this.#queries) this.#runs.push(await query.rerun(step, this.#context, reads));
 		return NO_WRITES;
 	}
@@ -219,16 +219,22 @@ export class LiveQuery extends Source {
 	async rerun(
 		step: Step,
 		context: Context,
-		reads?: Map<string, Promise<StoredRow[]>>,
+		reads?: Map<string, Array<{ params: readonly SqliteValue[]; result: Promise<StoredRow[]> }>>,
 	): Promise<QueryRun> {
 		try {
 			this.#count(context);
 			const { sql, params } = this.#statement;
-			const key = JSON.stringify([sql, params]);
-			let stored = reads?.get(key);
+			// SQLite bindings can contain bigint and binary data, which cannot be
+			// compared safely by JSON.stringify.
+			const variants = reads?.get(sql);
+			let stored = variants?.find((entry) => equalSqlBindings(entry.params, params))?.result;
 			if (!stored) {
 				stored = step.all<StoredRow>(sql, ...params);
-				reads?.set(key, stored);
+				if (reads) {
+					const entry = { params: [...params], result: stored };
+					if (variants) variants.push(entry);
+					else reads.set(sql, [entry]);
+				}
 			}
 			return { kind: "rows", rows: this.#decode(await stored, context) };
 		} catch (error) {
@@ -314,5 +320,19 @@ export class LiveQuery extends Source {
 /** Whether two stored rows have the same value in every physical column (SQLite values compare by `===`). */
 function sameStored(a: StoredRow, b: StoredRow, physical: readonly string[]): boolean {
 	for (const column of physical) if (a[column] !== b[column]) return false;
+	return true;
+}
+
+/** Compare SQL parameters without losing bigint precision or binary identity. */
+function equalSqlBindings(left: readonly SqliteValue[], right: readonly SqliteValue[]): boolean {
+	if (left.length !== right.length) return false;
+	for (let index = 0; index < left.length; index++) {
+		const a = left[index]!;
+		const b = right[index]!;
+		if (a instanceof Uint8Array || b instanceof Uint8Array) {
+			if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array) || a.length !== b.length) return false;
+			for (let byte = 0; byte < a.length; byte++) if (a[byte] !== b[byte]) return false;
+		} else if (!Object.is(a, b)) return false;
+	}
 	return true;
 }
