@@ -7,7 +7,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AnyModel, Api, Model, Provider } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { RotationPool, type RotationHealth, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
+import { RotationPool, classifyCredentialFailure, type RotationHealth, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
 
 export interface RotationMember extends RotationTarget {
 	/** Environment variable name holding an API key, never its value. */
@@ -306,6 +306,15 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			id: group.id,
 			name: group.name ?? `Account rotation (${group.id})`,
 			thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+			shouldRetry(message) {
+				if (message.stopReason !== "error" || !group.members.some(
+					(member) => member.provider === message.provider && member.model === message.model,
+				)) return false;
+				if (message.content.some((block) =>
+					block.type === "toolCall" || (block.type === "text" && block.text.length > 0) ||
+					(block.type === "thinking" && block.thinking.length > 0))) return false;
+				return classifyCredentialFailure(message.errorMessage ?? "") !== undefined;
+			},
 			async route(request, ctx) {
 				if (request.signal?.aborted) throw new Error("Account rotation request cancelled");
 				for (const member of group.members) {
