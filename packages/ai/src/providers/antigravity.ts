@@ -107,11 +107,12 @@ export async function discoverAntigravityModels(
 			provider: "antigravity",
 			api: "openai-completions",
 			baseUrl: url,
-			input: ["text", "image"],
+			// /v1/models does not guarantee multimodal or reasoning support.
+			input: ["text"],
 			reasoning: false,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: modelNumber(item.context_window, 128_000),
-			maxTokens: modelNumber(item.max_tokens, 8192),
+			contextWindow: modelNumber(item.context_window, 0),
+			maxTokens: modelNumber(item.max_tokens, 0),
 		});
 	}
 	return models;
