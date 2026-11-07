@@ -79,7 +79,7 @@ jobs:
 
   smoke-test:
     needs: build
-    runs-on: \${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -154,7 +154,7 @@ jobs:
       - name: Verify and publish fork GitHub release
         shell: bash
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           export GH_REPO="$GITHUB_REPOSITORY"
@@ -169,11 +169,11 @@ jobs:
             exit 1
           fi
           assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/SHA256SUMS)
-          test "\${#assets[@]}" -eq 10
+          test "${#assets[@]}" -eq 10
           gh release create "$tag" \
             --target "$GITHUB_SHA" --prerelease \
             --title "Pi fork $tag" \
             --notes-file release-assets/RELEASE_NOTES.md \
-            "\${assets[@]}"
+            "${assets[@]}"
           gh release view "$tag" --json url,isDraft,assets \
             --jq '{url,isDraft,assetCount:(.assets|length)}'
