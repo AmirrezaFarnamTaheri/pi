@@ -137,6 +137,52 @@ describe("account strategies and quota-aware health (CortexKit / pi-antigravity-
 	});
 });
 
+describe("rotation account safety regressions", () => {
+	it("never silently substitutes an account in a continuation when credentials go missing", () => {
+		const pool = new RotationPool(accounts);
+		pool.choose({ reason: "user", now: 10 });
+		pool.setAvailable(accounts[0]!, false);
+		expect(() => pool.choose({ reason: "continuation", previous: accounts[0], now: 11 })).toThrow(/unavailable/i);
+		expect(pool.choose({ reason: "user", now: 12 }).index).toBe(1);
+		pool.setAvailable(accounts[0]!, true);
+		expect(pool.choose({ reason: "user", now: 13 }).index).toBe(2);
+	});
+
+	it("shares account-specific failures between different pools", () => {
+		const health = new Map();
+		const first = new RotationPool(accounts, 1000, "round-robin", Math.random, health);
+		const second = new RotationPool(accounts.slice(0, 2), 1000, "round-robin", Math.random, health);
+		first.choose({ reason: "retry", failed: { target: accounts[0]!, errorMessage: "429 rate limit", hasOutput: false }, now: 10 });
+		expect(second.status(11)[0]?.readyInMs).toBe(999);
+		expect(second.choose({ reason: "user", now: 11 }).target.provider).toBe(accounts[1]!.provider);
+		second.markSuccess(accounts[0]!);
+		expect(first.status(11)[0]?.readyInMs).toBe(0);
+	});
+
+	it("honors a manual pin for direct summary requests", () => {
+		const pool = new RotationPool(accounts);
+		pool.pin(accounts[2]!);
+		expect(pool.choose({ reason: "direct", now: 10 }).index).toBe(2);
+	});
+
+	it("shows indefinite zero quota as blocked and permits an explicit re-login to recover", () => {
+		const pool = new RotationPool(accounts);
+		pool.reportQuota(accounts[0]!, 0);
+		expect(pool.status(20)[0]?.quotaBlocked).toBe(true);
+		expect(pool.choose({ reason: "user", now: 21 }).index).toBe(1);
+		pool.markReauthenticated(accounts[0]!);
+		expect(pool.status(22)[0]?.quotaBlocked).toBe(false);
+	});
+
+	it("recognizes retry after seconds and quota reset timestamps without leaking tokens", () => {
+		const pool = new RotationPool(accounts, 1_000);
+		pool.choose({ reason: "retry", now: 1, failed: {
+			target: accounts[0]!, errorMessage: "429 retry-after: 120", hasOutput: false,
+		} });
+		expect(pool.status(1)[0]?.readyInMs).toBe(120_000);
+	});
+});
+
 describe("rotation state restored after another provider was selected", () => {
 	it("uses the saved pool slot when the most recent physical model is outside the pool", () => {
 		const pool = new RotationPool(accounts);

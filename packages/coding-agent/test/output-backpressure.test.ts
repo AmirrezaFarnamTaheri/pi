@@ -61,6 +61,34 @@ describe.skipIf(process.platform === "win32")("local shell output backpressure i
 		expect(deliveredBytes).toBe(2048);
 	});
 
+	it("does not finish before a queued second asynchronous output write drains", async () => {
+		let releaseFirst!: () => void;
+		let releaseSecond!: () => void;
+		const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+		let calls = 0;
+		let finished = false;
+		const command = "node -e \"process.stdout.write('a'.repeat(1024));setTimeout(()=>process.stdout.write('b'.repeat(1024)),40)\"";
+		const run = createLocalBashOperations().exec(command, tmpdir(), {
+			onData: () => (++calls === 1 ? firstGate : secondGate),
+		}).then((result) => { finished = true; return result; });
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 300));
+			expect(calls).toBe(1);
+			releaseFirst();
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(calls).toBe(2);
+			expect(finished).toBe(false);
+			releaseSecond();
+			expect((await run).exitCode).toBe(0);
+			expect(finished).toBe(true);
+		} finally {
+			releaseFirst();
+			releaseSecond();
+			await run.catch(() => {});
+		}
+	});
+
 	it("preserves large simultaneous stdout and stderr streams while the spill file drains", async () => {
 		const output = new OutputAccumulator({ maxBytes: 128, maxLines: 8 });
 		const shell = createLocalBashOperations();

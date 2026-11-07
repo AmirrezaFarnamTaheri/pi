@@ -48,6 +48,16 @@ describe("account rotation extension", () => {
 		] }] })).toThrow(/duplicate/i);
 	});
 
+	it("rejects alias collisions, reuse of the same physical API key, and credentials in arbitrary fields", () => {
+		expect(() => parseRotationConfiguration({ pools: [{ id: "x", members: [
+			{ provider: "key-a", sourceProvider: "anthropic", model: "sonnet", apiKeyEnv: "SAME_KEY" },
+			{ provider: "key-b", sourceProvider: "anthropic", model: "sonnet", apiKeyEnv: "SAME_KEY" },
+		] }] })).toThrow(/duplicate.*(key|credential)/i);
+		expect(() => parseRotationConfiguration({ pools: [{ id: "x", members: [
+			{ provider: "account", model: "sonnet", token: "a-plain-secret" },
+		] }] })).toThrow(/unknown|token|secret/i);
+	});
+
 	it("accepts OAuth account aliases while rejecting duplicate credential slots", () => {
 		const config = parseRotationConfiguration({ pools: [{ id: "oauth", members: [
 			{ provider: "account-one", sourceProvider: "anthropic", model: "sonnet" },
