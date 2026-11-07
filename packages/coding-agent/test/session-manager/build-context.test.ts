@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	type BranchSummaryEntry,
 	buildContextEntries,
 	buildSessionContext,
+	SessionManager,
 	type CompactionEntry,
 	type CustomEntry,
 	type ModelChangeEntry,
@@ -301,5 +302,61 @@ describe("buildSessionContext", () => {
 			// Should only get the orphan since parent chain is broken
 			expect(ctx.messages).toHaveLength(1);
 		});
+	});
+});
+
+describe("long-running agent session hot paths", () => {
+	it("projects the active branch without copying the complete persisted event history", () => {
+		const manager = SessionManager.inMemory();
+		manager.appendMessage({ role: "user", content: "live request", timestamp: Date.now() });
+		const original = manager.buildSessionContext();
+		const copying = vi.spyOn(manager, "getEntries").mockImplementation(() => {
+			throw new Error("Projected the active branch by copying every event in the session");
+		});
+		try {
+			expect(manager.buildSessionContext()).toEqual(original);
+		} finally {
+			copying.mockRestore();
+		}
+	});
+
+	it("does not overflow the JS argument limit after a large post-compaction history", () => {
+		const entries: SessionEntry[] = [msg("root", null, "user", "first"),
+			compaction("compact", "root", "checkpoint", "root")];
+		let previous = "compact";
+		for (let index = 0; index < 140_000; index++) {
+			const id = `state-${index}`;
+			entries.push(custom(id, previous, "state-change"));
+			previous = id;
+		}
+		const projected = buildContextEntries(entries, previous);
+		expect(projected.length).toBe(140_002);
+		expect(projected.at(-1)?.id).toBe(previous);
+	});
+
+	it("caches frame-time session-name lookups while noticing appended and replaced metadata", () => {
+		const manager = SessionManager.inMemory();
+		for (let index = 0; index < 1_000; index++) manager.appendCustomEntry("state", index);
+		// Count real array element accesses to guard against accidentally restoring
+		// an O(history length) lookup on every TUI frame.
+		const storage = manager as unknown as { fileEntries: unknown[] };
+		const entries = storage.fileEntries;
+		let reads = 0;
+		storage.fileEntries = new Proxy(entries, {
+			get(target, key, receiver) {
+				if (typeof key === "string" && /^\\d+$/.test(key)) reads++;
+				return Reflect.get(target, key, receiver);
+			},
+		});
+		expect(manager.getSessionName()).toBeUndefined();
+		const initialReads = reads;
+		manager.getSessionName();
+		expect(reads - initialReads).toBeLessThan(5);
+		manager.appendSessionInfo("  Work Session  ");
+		expect(manager.getSessionName()).toBe("Work Session");
+		manager.appendSessionInfo("");
+		expect(manager.getSessionName()).toBeUndefined();
+		manager.newSession();
+		expect(manager.getSessionName()).toBeUndefined();
 	});
 });
