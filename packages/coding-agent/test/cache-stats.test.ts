@@ -173,6 +173,17 @@ describe("branch-aware cache-miss notices", () => {
 		expect(collectCacheMisses(session.getEntries(), models).get(active)?.missedTokens).toBe(120_000);
 	});
 
+	it("ignores legacy abandoned-branch replies without usage metadata during replay", () => {
+		const session = SessionManager.inMemory();
+		const root = session.appendMessage(turn1);
+		const legacy = { ...turn2, usage: undefined } as unknown as AssistantMessage;
+		session.appendMessage(legacy);
+		session.branch(root);
+		const active = assistant({ cacheWrite: 120_000, cost: { cacheWrite: 0.45 }, timestamp: 120_000 });
+		session.appendMessage(active);
+		expect(collectActiveBranchCacheMisses(session, models).get(active)?.missedTokens).toBe(100_000);
+	});
+
 	it("uses the latest provider request for idle time after branching, without changing token baseline", () => {
 		const session = SessionManager.inMemory();
 		const root = session.appendMessage(turn1);
