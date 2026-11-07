@@ -2272,7 +2272,7 @@ describe("mixed tool execution performance", () => {
 				// b finishes after a, so a barrier that only waited for a would start c too early.
 				if (args.value === "b") await new Promise<void>((resolve) => setTimeout(resolve, 0));
 				timeline.push(`end:${args.value}`);
-				return { content: [{ type: "text", text: args.value }], details: {} };
+				return { content: [{ type: "text", text: args.value }], details: { value: args.value } };
 			},
 		};
 		const sequentialTool: AgentTool<typeof schema, { value: string }> = {
@@ -2285,7 +2285,7 @@ describe("mixed tool execution performance", () => {
 				timeline.push(`start:${args.value}`);
 				await Promise.resolve();
 				timeline.push(`end:${args.value}`);
-				return { content: [{ type: "text", text: args.value }], details: {} };
+				return { content: [{ type: "text", text: args.value }], details: { value: args.value } };
 			},
 		};
 		let requests = 0;
@@ -2342,7 +2342,7 @@ describe("tool declaration replay allocation", () => {
 			label: "Echo",
 			description: "Echo",
 			parameters: schemaWithSerialization,
-			async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; },
+			async execute() { return { content: [{ type: "text", text: "ok" }], details: { value: "ok" } }; },
 		};
 		const context: AgentContext = { messages: [], tools: [tool] };
 		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };

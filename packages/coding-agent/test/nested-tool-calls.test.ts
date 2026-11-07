@@ -65,7 +65,7 @@ describe("NestedToolCallRunner", () => {
 		const { runner, events } = createRunner([echo]);
 		const updates: unknown[] = [];
 
-		const first = await runner.execute("call", "echo", { a: 1 }, { onUpdate: (partial) => updates.push(partial) });
+		const first = await runner.execute("call", "echo", { a: 1 }, { onUpdate: (partial) => { updates.push(partial); } });
 		const missing = await runner.execute("call", "missing", {});
 
 		expect(first.toolCall.id).toBe("call/1");
