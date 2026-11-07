@@ -1099,6 +1099,8 @@ export class SessionManager {
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
+	/** Lazily built, append-maintained index for branch navigation. */
+	private childrenByParent?: Map<string, SessionEntry[]>;
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
@@ -1178,6 +1180,7 @@ export class SessionManager {
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
+		this.childrenByParent = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1210,6 +1213,7 @@ export class SessionManager {
 
 	private _buildIndex(): void {
 		this.byId.clear();
+		this.childrenByParent = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1310,6 +1314,13 @@ export class SessionManager {
 			this.byId.delete(entry.id);
 			this.leafId = previousLeafId;
 			throw error;
+		}
+		// Publish to the navigation cache only after persistence succeeds. A
+		// failed append has already rolled back its in-memory parent/leaf state.
+		if (entry.parentId !== null && this.childrenByParent) {
+			const siblings = this.childrenByParent.get(entry.parentId);
+			if (siblings) siblings.push(entry);
+			else this.childrenByParent.set(entry.parentId, [entry]);
 		}
 	}
 
@@ -1538,13 +1549,18 @@ export class SessionManager {
 	 * Get all direct children of an entry.
 	 */
 	getChildren(parentId: string): SessionEntry[] {
-		const children: SessionEntry[] = [];
-		for (const entry of this.byId.values()) {
-			if (entry.parentId === parentId) {
-				children.push(entry);
+		if (!this.childrenByParent) {
+			const index = new Map<string, SessionEntry[]>();
+			for (const entry of this.byId.values()) {
+				if (entry.parentId === null) continue;
+				const siblings = index.get(entry.parentId);
+				if (siblings) siblings.push(entry);
+				else index.set(entry.parentId, [entry]);
 			}
+			this.childrenByParent = index;
 		}
-		return children;
+		// Preserve the old shallow-copy contract; caller changes must not corrupt the index.
+		return this.childrenByParent.get(parentId)?.slice() ?? [];
 	}
 
 	/**

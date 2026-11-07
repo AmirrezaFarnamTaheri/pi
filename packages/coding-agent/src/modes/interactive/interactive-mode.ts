@@ -4361,7 +4361,9 @@ export class InteractiveMode {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
 		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
+		// The active branch is the only transcript sent to the provider. Scanning all
+		// stored branches is both expensive and wrong after a branch switch.
+		const miss = detectCacheMiss(this.sessionManager.getBranch(), message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
 	}
 
