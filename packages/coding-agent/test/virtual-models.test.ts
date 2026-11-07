@@ -52,6 +52,30 @@ function assistantFrom(model: Model<string>, text: string): AssistantMessage {
 }
 
 describe("model refresh bursts", () => {
+	it("does not start a redundant scheduled refresh after an explicit awaited refresh", async () => {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		const refresh = vi.spyOn(runtime, "refresh");
+		try {
+			runtime.registerVirtualModel({
+				provider: "explicit-refresh",
+				id: "alias",
+				name: "Alias",
+				route: () => { throw new Error("unused"); },
+			});
+			await runtime.refresh({ allowNetwork: false });
+			await new Promise<void>((resolve) => queueMicrotask(resolve));
+			expect(refresh).toHaveBeenCalledTimes(1);
+		} finally {
+			refresh.mockRestore();
+		}
+	});
+
 	it("coalesces synchronous virtual registrations into one asynchronous refresh", async () => {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory(),
