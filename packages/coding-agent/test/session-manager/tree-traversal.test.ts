@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
 
@@ -128,6 +128,41 @@ describe("SessionManager append and tree traversal", () => {
 
 			const id3 = session.appendThinkingLevelChange("high");
 			expect(session.getLeafId()).toBe(id3);
+		});
+	});
+
+	describe("indexed tree navigation", () => {
+		it("does not rescan every stored entry to revisit the same parent's children", () => {
+			const session = SessionManager.inMemory();
+			const root = session.appendMessage(userMsg("root"));
+			const children: string[] = [];
+			for (let i = 0; i < 240; i++) {
+				session.branch(root);
+				children.push(session.appendMessage(userMsg(`child-${i}`)));
+			}
+			const map = (session as unknown as { byId: Map<string, unknown> }).byId;
+			const originalValues = map.values.bind(map);
+			let fullHistoryScans = 0;
+			const spy = vi.spyOn(map, "values").mockImplementation(() => {
+				fullHistoryScans++;
+				return originalValues();
+			});
+			try {
+				expect(session.getChildren(root).map((entry) => entry.id)).toEqual(children);
+				const scansAfterFirstLookup = fullHistoryScans;
+				expect(session.getChildren(root).map((entry) => entry.id)).toEqual(children);
+				expect(fullHistoryScans).toBe(scansAfterFirstLookup);
+				session.branch(root);
+				const newChild = session.appendMessage(userMsg("late child"));
+				expect(session.getChildren(root).at(-1)?.id).toBe(newChild);
+				const detached = session.getChildren(root);
+				detached.length = 0;
+				expect(session.getChildren(root)).toHaveLength(241);
+				session.newSession();
+				expect(session.getChildren(root)).toEqual([]);
+			} finally {
+				spy.mockRestore();
+			}
 		});
 	});
 

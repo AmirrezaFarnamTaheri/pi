@@ -123,6 +123,36 @@ describe("collectCacheMisses", () => {
 	});
 });
 
+describe("incremental cache-miss hot path", () => {
+	it("does not scan unrelated historical events when the most recent request reported cache activity", () => {
+		const history = Array.from({ length: 25_000 }, (_, i) => ({
+			type: "custom", id: `state-${i}`, parentId: null, timestamp: "",
+			customType: "unrelated",
+		}) as SessionEntry);
+		history.push(entry(turn2));
+		let lookedUp = 0;
+		const bounded = new Proxy(history, {
+			get(target, key, receiver) {
+				if (typeof key === "string" && /^\d+$/.test(key) && ++lookedUp > 10) {
+					throw new Error("Cache miss detection scanned the entire history");
+				}
+				return Reflect.get(target, key, receiver);
+			},
+		});
+		const message = assistant({ cacheWrite: 120_000, cost: { cacheWrite: 0.45 }, timestamp: 120_000 });
+		expect(detectCacheMiss(bounded, message, models)?.missedTokens).toBe(105_000);
+		expect(lookedUp).toBeLessThanOrEqual(10);
+	});
+
+	it("preserves sticky cache reporting across a zero-cache turn without reaching beyond compaction", () => {
+		const afterCold = assistant({ input: 110_000, cost: { input: 0.33 }, timestamp: 120_000 });
+		const nextMiss = assistant({ input: 120_000, cost: { input: 0.36 }, timestamp: 180_000 });
+		expect(detectCacheMiss([entry(turn1), entry(afterCold)], nextMiss, models)?.missedTokens).toBe(110_000);
+		const compact = { type: "compaction", id: "reset", parentId: null, timestamp: "" } as SessionEntry;
+		expect(detectCacheMiss([entry(turn1), compact, entry(afterCold)], nextMiss, models)).toBeUndefined();
+	});
+});
+
 describe("detectCacheMiss", () => {
 	it("detects a miss on a just-completed message with idle time", () => {
 		const missMessage = assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 600_000 });

@@ -344,7 +344,7 @@ describe("long-running agent session hot paths", () => {
 		let reads = 0;
 		storage.fileEntries = new Proxy(entries, {
 			get(target, key, receiver) {
-				if (typeof key === "string" && /^\\d+$/.test(key)) reads++;
+				if (typeof key === "string" && /^\d+$/.test(key)) reads++;
 				return Reflect.get(target, key, receiver);
 			},
 		});
