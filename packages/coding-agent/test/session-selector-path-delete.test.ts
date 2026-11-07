@@ -105,6 +105,70 @@ describe("session selector path/delete interactions", () => {
 		// session selector uses the global theme instance
 		initTheme("dark");
 	});
+	it("executes regex searches asynchronously and updates the visible session list", async () => {
+		const sessions = [
+			makeSession({ id: "unmatched", allMessagesText: "nothing relevant" }),
+			makeSession({ id: "matched", allMessagesText: "Brave work" }),
+		];
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+		const list = selector.getSessionList();
+		for (const char of "re:brave") list.handleInput(char);
+
+		// Worker startup and search are deliberately asynchronous: never block input.
+		let selected: string | undefined;
+		for (let attempt = 0; attempt < 100; attempt++) {
+			selected = list.getSelectedSessionPath();
+			if (selected === sessions[1]!.path) break;
+			await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		}
+		expect(selected).toBe(sessions[1]!.path);
+		list.cancelSearch();
+	});
+
+	it("discards an obsolete regex search after the user changes the query", async () => {
+		const sessions = [
+			makeSession({ id: "unsafe", allMessagesText: "a".repeat(20_000) + "!" }),
+			makeSession({ id: "relevant", allMessagesText: "Brave work" }),
+		];
+		const errors: string[] = [];
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+		const list = selector.getSessionList();
+		list.onError = (message) => errors.push(message);
+		for (const char of "re:^(a|aa)+$") list.handleInput(char);
+		// Give the worker search enough time to start, then replace the query.
+		await new Promise<void>((resolve) => setTimeout(resolve, 110));
+		for (let index = 0; index < "re:^(a|aa)+$".length; index++) list.handleInput("\x7f");
+		for (const char of "re:brave") list.handleInput(char);
+
+		let selected: string | undefined;
+		for (let attempt = 0; attempt < 100; attempt++) {
+			selected = list.getSelectedSessionPath();
+			if (selected === sessions[1]!.path) break;
+			await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		}
+		expect(selected).toBe(sessions[1]!.path);
+		expect(errors).toEqual([]);
+		list.cancelSearch();
+	});
+
 	it("does not treat Ctrl+Backspace as delete when search query is non-empty", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];
 

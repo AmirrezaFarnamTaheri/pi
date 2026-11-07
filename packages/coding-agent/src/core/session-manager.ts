@@ -11,7 +11,7 @@ import {
 	type UserMessage,
 	uuidv7,
 } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -797,6 +797,68 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
+/**
+ * Session discovery is invoked repeatedly when the picker changes scope. Keep a
+ * small, stat-validated LRU of parsed entries so unchanged JSONL histories need
+ * not be decoded again. Large transcripts are intentionally not retained.
+ */
+/** Independent copies prevent callers from modifying the summary held in the LRU. */
+function copySessionInfo(info: SessionInfo): SessionInfo {
+	return { ...info, created: new Date(info.created.getTime()), modified: new Date(info.modified.getTime()) };
+}
+
+/** Hash a file as a stream to validate cached summaries without buffering JSONL histories. */
+async function sessionFileDigest(path: string, signal?: AbortSignal): Promise<string> {
+	const hash = createHash("sha256");
+	for await (const bytes of createReadStream(path, { signal })) hash.update(bytes);
+	return hash.digest("hex");
+}
+
+class SessionInfoCache {
+	readonly #entries = new Map<string, { size: number; mtime: number; ctime: number; digest: string; info: SessionInfo; bytes: number }>();
+	#totalBytes = 0;
+	constructor(readonly maxBytes = 16 * 1024 * 1024, readonly maxEntries = 256) {}
+
+	async get(path: string, stats: Stats, signal?: AbortSignal): Promise<SessionInfo | undefined> {
+		const entry = this.#entries.get(path);
+		if (!entry) return undefined;
+		if (entry.size !== stats.size || entry.mtime !== stats.mtimeMs || entry.ctime !== stats.ctimeMs) {
+			this.#remove(path, entry);
+			return undefined;
+		}
+		// Some filesystems have coarse timestamps; a same-sized rewrite can look
+		// identical to stat(). Compare bytes before trusting a parsed summary.
+		if (await sessionFileDigest(path, signal) !== entry.digest) {
+			this.#remove(path, entry);
+			return undefined;
+		}
+		this.#entries.delete(path);
+		this.#entries.set(path, entry);
+		return copySessionInfo(entry.info);
+	}
+
+	put(path: string, stats: Stats, info: SessionInfo, digest: string): void {
+		const bytes = 512 + 2 * (info.allMessagesText.length + info.firstMessage.length + (info.name?.length ?? 0));
+		const old = this.#entries.get(path);
+		if (old) this.#remove(path, old);
+		if (bytes > this.maxBytes) return;
+		this.#entries.set(path, { size: stats.size, mtime: stats.mtimeMs, ctime: stats.ctimeMs, info: copySessionInfo(info), digest, bytes });
+		this.#totalBytes += bytes;
+		while (this.#entries.size > this.maxEntries || this.#totalBytes > this.maxBytes) {
+			const oldest = this.#entries.keys().next().value;
+			if (oldest === undefined) break;
+			this.#remove(oldest, this.#entries.get(oldest)!);
+		}
+	}
+
+	#remove(path: string, entry: { bytes: number }): void {
+		this.#entries.delete(path);
+		this.#totalBytes -= entry.bytes;
+	}
+}
+
+const sessionInfoCache = new SessionInfoCache();
+
 async function buildSessionInfo(
 	filePath: string,
 	signal?: AbortSignal,
@@ -804,6 +866,8 @@ async function buildSessionInfo(
 ): Promise<SessionInfo | null> {
 	try {
 		const stats = fileStats ?? (await stat(filePath));
+		const cached = await sessionInfoCache.get(filePath, stats, signal);
+		if (cached) return cached;
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
 		let firstMessage = "";
@@ -811,10 +875,12 @@ async function buildSessionInfo(
 		let name: string | undefined;
 		let lastActivityTime: number | undefined;
 
-		const rl = createInterface({
-			input: createReadStream(filePath, { encoding: "utf8", signal }),
-			crlfDelay: Infinity,
-		});
+		// Hash raw bytes as readline parses them, instead of reading the entire
+		// JSONL file a second time on every cold cache fill.
+		const input = createReadStream(filePath, { signal });
+		const hash = createHash("sha256");
+		input.on("data", (bytes: Buffer) => hash.update(bytes));
+		const rl = createInterface({ input, crlfDelay: Infinity });
 
 		for await (const line of rl) {
 			const entry = parseSessionEntryLine(line);
@@ -853,6 +919,7 @@ async function buildSessionInfo(
 		}
 
 		if (!header) return null;
+		const digest = hash.digest("hex");
 
 		const cwd = typeof header.cwd === "string" ? header.cwd : "";
 		const parentSessionPath = header.parentSession;
@@ -864,7 +931,7 @@ async function buildSessionInfo(
 					? new Date(headerTime)
 					: stats.mtime;
 
-		return {
+		const info: SessionInfo = {
 			path: filePath,
 			id: header.id,
 			cwd,
@@ -876,6 +943,13 @@ async function buildSessionInfo(
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.join(" "),
 		};
+		// A session may have been appended while it was streamed. Cache only
+		// snapshots whose metadata remained unchanged across the read.
+		const current = await stat(filePath);
+		if (current.size === stats.size && current.mtimeMs === stats.mtimeMs && current.ctimeMs === stats.ctimeMs) {
+			sessionInfoCache.put(filePath, stats, info, digest);
+		}
+		return info;
 	} catch {
 		signal?.throwIfAborted();
 		return null;
@@ -922,6 +996,19 @@ function sortSessionInfos(sessions: SessionInfo[]): SessionInfo[] {
 	return sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
+/** Keep progressive session results sorted, without re-sorting every published prefix. */
+export function insertSessionByActivity(sorted: SessionInfo[], session: SessionInfo): void {
+	const modified = session.modified.getTime();
+	let low = 0;
+	let high = sorted.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if (sorted[middle]!.modified.getTime() >= modified) low = middle + 1;
+		else high = middle;
+	}
+	sorted.splice(low, 0, session);
+}
+
 function buildSessionInfosWithConcurrency(
 	files: SessionFileCandidate[],
 	onLoaded: (info: SessionInfo | null, index: number) => void,
@@ -960,10 +1047,10 @@ async function listSessionsFromDir(
 			files,
 			(info) => {
 				loaded++;
-				if (info) partialSessions.push(info);
+				if (info) insertSessionByActivity(partialSessions, info);
 				const publishPartial =
 					loaded === 1 || loaded % CURRENT_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === files.length;
-				onProgress?.(loaded, total, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+				onProgress?.(loaded, total, publishPartial ? [...partialSessions] : undefined);
 			},
 			signal,
 		);
@@ -2011,11 +2098,11 @@ export class SessionManager {
 				(info, index) => {
 					loaded++;
 					if (index === 0) firstCandidateLoaded = true;
-					if (info) partialSessions.push(info);
+					if (info) insertSessionByActivity(partialSessions, info);
 					const publishPartial =
 						firstCandidateLoaded &&
 						(index === 0 || loaded % ALL_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === totalFiles);
-					progress?.(loaded, totalFiles, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+					progress?.(loaded, totalFiles, publishPartial ? [...partialSessions] : undefined);
 				},
 				abortSignal,
 			);
