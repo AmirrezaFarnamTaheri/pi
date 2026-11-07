@@ -121,6 +121,11 @@ describe("account strategies and quota-aware health (CortexKit / pi-antigravity-
 		expect(pool.status(2).map((s) => s.pinned)).toEqual([false, false, false]);
 	});
 
+	it("rejects bad randomness deterministically instead of producing a non-existent slot", () => {
+		const pool = new RotationPool(accounts, 1_000, "random", () => Number.NaN);
+		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(0);
+	});
+
 	it("rejects bogus quota, strategy, and account references without mutating state", () => {
 		expect(() => new RotationPool(accounts, 1_000, "other" as never)).toThrow(/strategy/i);
 		const pool = new RotationPool(accounts);

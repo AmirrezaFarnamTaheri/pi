@@ -71,6 +71,26 @@ describe("account rotation extension", () => {
 		] }] })).toThrow(/unknown|token|secret/i);
 	});
 
+	it("rejects two environment variables that contain the same physical account key", async () => {
+		const previous = [process.env.PI_TEST_KEY_A, process.env.PI_TEST_KEY_B];
+		process.env.PI_TEST_KEY_A = "same-physical-credential";
+		process.env.PI_TEST_KEY_B = "same-physical-credential";
+		try {
+			const app = createHarness({ pools: [{ id: "reuse", members: [
+				{ provider: "account-a", sourceProvider: "anthropic", model: "sonnet", apiKeyEnv: "PI_TEST_KEY_A" },
+				{ provider: "account-b", sourceProvider: "anthropic", model: "sonnet", apiKeyEnv: "PI_TEST_KEY_B" },
+			] }] });
+			await expect(app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never))
+				.rejects.toThrow(/duplicate.*(credential|key)/i);
+			expect(app.registered).toEqual([]);
+		} finally {
+			if (previous[0] === undefined) delete process.env.PI_TEST_KEY_A;
+			else process.env.PI_TEST_KEY_A = previous[0];
+			if (previous[1] === undefined) delete process.env.PI_TEST_KEY_B;
+			else process.env.PI_TEST_KEY_B = previous[1];
+		}
+	});
+
 	it("accepts OAuth account aliases while rejecting duplicate credential slots", () => {
 		const config = parseRotationConfiguration({ pools: [{ id: "oauth", members: [
 			{ provider: "account-one", sourceProvider: "anthropic", model: "sonnet" },

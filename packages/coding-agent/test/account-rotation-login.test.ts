@@ -108,8 +108,39 @@ describe("account alias provider transport isolation", () => {
 		expect(dynamic.getModels()).toEqual([]);
 	});
 
+	it("rejects an API-key alias when its source provider is OAuth-only", () => {
+		expect(() => createApiKeyAccountAlias(sourceProvider(), "not-a-key", "UNUSED_ENV"))
+			.toThrow(/API.key authentication/i);
+	});
+
+	it("rejects an unisolatable dynamic source refresh rather than changing the original account catalog", async () => {
+		const source = sourceProvider();
+		let mutated = false;
+		const dynamic = {
+			...source,
+			refreshModels: async (ctx: Parameters<NonNullable<Provider["refreshModels"]>>[0]) => {
+				await ctx.publish({ update: () => { mutated = true; } });
+			},
+		} as Provider;
+		const alias = createOAuthAccountAlias(dynamic, "unisolatable-account");
+		await expect(alias.refreshModels!({
+			credential: { type: "oauth", access: "work", refresh: "r", expires: Date.now() + 60_000 },
+			allowNetwork: true,
+			signal: new AbortController().signal,
+			publish: async () => true,
+		})).rejects.toThrow(/per.account model catalog/i);
+		expect(mutated).toBe(false);
+	});
+
 	it("never inherits stored credentials for an environment-only API key alias", async () => {
-		const alias = createApiKeyAccountAlias(sourceProvider(), "env-account", "ROTATION_TEST_SECRET");
+		const source = sourceProvider();
+		const keySource: Provider = { ...source, auth: { ...source.auth, apiKey: {
+			name: "Key source",
+			resolve: async ({ credential }) => credential?.key
+				? { auth: { apiKey: credential.key }, source: "explicit key" }
+				: undefined,
+		} } };
+		const alias = createApiKeyAccountAlias(keySource, "env-account", "ROTATION_TEST_SECRET");
 		const resolve = alias.auth.apiKey!.resolve;
 		const credential = { type: "api_key" as const, key: "wrong-stored-token" };
 		const unavailable = await resolve({ ctx: { env: async () => undefined, fileExists: async () => false },

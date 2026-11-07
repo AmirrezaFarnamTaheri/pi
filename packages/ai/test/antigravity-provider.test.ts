@@ -64,6 +64,22 @@ describe("built-in Antigravity Manager gateway", () => {
 		}
 	});
 
+	it("limits oversized streamed catalogs even when the gateway omits Content-Length", async () => {
+		const oldFetch = globalThis.fetch;
+		globalThis.fetch = vi.fn(async () => new Response(new ReadableStream({
+			start(controller) {
+				controller.enqueue(new Uint8Array(4_000_001));
+				controller.close();
+			},
+		}), { status: 200 }));
+		try {
+			await expect(discoverAntigravityModels("http://127.0.0.1:8045/v1", "local", new AbortController().signal))
+				.rejects.toThrow(/too large/i);
+		} finally {
+			globalThis.fetch = oldFetch;
+		}
+	});
+
 	it("discovers gateway models with a scoped key and preserves model IDs", async () => {
 		const provider = antigravityProvider();
 		const oldFetch = globalThis.fetch;
