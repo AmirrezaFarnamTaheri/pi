@@ -77,7 +77,16 @@ const gatewayAuth: ApiKeyAuth = {
 	},
 };
 
-type GatewayModelData = { id?: unknown; name?: unknown; context_window?: unknown; max_tokens?: unknown };
+type GatewayModelData = {
+	id?: unknown;
+	name?: unknown;
+	context_window?: unknown;
+	context_length?: unknown;
+	max_tokens?: unknown;
+	max_output_tokens?: unknown;
+	input_modalities?: unknown;
+	reasoning?: unknown;
+};
 
 function modelNumber(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
@@ -92,9 +101,12 @@ export async function discoverAntigravityModels(
 	const url = normalizeAntigravityGatewayUrl(baseUrl);
 	const response = await fetch(`${url}/models`, {
 		headers: { accept: "application/json", authorization: `Bearer ${key}` },
+		redirect: "error",
 		signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
 	});
 	if (!response.ok) throw new Error(`Antigravity model discovery failed (HTTP ${response.status})`);
+	const contentLength = Number(response.headers.get("content-length") ?? 0);
+	if (contentLength > 4_000_000) throw new Error("Antigravity models response is too large");
 	const json: unknown = await response.json();
 	if (!json || typeof json !== "object" || !("data" in json) || !Array.isArray(json.data)) {
 		throw new Error("Antigravity gateway returned an invalid models response");
@@ -102,22 +114,29 @@ export async function discoverAntigravityModels(
 	const models: Model<"openai-completions">[] = [];
 	const seen = new Set<string>();
 	for (const item of json.data as GatewayModelData[]) {
-		if (!item || typeof item.id !== "string" || !item.id.trim() || seen.has(item.id)) continue;
+		if (!item || typeof item.id !== "string" || !item.id.trim() ||
+			item.id.length > 256 || /[\\x00-\\x1f\\x7f]/u.test(item.id) || seen.has(item.id)) continue;
 		if (models.length >= MAX_MODELS) break;
 		seen.add(item.id);
+		const contextWindow = modelNumber(item.context_window ?? item.context_length, 32_768);
+		const maxTokens = Math.min(contextWindow, modelNumber(item.max_output_tokens ?? item.max_tokens, 8_192));
+		const modalities = Array.isArray(item.input_modalities) && item.input_modalities.every(
+			(value: unknown) => typeof value === "string",
+		) ? item.input_modalities as string[] : [];
+		const hasLimits = typeof item.context_window === "number" || typeof item.context_length === "number";
 		models.push({
 			id: item.id,
-			name: typeof item.name === "string" && item.name.trim() ? item.name : item.id,
+			name: `${typeof item.name === "string" && item.name.trim() ? item.name : item.id}${hasLimits ? "" : " (estimated limits)"}`,
 			provider: "antigravity-manager",
 			api: "openai-completions",
 			baseUrl: url,
-			// /v1/models does not guarantee multimodal or reasoning support.
-			input: ["text"],
-			reasoning: false,
+			// Advertise extra capabilities only when the manager explicitly reports them.
+			input: modalities.includes("image") ? ["text", "image"] : ["text"],
+			reasoning: item.reasoning === true,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			// Conservative estimates if /models provides no limits; not upstream guarantees.
-			contextWindow: modelNumber(item.context_window, 128_000),
-			maxTokens: modelNumber(item.max_tokens, 8_192),
+			// Conservative fallback when /models has no limits; prominently marked in the name.
+			contextWindow,
+			maxTokens,
 		});
 	}
 	return models;

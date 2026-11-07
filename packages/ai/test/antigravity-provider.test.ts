@@ -44,6 +44,28 @@ describe("built-in Antigravity Manager gateway", () => {
 			.toBeUndefined();
 	});
 
+	it("uses explicit gateway model capacities and modalities, rejecting unsafe model identifiers", async () => {
+		const provider = antigravityProvider();
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({ data: [
+			{ id: "gemini-3-pro", context_length: 1_048_576, max_output_tokens: 65_536,
+				input_modalities: ["text", "image"], reasoning: true },
+			{ id: "bad\\nmodel", context_window: 128_000 },
+		] }), { status: 200 }));
+		try {
+			const models = await import("../src/providers/antigravity.ts").then((mod) =>
+				mod.discoverAntigravityModels("http://127.0.0.1:8045/v1", "test", new AbortController().signal));
+			expect(models.map((model) => model.id)).toEqual(["gemini-3-pro"]);
+			expect(models[0]).toMatchObject({
+				contextWindow: 1_048_576, maxTokens: 65_536, reasoning: true,
+				input: ["text", "image"],
+			});
+			expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![1]).toMatchObject({ redirect: "error" });
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	it("discovers gateway models with a scoped key and preserves model IDs", async () => {
 		const provider = antigravityProvider();
 		const oldFetch = globalThis.fetch;
@@ -71,7 +93,7 @@ describe("built-in Antigravity Manager gateway", () => {
 			expect(provider.getModels().map((model) => model.id)).toEqual(["gemini-3.1-pro-high", "claude-sonnet-4-6"]);
 			expect(provider.getModels()[0]).toMatchObject({
 				provider: "antigravity-manager", api: "openai-completions", baseUrl: "http://127.0.0.1:8045/v1",
-				contextWindow: 128_000, maxTokens: 8_192,
+				contextWindow: 32_768, maxTokens: 8_192,
 			});
 		} finally {
 			globalThis.fetch = oldFetch;
