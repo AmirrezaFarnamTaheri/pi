@@ -26,18 +26,29 @@ class FifoQueue<T> {
 export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private queue = new FifoQueue<T>();
 	private waiting = new FifoQueue<(value: IteratorResult<T>) => void>();
+	/** Producers are notified as buffered events are consumed. */
+	private waitingForCapacity = new FifoQueue<() => void>();
+	/** Only block a producer when there is an actual async iterator consuming events. */
+	private activeIterators = 0;
 	protected done = false;
 	private finalResultPromise: Promise<R>;
 	private resolveFinalResult!: (result: R) => void;
+	private rejectFinalResult!: (reason: unknown) => void;
+	private failure: unknown;
+	private hasFailed = false;
 	private isComplete: (event: T) => boolean;
 	private extractResult: (event: T) => R;
 
 	constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
 		this.isComplete = isComplete;
 		this.extractResult = extractResult;
-		this.finalResultPromise = new Promise((resolve) => {
+		this.finalResultPromise = new Promise((resolve, reject) => {
 			this.resolveFinalResult = resolve;
+			this.rejectFinalResult = reject;
 		});
+		// Iteration-only consumers may not request result(); prevent unhandled rejections
+		// while preserving the original rejected result promise for awaiting callers.
+		void this.finalResultPromise.catch(() => {});
 	}
 
 	push(event: T): void {
@@ -48,6 +59,11 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			this.resolveFinalResult(this.extractResult(event));
 		}
 
+		// Terminal events also release producers waiting on queue capacity. Consumers
+		// can await result() without draining the remaining progress events.
+		if (this.done) {
+			while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
+		}
 		// Deliver to waiting consumer or queue it
 		const waiter = this.waiting.dequeue();
 		if (waiter) {
@@ -55,6 +71,47 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		} else {
 			this.queue.enqueue(event);
 		}
+	}
+
+	/**
+	 * Preserve every event while bounding the queue when an async iterator is active.
+	 * Result-only callers may never pull an event, so we deliberately do not block
+	 * them; blocking them would deadlock result() and change the EventStream contract.
+	 *
+	 * A producer that uses this API (rather than synchronous push()) is backpressured
+	 * until the consumer dequeues an event. Its producer must await the returned promise.
+	 */
+	async pushWithBackpressure(event: T, maxBuffered = 128, signal?: AbortSignal): Promise<void> {
+		if (!Number.isSafeInteger(maxBuffered) || maxBuffered < 1) {
+			throw new RangeError("maxBuffered must be a positive integer");
+		}
+		if (signal?.aborted) throw new Error("Event stream publication aborted");
+		while (this.activeIterators > 0 && !this.done && this.queue.length >= maxBuffered) {
+			await new Promise<void>((resolve, reject) => {
+				const wake = () => {
+					signal?.removeEventListener("abort", onAbort);
+					resolve();
+				};
+				const onAbort = () => {
+					signal?.removeEventListener("abort", onAbort);
+					reject(new Error("Event stream publication aborted"));
+				};
+				signal?.addEventListener("abort", onAbort, { once: true });
+				this.waitingForCapacity.enqueue(wake);
+				if (signal?.aborted) onAbort();
+			});
+			if (signal?.aborted) throw new Error("Event stream publication aborted");
+		}
+		this.push(event);
+	}
+
+	/** Finish when a producer rejects before publishing its terminal event. */
+	fail(error: unknown): void {
+		if (this.done) return;
+		this.hasFailed = true;
+		this.failure = error;
+		this.end();
+		this.rejectFinalResult(error);
 	}
 
 	end(result?: R): void {
@@ -67,19 +124,34 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			const waiter = this.waiting.dequeue()!;
 			waiter({ value: undefined as any, done: true });
 		}
+		// An ended stream must not strand producers blocked on queue capacity.
+		while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
 	}
 
 	async *[Symbol.asyncIterator](): AsyncIterator<T> {
-		while (true) {
-			if (this.queue.length > 0) {
-				yield this.queue.dequeue()!;
-			} else if (this.done) {
-				return;
-			} else {
-				const result = await new Promise<IteratorResult<T>>((resolve) => this.waiting.enqueue(resolve));
-				if (result.done) return;
-				yield result.value;
+		this.activeIterators++;
+		try {
+			while (true) {
+				if (this.queue.length > 0) {
+					const next = this.queue.dequeue()!;
+					this.waitingForCapacity.dequeue()?.();
+					yield next;
+				} else if (this.done) {
+					if (this.hasFailed) throw this.failure;
+					return;
+				} else {
+					const result = await new Promise<IteratorResult<T>>((resolve) => this.waiting.enqueue(resolve));
+					if (result.done) {
+						if (this.hasFailed) throw this.failure;
+						return;
+					}
+					yield result.value;
+				}
 			}
+		} finally {
+			this.activeIterators--;
+			// Breaking out of for-await no longer requires future consumption.
+			while (this.waitingForCapacity.length > 0) this.waitingForCapacity.dequeue()!();
 		}
 	}
 
