@@ -47,6 +47,12 @@ Create `~/.pi/agent/account-rotation.json` (or the equivalent folder reported by
 }
 ```
 
+**Privacy and account boundaries:** Pi sends the existing conversation transcript, including prior messages
+and tool outputs, when the router switches to another account. Configure a pool only when **every**
+account is permitted to receive the complete conversation. Do not combine unrelated personal,
+work, customer, or organization identities in a pool unless cross-account sharing is expressly
+authorized. Use separate sessions or a sticky/pinned account for conversations that must stay isolated.
+
 Each `sourceProvider` plus a distinct `provider` alias registers an independent OAuth identity with its own credential-store entry. Pi's existing `/login` interface can sign in to each alias independently. Refresh uses the source provider's native OAuth code and Pi's existing credential-store locking. The original provider account remains unchanged.
 
 Start `pi`, then run `/login` and select each named account. Repeat for all aliases. The CLI `pi auth login` may not load extension-provided aliases, so use interactive `/login` unless your installation loads extensions for CLI auth commands. Restart Pi after changing the configuration.
@@ -94,7 +100,7 @@ A mixed pool can contain existing physical providers (e.g. a working `antigravit
 - New user turns select an eligible identity using the pool's strategy: round-robin, sticky, random, or health/quota-aware hybrid.
 - Tool follow-ups retain the account that produced the prior successful response, preserving continuity and prompt caching.
 - On Pi's **automatic retry**, a pre-output retryable 429 or transient 5xx failure quarantines the slot and tries another. Automatic retry must be enabled in Pi settings.
-- Pi's built-in retry classifier deliberately excludes authentication failures (401) and exhausted quota/billing errors, so these errors **do not cause automatic failover**. If another caller explicitly retries such an attempt, the rotation policy also understands invalid-key and exhausted-quota failures and quarantines those credentials.
+- The `account-rotation` **virtual model alone** opts in to bounded automatic pre-output retries for authentication failures (401) and exhausted quota/billing errors, in addition to transient 429/5xx failures. Ordinary physical providers keep Pi's standard retry classifier. Once output has started, a request is **never replayed on another account**. Pi's automatic retry setting must be enabled.
 - Credentials are never switched automatically after a response has produced text, reasoning, or tool calls, or for context-limit and policy errors.
 - If all accounts are unavailable, requests fail instead of reusing an exhausted identity. Authentication failures get at least one hour of quarantine; subsequent failures get exponential cooldowns (capped at 24 hours). Explicit reset durations in trusted provider errors are honored when safely parseable.
 - Direct requests (e.g. compaction) use an available credential without advancing the turn-robin index.
@@ -110,4 +116,8 @@ npm run check
 ./test.sh
 ```
 
-The virtual model requires its source physical model ID to exist. All provider aliases must be distinct from built-in provider IDs. Each pool member must represent a unique credential; multiple models under one provider are not separate accounts.
+The virtual model requires its source physical model ID to exist. All provider aliases must be distinct from built-in provider IDs. Each pool member must represent a unique credential; multiple models under one provider are not separate accounts. Two configured API-key aliases cannot refer to the same environment variable or resolve to the same key value. API-key aliases require source providers supporting explicit API-key authentication.
+
+**Dynamic-provider caveat:** Account-specific catalog refreshes must publish their model list through Pi's persisted-model publication. Extensions with only source-global update callbacks cannot be safely cloned into OAuth aliases; Pi rejects such refreshes rather than mutating another account's model list. Use the source extension's own account selector or request an account-scoped model list from its author.
+
+**Operational limits:** This feature does not automatically obtain subscription quota fractions from external services. Quota values may be supplied through the documented command from a trusted external source; known provider error reset hints influence cooldowns. Health state is shared across pools **inside one Pi process only**, not across processes, hosts or manager apps. Live logins and token refreshes must be tested with the provider account owner's permission; offline tests cannot prove those external services are reachable. Independent Antigravity packages are optional and not bundled, and the OAuth-only Cloud Code integrations use their own tokens and model transports.

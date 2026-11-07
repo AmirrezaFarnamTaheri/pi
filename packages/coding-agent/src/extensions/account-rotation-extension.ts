@@ -170,6 +170,10 @@ function accountAlias(source: Provider, id: string, auth: Provider["auth"]): Pro
 				publish: async (publication) => {
 					const models = publication.persist?.models ?? context.stored?.models;
 					const mapped = models?.map(toAlias);
+					if (context.allowNetwork && !mapped && publication.update) {
+						// Applying the source update would mutate another account's catalog.
+						throw new Error("Dynamic source did not publish an isolated per-account model catalog");
+					}
 					return context.publish({
 						...(publication.persist ? { persist: { ...publication.persist, models: mapped! } } : {}),
 						update: () => { if (mapped) accountModels = mapped; },
@@ -226,6 +230,7 @@ export function createOAuthAccountAlias(source: Provider, id: string, onLogin?: 
 
 /** Environment-backed identity that ignores stale credentials saved under its alias. */
 export function createApiKeyAccountAlias(source: Provider, id: string, envVar: string): Provider {
+	if (!source.auth.apiKey) throw new Error(`Source provider ${source.id} does not support API-key authentication`);
 	return accountAlias(source, id, {
 		apiKey: {
 			name: `${source.name} API key (${envVar})`,
@@ -237,14 +242,10 @@ export function createApiKeyAccountAlias(source: Provider, id: string, envVar: s
 				signal.throwIfAborted();
 				const key = await ctx.env(envVar);
 				if (!key) return undefined;
-				const original = source.auth.apiKey;
-				if (original) {
-					const resolved = await original.resolve({
-						ctx, signal, credential: { type: "api_key", key },
-					});
-					if (resolved) return resolved;
-				}
-				return { auth: { apiKey: key }, source: envVar };
+				const resolved = await source.auth.apiKey!.resolve({
+					ctx, signal, credential: { type: "api_key", key },
+				});
+				return resolved ? { ...resolved, source: envVar } : undefined;
 			},
 		},
 	});
@@ -279,6 +280,21 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Distinct variable names can still resolve to the same physical key.
+		// Detect duplicates before registering any providers or exposing key material.
+		const keysSeen = new Map<string, string>();
+		for (const { group } of state) {
+			for (const member of group.members) {
+				const key = member.apiKeyEnv ? process.env[member.apiKeyEnv] : undefined;
+				if (!key) continue;
+				const digest = createHmac("sha256", salt).update(key).digest("hex");
+				const previousAlias = keysSeen.get(digest);
+				if (previousAlias && previousAlias !== member.provider) {
+					throw new Error("Duplicate API key credential across account aliases");
+				}
+				keysSeen.set(digest, member.provider);
+			}
+		}
 		let added = false;
 		for (const { group } of state) {
 			for (const member of group.members) {

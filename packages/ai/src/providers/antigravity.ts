@@ -107,7 +107,37 @@ export async function discoverAntigravityModels(
 	if (!response.ok) throw new Error(`Antigravity model discovery failed (HTTP ${response.status})`);
 	const contentLength = Number(response.headers.get("content-length") ?? 0);
 	if (contentLength > 4_000_000) throw new Error("Antigravity models response is too large");
-	const json: unknown = await response.json();
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Antigravity gateway returned no model data");
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (true) {
+			signal.throwIfAborted();
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			total += chunk.value.byteLength;
+			if (total > 4_000_000) {
+				await reader.cancel().catch(() => {});
+				throw new Error("Antigravity models response is too large");
+			}
+			chunks.push(chunk.value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const body = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		body.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	let json: unknown;
+	try {
+		json = JSON.parse(new TextDecoder().decode(body));
+	} catch {
+		throw new Error("Antigravity gateway returned invalid models JSON");
+	}
 	if (!json || typeof json !== "object" || !("data" in json) || !Array.isArray(json.data)) {
 		throw new Error("Antigravity gateway returned an invalid models response");
 	}

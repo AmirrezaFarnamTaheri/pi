@@ -310,7 +310,8 @@ export class RotationPool {
 		let index = eligible[0]!;
 		if (strategy === "random") {
 			const random = this.#random();
-			index = eligible[Math.min(eligible.length - 1, Math.floor(Math.max(0, random) * eligible.length))]!;
+			const unit = Number.isFinite(random) ? Math.min(1 - Number.EPSILON, Math.max(0, random)) : 0;
+			index = eligible[Math.min(eligible.length - 1, Math.floor(unit * eligible.length))]!;
 		} else if (strategy === "hybrid") {
 			// Health, quota and round-robin tie-breaker; never read credentials here.
 			let best = -Infinity;
