@@ -885,6 +885,8 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		// An explicitly requested refresh subsumes any queued registration batch.
+		this.extensionRefreshQueued = false;
 		this.config = await ModelConfig.load(this.modelsPath);
 		this.configureRadiusProviders();
 		if (options.providers) {
@@ -931,6 +933,7 @@ export class ModelRuntime implements Models {
 		if (this.extensionRefreshQueued) return;
 		this.extensionRefreshQueued = true;
 		queueMicrotask(() => {
+			if (!this.extensionRefreshQueued) return;
 			this.extensionRefreshQueued = false;
 			// Synchronous registrations already refreshed provider and model snapshots.
 			void this.refresh({ allowNetwork: false });
