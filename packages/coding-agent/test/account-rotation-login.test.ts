@@ -43,8 +43,11 @@ describe("account rotation native OAuth login", () => {
 		const pi = {
 			on: (name: string, handler: (...args: never[]) => Promise<void>) => { handlers.set(name, handler); },
 			registerProvider: (provider: Provider) => runtime.registerNativeProvider(provider),
-			registerVirtualModel: (definition: Parameters<ModelRuntime["registerVirtualModel"]>[0]) =>
-				runtime.registerVirtualModel(definition),
+			registerVirtualModel: (definition: Parameters<ExtensionAPI["registerVirtualModel"]>[0]) =>
+				runtime.registerVirtualModel({
+					...definition,
+					route: (request) => definition.route(request, { modelRegistry: new ModelRegistry(runtime) } as never),
+				}),
 			registerCommand() {},
 		} as unknown as ExtensionAPI;
 		registerAccountRotation(pi, parseRotationConfiguration({ pools: [{ id: "two-logins", members: [
