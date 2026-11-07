@@ -70,6 +70,10 @@ export interface RotationChoice {
 }
 
 export interface RotationStatus extends RotationChoice {
+	/** Credential may disappear while a turn is in progress. */
+	available: boolean;
+	/** Zero remaining quota with no reset hint remains blocked until refreshed. */
+	quotaBlocked: boolean;
 	readyInMs: number;
 	enabled: boolean;
 	pinned: boolean;
@@ -80,16 +84,22 @@ export interface RotationStatus extends RotationChoice {
 }
 
 /** Account-scoped, in-memory selection with no credentials in state or logs. */
+/** Shared by pools that reference the same independently authenticated provider alias. */
+export interface RotationHealth {
+	cooldownUntil?: number;
+	failures?: number;
+	disabled?: boolean;
+	lastUsedAt?: number;
+	quota?: { remaining: number; resetAt?: number };
+}
+
 export class RotationPool {
 	readonly #targets: readonly RotationTarget[];
 	readonly #cooldownMs: number;
 	readonly #strategy: RotationStrategy;
 	readonly #random: () => number;
-	readonly #cooldowns = new Map<number, number>();
-	readonly #failures = new Map<number, number>();
-	readonly #disabled = new Set<number>();
-	readonly #lastUsed = new Map<number, number>();
-	readonly #quotas = new Map<number, { remaining: number; resetAt?: number }>();
+	readonly #health: Map<string, RotationHealth>;
+	readonly #unavailable = new Set<number>();
 	#cursor = 0;
 	#sticky = -1;
 	#pinned = -1;
@@ -99,6 +109,7 @@ export class RotationPool {
 		cooldownMs = 60_000,
 		strategy: RotationStrategy = "round-robin",
 		random: () => number = Math.random,
+		sharedHealth: Map<string, RotationHealth> = new Map(),
 	) {
 		if (targets.length === 0) throw new Error("Rotation pool must have at least one credential slot");
 		if (!Number.isSafeInteger(cooldownMs) || cooldownMs < 1) throw new Error("Invalid credential cooldown");
@@ -113,17 +124,20 @@ export class RotationPool {
 		this.#cooldownMs = cooldownMs;
 		this.#strategy = strategy;
 		this.#random = random;
+		this.#health = sharedHealth;
 	}
 
 	choose(input: RouteInput): RotationChoice {
 		const now = input.now ?? Date.now();
 		const failed = input.failed;
 		const failedIndex = failed ? this.#indexOf(failed.target) : -1;
+		if (failed && failedIndex < 0) throw new Error("Failed account no longer belongs to this pool");
 		if (input.reason === "retry" && failedIndex >= 0) {
 			const category = classifyCredentialFailure(failed!.errorMessage);
 			if (category && !failed!.hasOutput) {
-				const count = (this.#failures.get(failedIndex) ?? 0) + 1;
-				this.#failures.set(failedIndex, count);
+				const slot = this.#slot(failedIndex);
+				const count = (slot.failures ?? 0) + 1;
+				slot.failures = count;
 				const exponential = Math.min(MAX_COOLDOWN_MS, this.#cooldownMs * (2 ** Math.min(count - 1, 20)));
 				const authDuration = category === "auth" ? Math.max(3_600_000, exponential) : exponential;
 				const explicit = failed!.retryAfterMs;
@@ -131,7 +145,7 @@ export class RotationPool {
 				const duration = Math.min(MAX_COOLDOWN_MS, Math.max(authDuration,
 					typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0 ? explicit : 0,
 					hinted ?? 0));
-				this.#cooldowns.set(failedIndex, now + duration);
+				slot.cooldownUntil = now + duration;
 				// Never choose the same failed identity, regardless of sticky/manual strategy.
 				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
 			}
@@ -140,14 +154,25 @@ export class RotationPool {
 		if (input.reason === "continuation" || input.reason === "retry") {
 			const previous = this.#indexOf(input.previous);
 			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
-			// Preserve same account through a tool continuation, even if subsequently disabled.
-			if (sticky >= 0) return this.#choice(sticky);
+			// Keep a continuation on its original credential, including when manually disabled;
+			// missing authentication must fail closed rather than expose the transcript to another account.
+			if (sticky >= 0) {
+				if (this.#unavailable.has(sticky)) throw new Error("Original account is unavailable during continuation");
+				return this.#choice(sticky);
+			}
+			if (input.previous || input.active) throw new Error("Original account is no longer in this pool");
 		}
-		if (input.reason === "direct") return this.#pick(this.#cursor, now, false, this.#strategy);
-
 		if (this.#pinned >= 0) {
 			if (!this.#eligible(this.#pinned, now)) throw new Error("Pinned account is unavailable; unpin it or wait");
 			return this.#choice(this.#pinned);
+		}
+		if (input.reason === "direct") {
+			const active = this.#indexOf(input.active) >= 0 ? this.#indexOf(input.active) : this.#indexOf(input.previous);
+			if (active >= 0) {
+				if (!this.#eligible(active, now)) throw new Error("Direct request account is unavailable");
+				return this.#choice(active);
+			}
+			return this.#pick(this.#cursor, now, false, this.#strategy);
 		}
 		if (this.#strategy === "sticky") {
 			const fromRequest = this.#indexOf(input.active) >= 0 ? this.#indexOf(input.active) : this.#indexOf(input.previous);
@@ -156,15 +181,32 @@ export class RotationPool {
 		}
 		const chosen = this.#pick(this.#cursor, now, true, this.#strategy);
 		if (this.#strategy === "sticky") this.#sticky = chosen.index;
-		this.#lastUsed.set(chosen.index, now);
+		this.#slot(chosen.index).lastUsedAt = now;
 		return chosen;
 	}
 
 	/** Record a successful physical response to recover the identity's health score. */
 	markSuccess(target: RotationTarget): void {
+		const slot = this.#slot(this.#requireIndex(target));
+		delete slot.failures;
+		delete slot.cooldownUntil;
+		// A successful request proves a previously reported zero quota is no longer current.
+		if (slot.quota?.remaining === 0) delete slot.quota;
+	}
+
+	/** Called when the user logs in again; keep explicit disable/pin preferences. */
+	markReauthenticated(target: RotationTarget): void {
+		const slot = this.#slot(this.#requireIndex(target));
+		delete slot.failures;
+		delete slot.cooldownUntil;
+		delete slot.quota;
+	}
+
+	/** Model/auth discovery may change without resetting cooldowns and manual controls. */
+	setAvailable(target: RotationTarget, available: boolean): void {
 		const index = this.#requireIndex(target);
-		this.#failures.delete(index);
-		this.#cooldowns.delete(index);
+		if (available) this.#unavailable.delete(index);
+		else this.#unavailable.add(index);
 	}
 
 	/** Apply a provider-reported remaining quota fraction, never raw token balances. */
@@ -172,13 +214,12 @@ export class RotationPool {
 		const index = this.#requireIndex(target);
 		if (!Number.isFinite(remaining) || remaining < 0 || remaining > 1) throw new Error("Invalid quota fraction");
 		if (resetAt !== undefined && (!Number.isFinite(resetAt) || resetAt < 0)) throw new Error("Invalid quota reset time");
-		this.#quotas.set(index, { remaining, ...(resetAt === undefined ? {} : { resetAt }) });
+		this.#slot(index).quota = { remaining, ...(resetAt === undefined ? {} : { resetAt }) };
 	}
 
 	setEnabled(target: RotationTarget, enabled: boolean): void {
 		const index = this.#requireIndex(target);
-		if (enabled) this.#disabled.delete(index);
-		else this.#disabled.add(index);
+		this.#slot(index).disabled = !enabled;
 	}
 
 	pin(target: RotationTarget): void {
@@ -190,10 +231,7 @@ export class RotationPool {
 	}
 
 	reset(): void {
-		this.#cooldowns.clear();
-		this.#failures.clear();
-		this.#quotas.clear();
-		this.#disabled.clear();
+		for (let index = 0; index < this.#targets.length; index++) this.#health.delete(this.#key(index));
 		this.#sticky = -1;
 		this.#pinned = -1;
 	}
@@ -201,30 +239,50 @@ export class RotationPool {
 	status(now = Date.now()): RotationStatus[] {
 		return this.#targets.map((target, index) => {
 			const quota = this.#quotaAt(index, now);
-			const quotaWait = quota?.remaining === 0 ? Math.max(0, (quota.resetAt ?? now) - now) : 0;
+			const quotaWait = quota?.remaining === 0
+				? quota.resetAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, quota.resetAt - now)
+				: 0;
+			const slot = this.#slot(index);
 			return {
 				index,
 				target: { ...target },
-				readyInMs: Math.max(0, (this.#cooldowns.get(index) ?? 0) - now, quotaWait),
-				enabled: !this.#disabled.has(index),
+				readyInMs: Math.max(0, (slot.cooldownUntil ?? 0) - now, quotaWait),
+				available: !this.#unavailable.has(index),
+				quotaBlocked: quota?.remaining === 0,
+				enabled: !slot.disabled,
 				pinned: this.#pinned === index,
-				failureCount: this.#failures.get(index) ?? 0,
-				healthScore: Math.max(0, 100 - (this.#failures.get(index) ?? 0) * 20),
+				failureCount: slot.failures ?? 0,
+				healthScore: Math.max(0, 100 - (slot.failures ?? 0) * 20),
 				...(quota ? { quotaRemaining: quota.remaining } : {}),
-				...(this.#lastUsed.has(index) ? { lastUsedAt: this.#lastUsed.get(index)! } : {}),
+				...(slot.lastUsedAt === undefined ? {} : { lastUsedAt: slot.lastUsedAt }),
 			};
 		});
 	}
 
 	#quotaAt(index: number, now: number): { remaining: number; resetAt?: number } | undefined {
-		const quota = this.#quotas.get(index);
+		const quota = this.#slot(index).quota;
 		if (quota?.resetAt !== undefined && now >= quota.resetAt) return { remaining: 1 };
 		return quota;
 	}
 
 	#eligible(index: number, now: number): boolean {
-		if (this.#disabled.has(index) || (this.#cooldowns.get(index) ?? 0) > now) return false;
+		const slot = this.#slot(index);
+		if (this.#unavailable.has(index) || slot.disabled || (slot.cooldownUntil ?? 0) > now) return false;
 		return (this.#quotaAt(index, now)?.remaining ?? 1) > 0;
+	}
+
+	#key(index: number): string {
+		return this.#targets[index]!.provider;
+	}
+
+	#slot(index: number): RotationHealth {
+		const key = this.#key(index);
+		let slot = this.#health.get(key);
+		if (!slot) {
+			slot = {};
+			this.#health.set(key, slot);
+		}
+		return slot;
 	}
 
 	#indexOf(target: RotationTarget | undefined): number {
@@ -258,7 +316,7 @@ export class RotationPool {
 			let best = -Infinity;
 			for (const candidate of eligible) {
 				const quota = this.#quotaAt(candidate, now)?.remaining ?? 1;
-				const health = Math.max(0, 100 - (this.#failures.get(candidate) ?? 0) * 20);
+				const health = Math.max(0, 100 - (this.#slot(candidate).failures ?? 0) * 20);
 				const score = quota * 100 + health;
 				if (score > best) {
 					best = score;
