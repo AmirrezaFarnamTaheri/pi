@@ -23,6 +23,40 @@ describe("row layout", () => {
 		assert.equal(layout.measured("row2"), false);
 	});
 
+	it("extends stable row offsets without re-estimating historical rows", () => {
+		const layout = new RowLayout();
+		const original = keys(1_000);
+		let estimated = 0;
+		layout.setRows(original, () => {
+			estimated++;
+			return 10;
+		});
+		assert.equal(layout.total, 10_000);
+		assert.equal(estimated, 1_000);
+		estimated = 0;
+		layout.appendRows(["tail-1", "tail-2"], () => {
+			estimated++;
+			return 20;
+		});
+		assert.equal(layout.offsetOf(1_000), 10_000);
+		assert.equal(layout.total, 10_040);
+		assert.equal(layout.indexOf("tail-2"), 1_001);
+		assert.equal(estimated, 2, "only the appended rows need height estimates");
+		layout.measure("tail-1", 35);
+		assert.equal(layout.total, 10_055, "a measurement correctly invalidates the prefix sums");
+	});
+
+	it("appends a large batch without relying on argument-spread limits", () => {
+		const layout = new RowLayout();
+		layout.setRows(["first"], () => 1);
+		assert.equal(layout.total, 1);
+		const appended = keys(150_000);
+		layout.appendRows(appended, () => 1);
+		assert.equal(layout.count, 150_001);
+		assert.equal(layout.total, 150_001);
+		assert.equal(layout.indexOf("row149999"), 150_000);
+	});
+
 	it("finds the rows overlapping a span", () => {
 		const layout = new RowLayout();
 		layout.setRows(keys(10), () => 100);
@@ -130,5 +164,16 @@ describe("row estimates", () => {
 		const first = rows.estimate(row, 400);
 		rows.measured({ kind: "message", text: 10 }, 400, 500);
 		assert.equal(rows.estimate(row, 400), first, "learning more does not move a row already estimated");
+	});
+});
+
+describe("shared adaptive estimates", () => {
+	it("invalidates historical offsets when a shared estimator learns a measurement", () => {
+		const estimator = new RowEstimator<{ key: string }>(({ key }) => ({ kind: key, text: 10, fixed: 0 }), 30);
+		const row = { key: "old" };
+		const before = estimator.revision;
+		assert.ok(estimator.estimate(row, 100) > 0);
+		estimator.measured(row, 100, 80);
+		assert.ok(estimator.revision > before);
 	});
 });

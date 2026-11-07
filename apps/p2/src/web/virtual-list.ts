@@ -8,7 +8,7 @@
  */
 export class RowLayout {
 	readonly #sizes: Map<string, number>;
-	#keys: readonly string[] = [];
+	#keys: string[] = [];
 	#index = new Map<string, number>();
 	#estimate: (index: number) => number = () => 0;
 	/** `offsets[i]` is where row `i` starts; `offsets[count]` is the total height. Rebuilt lazily after a change. */
@@ -21,10 +21,37 @@ export class RowLayout {
 
 	/** Replaces the rows; `estimate` gives the height of a row that has never been measured. */
 	setRows(keys: readonly string[], estimate: (index: number) => number): void {
-		this.#keys = keys;
+		this.#keys = [...keys];
 		this.#estimate = estimate;
 		this.#index = new Map(keys.map((key, index) => [key, index]));
 		this.#dirty = true;
+	}
+
+	/**
+	 * Extend a stable prefix without re-estimating every historical row.
+	 * The caller must use this only when every existing row object is unchanged;
+	 * changing estimates for historical rows still requires setRows()/invalidate().
+	 */
+	appendRows(keys: readonly string[], estimate: (index: number) => number): void {
+		const start = this.#keys.length;
+		for (const key of keys) this.#keys.push(key);
+		this.#estimate = estimate;
+		for (let index = 0; index < keys.length; index++) this.#index.set(keys[index]!, start + index);
+		if (keys.length === 0 || this.#dirty) return;
+		// Keep spare prefix-sum capacity so repeatedly appending one row is amortized O(1),
+		// rather than copying the full history on every streamed message.
+		const offsets =
+			this.#offsets.length >= this.#keys.length + 1
+				? this.#offsets
+				: new Float64Array(Math.max(this.#keys.length + 1, this.#offsets.length * 2));
+		if (offsets !== this.#offsets) offsets.set(this.#offsets);
+		let offset = this.#offsets[start] ?? 0;
+		for (let index = start; index < this.#keys.length; index++) {
+			offsets[index] = offset;
+			offset += this.sizeOf(index);
+		}
+		offsets[this.#keys.length] = offset;
+		this.#offsets = offsets;
 	}
 
 	/** Estimates changed (the list's width did): offsets are computed again. */
@@ -99,7 +126,10 @@ export class RowLayout {
 	#build(): Float64Array {
 		if (!this.#dirty) return this.#offsets;
 		const count = this.#keys.length;
-		const offsets = this.#offsets.length === count + 1 ? this.#offsets : new Float64Array(count + 1);
+		const offsets =
+			this.#offsets.length >= count + 1
+				? this.#offsets
+				: new Float64Array(Math.max(count + 1, this.#offsets.length * 2));
 		let offset = 0;
 		for (let index = 0; index < count; index++) {
 			offsets[index] = offset;

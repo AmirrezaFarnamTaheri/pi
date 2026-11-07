@@ -110,6 +110,27 @@ describe("default stream function compatibility", () => {
 	});
 });
 
+describe("agent loop rejected execution", () => {
+	it("rejects result() instead of leaving it pending when request preparation throws", async () => {
+		const stream = agentLoop(
+			[createUserMessage("Hello")],
+			{ messages: [], tools: [] },
+			{
+				model: createModel(),
+				convertToLlm: identityConverter,
+				prepareRequest: async () => {
+					throw new Error("request preparation failed");
+				},
+			},
+			undefined,
+			() => {
+				throw new Error("provider must not run");
+			},
+		);
+		await expect(stream.result()).rejects.toThrow("request preparation failed");
+	});
+});
+
 describe("agentLoop with AgentMessage", () => {
 	it("should emit events with AgentMessage types", async () => {
 		const context: AgentContext = {
@@ -2230,5 +2251,111 @@ describe("runToolCall", () => {
 			seen.push(outcome.result.structuredContent);
 		}
 		expect(seen).toEqual([undefined, { value: "replaced" }, { value: "both" }, { value: "original" }]);
+	});
+});
+
+
+describe("mixed tool execution performance", () => {
+	it("runs parallel groups concurrently without crossing a sequential barrier", async () => {
+		const schema = obj({ value: str() });
+		const timeline: string[] = [];
+		const parallelTool: AgentTool<typeof schema, { value: string }> = {
+			name: "parallel",
+			label: "Parallel",
+			description: "Independent parallel operation",
+			parameters: schema,
+			executionMode: "parallel",
+			async execute(_id, args) {
+				timeline.push(`start:${args.value}`);
+				await Promise.resolve();
+				await Promise.resolve();
+				timeline.push(`end:${args.value}`);
+				return { content: [{ type: "text", text: args.value }], details: {} };
+			},
+		};
+		const sequentialTool: AgentTool<typeof schema, { value: string }> = {
+			name: "sequential",
+			label: "Sequential",
+			description: "Exclusive operation",
+			parameters: schema,
+			executionMode: "sequential",
+			async execute(_id, args) {
+				timeline.push(`start:${args.value}`);
+				await Promise.resolve();
+				timeline.push(`end:${args.value}`);
+				return { content: [{ type: "text", text: args.value }], details: {} };
+			},
+		};
+		let requests = 0;
+		const stream = agentLoop(
+			[createUserMessage("execute a mixed batch")],
+			{ messages: [], tools: [parallelTool, sequentialTool] },
+			{ model: createModel(), convertToLlm: identityConverter },
+			undefined,
+			() => {
+				const output = createAssistantMessageEventStream();
+				queueMicrotask(() => {
+					output.push({
+						type: "done",
+						reason: requests++ === 0 ? "toolUse" : "stop",
+						message: requests === 1
+							? createAssistantMessage([
+								{ type: "toolCall", id: "a", name: "parallel", arguments: { value: "a" } },
+								{ type: "toolCall", id: "b", name: "parallel", arguments: { value: "b" } },
+								{ type: "toolCall", id: "c", name: "sequential", arguments: { value: "c" } },
+								{ type: "toolCall", id: "d", name: "parallel", arguments: { value: "d" } },
+								{ type: "toolCall", id: "e", name: "parallel", arguments: { value: "e" } },
+							], "toolUse")
+							: createAssistantMessage([{ type: "text", text: "done" }]),
+					});
+				});
+				return output;
+			},
+		);
+		const ids: string[] = [];
+		for await (const event of stream) {
+			if (event.type === "message_end" && event.message.role === "toolResult") ids.push(event.message.toolCallId);
+		}
+		expect(ids).toEqual(["a", "b", "c", "d", "e"]);
+		expect(timeline.indexOf("start:b")).toBeLessThan(timeline.indexOf("end:a"));
+		expect(timeline.indexOf("end:a")).toBeLessThan(timeline.indexOf("start:c"));
+		expect(timeline.indexOf("end:c")).toBeLessThan(timeline.indexOf("start:d"));
+		expect(timeline.indexOf("start:e")).toBeLessThan(timeline.indexOf("end:d"));
+	});
+});
+
+describe("tool declaration replay allocation", () => {
+	it("serializes a new tool schema only once when declaring it", async () => {
+		let serializations = 0;
+		const toolSchema = obj({ value: str() });
+		const schemaWithSerialization = Object.assign({}, toolSchema, {
+			toJSON() {
+				serializations++;
+				return toolSchema;
+			},
+		});
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo",
+			parameters: schemaWithSerialization,
+			async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; },
+		};
+		const context: AgentContext = { messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		let calls = 0;
+		const stream = agentLoop([createUserMessage("hi")], context, config, undefined, () => {
+			const response = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				calls++;
+				response.push({ type: "done", reason: "stop", message: createAssistantMessage([{ type: "text", text: "hello" }]) });
+			});
+			return response;
+		});
+		for await (const _event of stream) { /* drain */ }
+		expect(calls).toBe(1);
+		// Initial declaration plus the next-turn equality check; no upfront
+		// clone of every current tool before the comparison.
+		expect(serializations).toBe(2);
 	});
 });
