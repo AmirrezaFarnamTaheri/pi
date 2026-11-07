@@ -1185,6 +1185,7 @@ export class SessionManager {
 		this.fileEntries = [header];
 		this.byId.clear();
 		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1218,6 +1219,7 @@ export class SessionManager {
 	private _buildIndex(): void {
 		this.byId.clear();
 		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;

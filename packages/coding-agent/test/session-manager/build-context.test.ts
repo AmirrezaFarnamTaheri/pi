@@ -355,6 +355,20 @@ describe("long-running agent session hot paths", () => {
 		expect(projected.at(-1)?.id).toBe(previous);
 	});
 
+	it("does not retain a previous session's history through the UI title cache", () => {
+		const manager = SessionManager.inMemory();
+		manager.appendSessionInfo("old session");
+		expect(manager.getSessionName()).toBe("old session");
+		const cache = manager as unknown as {
+			sessionNameCache?: { entries: unknown[] };
+			fileEntries: unknown[];
+		};
+		expect(cache.sessionNameCache?.entries).toBe(cache.fileEntries);
+		manager.newSession();
+		expect(cache.sessionNameCache).toBeUndefined();
+		expect(manager.getSessionName()).toBeUndefined();
+	});
+
 	it("caches frame-time session-name lookups while noticing appended and replaced metadata", () => {
 		const manager = SessionManager.inMemory();
 		for (let index = 0; index < 1_000; index++) manager.appendCustomEntry("state", index);
