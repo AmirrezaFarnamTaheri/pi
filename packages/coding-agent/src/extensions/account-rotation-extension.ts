@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { Provider } from "@earendil-works/pi-ai";
 import { RotationPool, type RotationTarget } from "./account-rotation-policy.ts";
 
 export interface RotationMember extends RotationTarget {
@@ -33,7 +34,7 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 	if (!record(value) || !Array.isArray(value.pools)) throw new Error("account-rotation.json must contain pools[]");
 	if (value.pools.length > 32) throw new Error("Too many account rotation pools");
 	const ids = new Set<string>();
-	const aliases = new Set<string>();
+	const aliases = new Map<string, string>();
 	const pools: RotationGroup[] = [];
 	for (const raw of value.pools) {
 		if (!record(raw) || typeof raw.id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(raw.id)) {
@@ -51,6 +52,7 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 		if (raw.name !== undefined && typeof raw.name !== "string") throw new Error(`Rotation pool ${raw.id} has an invalid name`);
 		const members: RotationMember[] = [];
 		const slots = new Set<string>();
+		const credentials = new Set<string>();
 		for (const member of raw.members) {
 			if (!record(member) || typeof member.provider !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(member.provider) ||
 				typeof member.model !== "string" || member.model.length === 0 || member.model.length > 256) {
@@ -62,6 +64,8 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			const slot = `${member.provider}\u0000${member.model}`;
 			if (slots.has(slot)) throw new Error(`Rotation pool ${raw.id} has a duplicate account slot`);
 			slots.add(slot);
+			if (credentials.has(member.provider)) throw new Error(`Rotation pool ${raw.id} has duplicate credentials`);
+			credentials.add(member.provider);
 			const target: RotationMember = { provider: member.provider, model: member.model };
 			if (member.apiKeyEnv !== undefined) {
 				if (typeof member.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(member.apiKeyEnv) ||
@@ -69,12 +73,20 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 					member.provider === member.sourceProvider) {
 					throw new Error("Key slots require distinct provider alias, sourceProvider and apiKeyEnv name");
 				}
-				if (aliases.has(member.provider)) throw new Error("API-key alias may only be registered once");
-				aliases.add(member.provider);
+				
 				target.apiKeyEnv = member.apiKeyEnv;
 				target.sourceProvider = member.sourceProvider;
 			} else if (member.sourceProvider !== undefined) {
-				throw new Error("sourceProvider is only valid with apiKeyEnv");
+				if (typeof member.sourceProvider !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(member.sourceProvider) || member.provider === member.sourceProvider) {
+					throw new Error("OAuth slots require a distinct provider alias and sourceProvider");
+				}
+				target.sourceProvider = member.sourceProvider;
+			}
+			if (target.sourceProvider) {
+				const description = `${target.sourceProvider}\u0000${target.apiKeyEnv ?? "oauth"}`;
+				const existing = aliases.get(target.provider);
+				if (existing && existing !== description) throw new Error("Account alias has conflicting authentication");
+				aliases.set(target.provider, description);
 			}
 			members.push(target);
 		}
@@ -84,7 +96,21 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 	return { pools };
 }
 
-/** Register virtual routing models and environment-backed physical key aliases. */
+/** A named provider with its own credential and the source provider\'s native OAuth methods. */
+export function createOAuthAccountAlias(source: Provider, id: string): Provider {
+	if (!source.auth.oauth) throw new Error(`Provider ${source.id} does not support OAuth login`);
+	const { refreshModels: _refreshModels, ...rest } = source;
+	return {
+		...rest, id, name: `${source.name} (${id})`, auth: { oauth: source.auth.oauth },
+		getModels: () => source.getModels().map((model) => ({ ...model, provider: id })),
+		getAllModels: () => (source.getAllModels?.() ?? source.getModels()).map((model) => ({ ...model, provider: id })),
+		...(source.filterModels ? { filterModels: (models: Parameters<NonNullable<Provider["filterModels"]>>[0], credential: Parameters<NonNullable<Provider["filterModels"]>>[1]) =>
+			source.filterModels!(models.map((model) => ({ ...model, provider: source.id })), credential).map((model) => ({ ...model, provider: id })) } : {}),
+		...(source.filterAllModels ? { filterAllModels: (models: Parameters<NonNullable<Provider["filterAllModels"]>>[0], credential: Parameters<NonNullable<Provider["filterAllModels"]>>[1]) =>
+			source.filterAllModels!(models.map((model) => ({ ...model, provider: source.id })), credential).map((model) => ({ ...model, provider: id })) } : {}),
+	};
+}
+/** Register virtual routing models and independently authenticated account aliases. */
 export function registerAccountRotation(pi: ExtensionAPI, configuration: RotationConfiguration): void {
 	const state = configuration.pools.map((group) => {
 		let pool: RotationPool | undefined;
@@ -102,9 +128,19 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 
 	pi.on("session_start", async (_event, ctx) => {
 		let added = false;
+		const registered = new Set<string>();
 		for (const { group } of state) {
 			for (const member of group.members) {
-				if (!member.apiKeyEnv || !member.sourceProvider || !process.env[member.apiKeyEnv]) continue;
+				if (!member.sourceProvider || registered.has(member.provider)) continue;
+				if (!member.apiKeyEnv) {
+									const source = ctx.modelRegistry.getProvider(member.sourceProvider);
+									if (!source) continue;
+									pi.registerProvider(createOAuthAccountAlias(source, member.provider));
+									registered.add(member.provider);
+									added = true;
+									continue;
+								}
+				if (!process.env[member.apiKeyEnv]) continue;
 				const source = ctx.modelRegistry.find(member.sourceProvider, member.model);
 				if (!source || source.api === "pi-virtual") continue;
 				const model: ProviderModelConfig = {
@@ -125,10 +161,11 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 					name: `${member.provider} (rotation)`,
 					api: source.api,
 					baseUrl: source.baseUrl,
-					apiKey: `$${member.apiKeyEnv}`,
+					apiKey: `${member.apiKeyEnv}`,
 					authHeader: source.api === "openai-completions" || source.api === "openai-responses",
 					models: [model],
 				});
+				registered.add(member.provider);
 				added = true;
 			}
 		}
