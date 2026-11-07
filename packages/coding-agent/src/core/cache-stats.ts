@@ -181,7 +181,7 @@ export function collectActiveBranchCacheMisses(
 				miss.idleMs = Math.min(miss.idleMs, Math.max(0, message.timestamp - latestRequestTime));
 			}
 			const usage = message.usage;
-			if (usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
+			if (usage && usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
 				latestRequestTime = Math.max(latestRequestTime ?? -Infinity, message.timestamp);
 			}
 		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
