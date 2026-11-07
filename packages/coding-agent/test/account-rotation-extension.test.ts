@@ -43,7 +43,7 @@ function createHarness(configuration: unknown) {
 	const ctx = { modelRegistry: {
 		find(provider: string, id: string) { return models.get(`${provider}/${id}`); },
 		getProvider(provider: string) { return providers.get(provider); },
-		hasConfiguredAuth() { return true; },
+		hasConfiguredAuth(_model: { provider: string }) { return true; },
 		async refresh() {},
 	} };
 	registerAccountRotation(pi, parseRotationConfiguration(configuration));

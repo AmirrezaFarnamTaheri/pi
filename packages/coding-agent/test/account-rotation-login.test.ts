@@ -1,4 +1,5 @@
-import { AssistantMessageEventStream, InMemoryModelsStore, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
+import { InMemoryModelsStore, type AssistantMessage, type Model, type Provider } from "@earendil-works/pi-ai";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
