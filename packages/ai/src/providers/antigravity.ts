@@ -11,8 +11,8 @@ import type { Provider, RefreshModelsContext } from "../models.ts";
 import type { Model } from "../types.ts";
 
 const DEFAULT_GATEWAY = "http://127.0.0.1:8045/v1";
-const GATEWAY_URL_ENV = "ANTIGRAVITY_BASE_URL";
-const GATEWAY_KEY_ENV = "ANTIGRAVITY_API_KEY";
+const GATEWAY_URL_ENV = "ANTIGRAVITY_MANAGER_BASE_URL";
+const GATEWAY_KEY_ENV = "ANTIGRAVITY_MANAGER_API_KEY";
 const MAX_MODELS = 512;
 
 /** Local HTTP is allowed; all non-loopback gateways must use HTTPS. */
@@ -108,7 +108,7 @@ export async function discoverAntigravityModels(
 		models.push({
 			id: item.id,
 			name: typeof item.name === "string" && item.name.trim() ? item.name : item.id,
-			provider: "antigravity",
+			provider: "antigravity-manager",
 			api: "openai-completions",
 			baseUrl: url,
 			// /v1/models does not guarantee multimodal or reasoning support.
@@ -128,7 +128,7 @@ export function antigravityProvider(): Provider<"openai-completions"> {
 	let models: Model<"openai-completions">[] = [];
 	const streams = openAICompletionsApi();
 	return {
-		id: "antigravity",
+		id: "antigravity-manager",
 		name: "Antigravity Manager",
 		baseUrl: DEFAULT_GATEWAY,
 		auth: { apiKey: gatewayAuth },
@@ -136,7 +136,7 @@ export function antigravityProvider(): Provider<"openai-completions"> {
 		refreshModels: async (context: RefreshModelsContext) => {
 			if (context.stored) {
 				const restored = context.stored.models.filter(
-					(model) => model.provider === "antigravity" && model.api === "openai-completions",
+					(model) => model.provider === "antigravity-manager" && model.api === "openai-completions",
 				) as Model<"openai-completions">[];
 				if (!(await context.publish({ update: () => { models = restored; } }))) return;
 			}

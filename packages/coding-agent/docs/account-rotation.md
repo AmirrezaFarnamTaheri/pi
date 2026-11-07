@@ -60,6 +60,12 @@ pi --model account-rotation/claude
 
 The slash commands `/account-rotation status` and `/account-rotation reset` show alias status and clear in-memory cooldowns without revealing keys.
 
+## Antigravity and independent account login
+
+The [Antigravity Manager](providers.md#antigravity-manager-gateway) endpoint is a built-in `antigravity-manager` **gateway-key** provider. Its Google account connections and any internal account rotation remain in the separate manager. For direct Google sign-in, the optional MIT-licensed [realagy](https://github.com/st0nie/realagy) integration uses Google's official `agy acp` client and registers `antigravity/*` models after the Antigravity CLI is signed in.
+
+The official ACP provider does not expose per-account OAuth tokens to Pi. The `sourceProvider` field in this rotation extension is for providers that supply native Pi OAuth login methods (e.g. Anthropic and Codex), **not** for cloning `realagy`'s CLI session or bypassing Google's quota enforcement. Use separate realagy/CLI profiles for separate sign-ins under the extension's own configuration; this rotation extension does not currently manage them.
+
 ## Routing and failure behavior
 
 - A new user turn selects the next available credential slot in round-robin order.

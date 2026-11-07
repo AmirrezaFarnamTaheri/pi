@@ -4,7 +4,7 @@ import { antigravityProvider, normalizeAntigravityGatewayUrl } from "../src/prov
 describe("built-in Antigravity Manager gateway", () => {
 	it("registers as a native provider with an interactive login", async () => {
 		const provider = antigravityProvider();
-		expect(provider.id).toBe("antigravity");
+		expect(provider.id).toBe("antigravity-manager");
 		expect(provider.auth.oauth).toBeUndefined();
 		const answers = ["http://127.0.0.1:8045", "test-local-secret"];
 		const credential = await provider.auth.apiKey!.login!({
@@ -15,7 +15,7 @@ describe("built-in Antigravity Manager gateway", () => {
 		expect(credential).toEqual({
 			type: "api_key",
 			key: "test-local-secret",
-			env: { ANTIGRAVITY_BASE_URL: "http://127.0.0.1:8045/v1" },
+			env: { ANTIGRAVITY_MANAGER_BASE_URL: "http://127.0.0.1:8045/v1" },
 		});
 		const resolution = await provider.auth.apiKey!.resolve({
 			ctx: { env: async () => undefined, fileExists: async () => false },
@@ -26,7 +26,7 @@ describe("built-in Antigravity Manager gateway", () => {
 			apiKey: "test-local-secret",
 			baseUrl: "http://127.0.0.1:8045/v1",
 		});
-		expect(resolution?.env).toEqual({ ANTIGRAVITY_BASE_URL: "http://127.0.0.1:8045/v1" });
+		expect(resolution?.env).toEqual({ ANTIGRAVITY_MANAGER_BASE_URL: "http://127.0.0.1:8045/v1" });
 	});
 
 	it("defaults to loopback and requires HTTPS for non-loopback URLs", () => {
@@ -59,7 +59,7 @@ describe("built-in Antigravity Manager gateway", () => {
 		globalThis.fetch = fetcher;
 		try {
 			await provider.refreshModels!({
-				credential: { type: "api_key", key: "local-token", env: { ANTIGRAVITY_BASE_URL: "http://127.0.0.1:8045/v1" } },
+				credential: { type: "api_key", key: "local-token", env: { ANTIGRAVITY_MANAGER_BASE_URL: "http://127.0.0.1:8045/v1" } },
 				allowNetwork: true,
 				signal: new AbortController().signal,
 				publish: async ({ update }) => { update?.(); return true; },
@@ -70,7 +70,7 @@ describe("built-in Antigravity Manager gateway", () => {
 			expect(init.headers).toMatchObject({ authorization: "Bearer local-token" });
 			expect(provider.getModels().map((model) => model.id)).toEqual(["gemini-3.1-pro-high", "claude-sonnet-4-6"]);
 			expect(provider.getModels()[0]).toMatchObject({
-				provider: "antigravity", api: "openai-completions", baseUrl: "http://127.0.0.1:8045/v1",
+				provider: "antigravity-manager", api: "openai-completions", baseUrl: "http://127.0.0.1:8045/v1",
 				contextWindow: 128_000, maxTokens: 8_192,
 			});
 		} finally {

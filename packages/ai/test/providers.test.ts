@@ -67,7 +67,7 @@ describe("builtin providers", () => {
 
 		for (const provider of providers) {
 			const list = models.getAllModels(provider.id);
-			if (provider.id === "antigravity") {
+			if (provider.id === "antigravity-manager") {
 				// The gateway has no catalog until a user connects and /models refreshes.
 				expect(provider.refreshModels).toBeTypeOf("function");
 				expect(list).toEqual([]);
