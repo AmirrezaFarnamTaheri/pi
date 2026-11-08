@@ -124,8 +124,20 @@ export class Relay {
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
 	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
-	/** Next channel/thread index per bot while catch-up is split across jobs. */
-	readonly #catchUpOffsets = new Map<string, number>();
+	/** Stable place identities survive deletions/reordering of links during continuation. */
+	readonly #catchUpVisited = new Map<string, Set<string>>();
+	readonly #catchUpRetries = new Map<string, { bot: string; after: number }>();
+
+	/** Called by the live server's periodic tick; never requeue failed work in a tight loop. */
+	retryDeferredCatchUps(now = Date.now()): void {
+		const ready = new Set<string>();
+		for (const [key, retry] of this.#catchUpRetries) {
+			if (retry.after > now) continue;
+			this.#catchUpRetries.delete(key);
+			ready.add(retry.bot);
+		}
+		for (const bot of ready) this.#resumeCatchUp?.(bot);
+	}
 	/** Submission work pinned to its session until it has finished, including worker RPC. */
 	readonly #inFlight = new Map<string, Set<Promise<unknown>>>();
 
@@ -344,10 +356,8 @@ export class Relay {
 		const markTruncated = () => { truncated = true; };
 		const historicalPort: Pick<DiscordPort, "messages"> = historyBudget ? {
 			messages: async (id, query) => {
-				if (historyBudget.remaining <= 0) {
-					markTruncated();
-					return [];
-				}
+				if (historyBudget.remaining <= 0)
+					throw new Error("Discord catch-up context history budget exhausted; delivery not checkpointed");
 				historyBudget.remaining--;
 				return port.messages(id, query);
 			},
@@ -392,7 +402,8 @@ export class Relay {
 		try {
 			// A channel may be unlinked while its history is being fetched.
 			const latest = this.#state.value().bindings[channelId];
-			if (!latest || latest.session !== binding.session || latest.generation !== binding.generation) return;
+			if (!latest || latest.session !== binding.session || latest.generation !== binding.generation ||
+				!mayWake(latest.wake, trigger.author.id, trigger.roles)) return;
 			delivered = await this.#sessions.deliver(binding.session, {
 				...(conversation === undefined ? {} : { conversation }),
 				requestId: `discord:${trigger.id}`,
@@ -446,18 +457,24 @@ export class Relay {
 		const places = Object.values(this.#state.value().bindings)
 			.filter((binding) => binding.botId === bot)
 			.flatMap((binding) => [
-				{ binding, id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan, thread: false },
+				{ binding, id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan,
+					thread: false, key: `${bot}:${binding.channelId}:${binding.generation ?? ""}` },
 				...Object.entries(binding.threads).map(([id, known]) => ({
 					binding, id, cursor: known.cursor, scan: known.catchUpScan, thread: true,
+					key: `${bot}:${binding.channelId}:${id}:${binding.generation ?? ""}`,
 				})),
 			]);
+		const visited = this.#catchUpVisited.get(bot) ?? new Set<string>();
+		this.#catchUpVisited.set(bot, visited);
+		const active = new Set(places.map((place) => place.key));
+		for (const key of visited) if (!active.has(key)) visited.delete(key);
 		let remaining = CATCH_UP_PAGES;
-		let next = Math.min(this.#catchUpOffsets.get(bot) ?? 0, places.length);
 		let needsContinuation = false;
-		for (; next < places.length; next++) {
-			const place = places[next]!;
+		for (const place of places) {
+			if (visited.has(place.key)) continue;
+			if ((this.#catchUpRetries.get(place.key)?.after ?? 0) > Date.now()) continue;
 			const binding = place.binding;
-			if (remaining === 0) {
+			if (remaining === 0 || historyBudget.remaining === 0) {
 				needsContinuation = true;
 				break;
 			}
@@ -491,6 +508,12 @@ export class Relay {
 				let refused = false;
 				if (newest) {
 					const thread = place.thread ? await port.channel(place.id) : undefined;
+					// A link or wake policy can change while the Discord API is awaited.
+					const current = this.#state.value().bindings[binding.channelId];
+					if (!current || current.session !== binding.session ||
+						current.generation !== binding.generation ||
+						(place.thread && !current.threads[place.id]) ||
+						!mayWake(current.wake, newest.author.id, newest.roles)) continue;
 					await this.deliver(binding.channelId, newest, thread, historyBudget);
 					const updated = this.#state.value().bindings[binding.channelId];
 					const cursor = place.thread ? updated?.threads[place.id]?.cursor : updated?.cursor;
@@ -509,22 +532,23 @@ export class Relay {
 						delete target.catchUpScan;
 					else target.catchUpScan = after;
 				});
-				if (more && !refused) {
-					// Continue the same place with the durable scan cursor, not from its start.
+				if (refused) {
+					this.#catchUpRetries.set(place.key, { bot, after: Date.now() + 8_000 });
+					continue;
+				}
+				if (more) {
+					// Persisted scan cursor lets the next job continue this exact place.
 					needsContinuation = true;
 					break;
 				}
+				visited.add(place.key);
 			} catch (error) {
 				console.error("p2 discord: catching up failed:", error instanceof Error ? error.message : error);
+				this.#catchUpRetries.set(place.key, { bot, after: Date.now() + 8_000 });
 			}
 		}
-		if (next < places.length) needsContinuation = true;
-		if (needsContinuation) {
-			this.#catchUpOffsets.set(bot, next);
-			this.#resumeCatchUp?.(bot);
-		} else {
-			this.#catchUpOffsets.delete(bot);
-		}
+		if (needsContinuation) this.#resumeCatchUp?.(bot);
+		else if (visited.size === places.length) this.#catchUpVisited.delete(bot);
 	}
 
 	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
