@@ -70,6 +70,12 @@ test("corrupted release assets fail checksum verification before publication", (
     writeFileSync(join(root, filename), "valid");
     const hash = createHash("sha256").update("valid").digest("hex");
     writeFileSync(join(root, "SHA256SUMS"), hash + "  " + filename + "\n");
+    const available = spawnSync("sha256sum", ["--version"], { encoding: "utf8" });
+    if (available.error && available.error.code === "ENOENT") {
+      // macOS and Windows may not ship GNU coreutils; hosted Linux CI must.
+      assert.notEqual(process.platform, "linux", "Linux CI requires sha256sum");
+      return;
+    }
     assert.equal(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
     writeFileSync(join(root, filename), "corrupted");
     assert.notEqual(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
