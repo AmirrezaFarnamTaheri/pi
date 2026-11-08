@@ -188,6 +188,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			}
 		} finally {
 			this.activeIterators--;
+			// In result-only mode, abandon any backlog once the last live consumer exits.
+			// Otherwise an early break retains progress events indefinitely.
+			if (this.activeIterators === 0 && !this.retainUnconsumedEvents) this.queue = new FifoQueue<T>();
 			// Breaking out of for-await no longer requires future consumption.
 			this.wakeAllCapacityWaiters();
 		}
