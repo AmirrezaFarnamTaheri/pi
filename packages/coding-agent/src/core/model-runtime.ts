@@ -70,6 +70,8 @@ import {
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { createStoredAccountAlias } from "./account-aliases.ts";
+import { addAccountProfile, loadAccountProfiles, removeAccountProfile, type AccountProfile } from "./account-profiles.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -113,6 +115,8 @@ export interface CreateModelRuntimeOptions {
 	credentials?: CredentialStore;
 	authPath?: string;
 	modelsPath?: string | null;
+	/** Defaults to account-profiles.json beside the normal auth configuration; null disables persistence. */
+	accountProfilesPath?: string | null;
 	modelsStore?: ModelsStore;
 	modelsStorePath?: string;
 	/** Allow create() to refresh model catalogs over the network. Defaults to false. */
@@ -183,6 +187,8 @@ export class ModelRuntime implements Models {
 	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
+	private readonly accountProfilesPath: string | undefined;
+	private readonly accountProfiles = new Map<string, AccountProfile>();
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -203,6 +209,7 @@ export class ModelRuntime implements Models {
 		credentials: RuntimeCredentials,
 		config: ModelConfig,
 		modelsPath: string | undefined,
+		accountProfilesPath: string | undefined,
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
 		modelNetworkEnabled: boolean,
@@ -210,6 +217,7 @@ export class ModelRuntime implements Models {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
+		this.accountProfilesPath = accountProfilesPath;
 		this.modelNetworkEnabled = modelNetworkEnabled;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
@@ -221,6 +229,9 @@ export class ModelRuntime implements Models {
 		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
+		const accountProfilesPath = options.accountProfilesPath === null ? undefined
+			: options.accountProfilesPath ?? (options.modelsPath === null ? undefined
+				: join(dirname(options.authPath ?? join(getAgentDir(), "auth.json")), "account-profiles.json"));
 		const config = await ModelConfig.load(modelsPath);
 		const modelsStore =
 			options.modelsStore ??
@@ -245,12 +256,14 @@ export class ModelRuntime implements Models {
 			credentials,
 			config,
 			modelsPath,
+			accountProfilesPath,
 			modelsStore,
 			providers,
 			process.env.PI_OFFLINE === undefined,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
+		runtime.restoreAccountAliases();
 		const refreshFromNetwork = runtime.modelNetworkEnabled && options.allowModelNetwork === true;
 		const controller =
 			refreshFromNetwork && options.modelRefreshTimeoutMs !== undefined ? new AbortController() : undefined;
@@ -528,6 +541,61 @@ export class ModelRuntime implements Models {
 
 	getRegisteredProviderIds(): readonly string[] {
 		return [...new Set([...this.extensionProviders.keys(), ...this.nativeExtensionProviders.keys()])];
+	}
+
+	/** Profiles identify independently stored credentials; they never contain API keys or OAuth tokens. */
+	getAccountProfiles(): readonly AccountProfile[] {
+		return [...this.accountProfiles.values()];
+	}
+
+	private restoreAccountAliases(): void {
+		if (!this.accountProfilesPath) return;
+		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
+			if (this.models.getProvider(profile.id)) throw new Error(`Account alias conflicts with provider: ${profile.id}`);
+			const source = this.models.getProvider(profile.sourceProviderId);
+			if (!source) throw new Error(`Account source provider is unavailable: ${profile.sourceProviderId}`);
+			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id, profile.label));
+			this.accountProfiles.set(profile.id, profile);
+			this.recomposeProvider(profile.id);
+		}
+		this.updateModelSnapshot();
+	}
+
+	/** Create a new, uniquely named provider identity without replacing any existing login. */
+	addAccountAlias(sourceProviderId: string, label?: string): AccountProfile {
+		const path = this.accountProfilesPath;
+		if (!path) throw new Error("Account profile persistence is disabled for this runtime");
+		if (this.accountProfiles.has(sourceProviderId)) {
+			throw new Error("Select the original provider rather than an account alias");
+		}
+		const source = this.models.getProvider(sourceProviderId);
+		if (!source || (!source.auth.oauth && !source.auth.apiKey)) {
+			throw new Error(`Provider ${sourceProviderId} does not support login`);
+		}
+		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
+		try {
+			if (this.models.getProvider(profile.id)) throw new Error("Account identity conflicts with an existing provider");
+			const provider = createStoredAccountAlias(source, profile.id, profile.label);
+			this.accountProfiles.set(profile.id, profile);
+			this.registerNativeProvider(provider);
+			return profile;
+		} catch (error) {
+			this.accountProfiles.delete(profile.id);
+			removeAccountProfile(path, profile.id);
+			throw error;
+		}
+	}
+
+	/** Remove only the unused account identity. Existing credentials must be logged out first. */
+	removeAccountAlias(id: string): void {
+		const path = this.accountProfilesPath;
+		if (!path || !this.accountProfiles.has(id)) return;
+		this.accountProfiles.delete(id);
+		removeAccountProfile(path, id);
+		this.nativeExtensionProviders.delete(id);
+		this.recomposeProvider(id);
+		this.updateModelSnapshot();
+		this.scheduleExtensionRefresh();
 	}
 
 	getRegisteredNativeProvider(providerId: string): Provider | undefined {
