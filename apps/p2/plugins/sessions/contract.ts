@@ -393,17 +393,19 @@ export const SessionTransfer = remote("p2.session-transfer", {
 });
 
 const LockOrNone = union([SessionLockSchema, nul()]);
+const WriteIdOrNone = union([str(), nul()]);
 
-/** Every session's lock (server, host-internal, persisted): set by the owner, followed by MCP placement and workers. */
+/** Every session's lock, with durable write IDs to fence ABA value changes during recovery. */
 export const SessionLocks = local("p2.session-locks", {
-	version: 1,
+	version: 2,
 	params: {},
 	members: {
 		locks: record(SessionLockSchema),
+		writeIds: record(str()),
 		set: method(obj({ session: str(), lock: LockOrNone })),
-		/** Atomic optimistic write; prevents stale Discord repair from undoing newer owner policy. */
+		/** Only the exact write ID current at the time of a repair may be overwritten. */
 		compareAndSet: method(
-			obj({ session: str(), previous: LockOrNone, lock: LockOrNone }),
+			obj({ session: str(), expectedWriteId: WriteIdOrNone, lock: LockOrNone, writeId: str() }),
 			obj({ applied: bool() }),
 		),
 	},
