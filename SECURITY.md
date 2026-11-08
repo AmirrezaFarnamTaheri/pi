@@ -26,8 +26,8 @@ coding agent trivially and this cannot be protected against.
 If you believe you found a security vulnerability in pi or another package in
 this repository, please report it privately by either:
 
-- Emailing `security@earendil.com`, or
-- Opening a private report through GitHub Security Advisories for this repository
+- Opening a private vulnerability report through [this fork's GitHub Security Advisories](https://github.com/AmirrezaFarnamTaheri/pi/security/advisories/new) when private reporting is enabled, or
+- Contacting the repository owner privately through a verified contact method published on the fork's GitHub profile. Do not send credentials or vulnerability details to an unverified address
 
 Please include:
 
@@ -42,8 +42,9 @@ reports and coordinate disclosure as appropriate.
 ## Scope
 
 Security issues in the distributed packages, command-line tools, APIs, and
-repository code are in scope as well as earendil operated infrastructure
-on `pi.dev`.
+repository code are in scope that are maintained or distributed by this fork. Upstream-owned services and
+infrastructure (including `pi.dev`) are not operated by this fork; report those issues
+to the upstream maintainer.
 
 ## Out Of Scope
 
@@ -83,5 +84,5 @@ When possible, include the exact affected path, package version or commit SHA,
 configuration, and a proof of concept against the latest release or latest
 `main`.  For dependency reports, include evidence that the shipped dependency is
 affected and that the issue is reachable through Pi.  For exposed-secret reports,
-include evidence that the credential is owned by Earendil or grants access to
-Earendil-operated infrastructure or services.
+include evidence that the credential is owned by this fork or demonstrates an access boundary crossing in software
+distributed by the fork. For upstream secrets, contact the upstream maintainer.
