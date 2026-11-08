@@ -48,7 +48,7 @@ to the upstream maintainer.
 
 ## Out Of Scope
 
-- Local code execution or sandboxing behavior (the Pi coding agent intentionally does not have a sandbox)
+- Local code execution intentionally permitted by the unsandboxed Pi coding agent. A demonstrated escape from the fork's explicit P2 sandbox isolation boundary is in scope.
 - Behavior of pi extensions or skills installed by the user
 - Risks from working in untrusted repositories
 - Risks from installing untrusted extensions, skills, packages, or tools
