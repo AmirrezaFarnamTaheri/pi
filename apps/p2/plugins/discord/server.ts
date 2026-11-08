@@ -113,7 +113,17 @@ export default defineFacet((host) => {
 		// Owner link mutations may await remote Discord calls; serialize their entire
 		// transaction, including unlink, to preserve the one-session/one-channel invariant.
 		const linkMutations = new LinkMutationQueue();
-		const linkExclusive = <T>(action: () => Promise<T>): Promise<T> => linkMutations.run(action);
+		const reconcile = (ctx: Ctx): Promise<void> => resumeLinkRepairs({
+			value: () => state.value as unknown as LinkRepairState,
+			change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
+		}, async (session, lock) => {
+			await locks.set({ session, lock }, ctx);
+		});
+		const linkExclusive = <T>(ctx: Ctx, action: () => Promise<T>): Promise<T> => linkMutations.run(async () => {
+			// No new mutation can bypass an unfinished durable repair.
+			if (Object.keys(state.value.repairs).length) await reconcile(ctx);
+			return action();
+		});
 		const relay = new Relay((bot) => fleet.value.connected(bot), sessions, {
 			// The state's drafts are the same JSON as the relay's plain records.
 			value: () => state.value as RelayState,
@@ -121,6 +131,15 @@ export default defineFacet((host) => {
 		});
 		self.onLive(async (ctx) => {
 			live = ctx;
+			// Repair interrupted link operations before consuming events or enabling new links.
+			while (Object.keys(state.value.repairs).length) {
+				try {
+					await linkMutations.run(() => reconcile(ctx));
+				} catch (error) {
+					console.error("p2 discord: link repair failed; retrying without opening relay:", errorText(error));
+					await sleep(10_000, ctx);
+				}
+			}
 			const scheduler = new DiscordScheduler(
 				(bot) => fleet.value.requestCatchUp(bot),
 				(error) => console.error("p2 discord:", errorText(error)),
@@ -240,7 +259,7 @@ export default defineFacet((host) => {
 				await fleet.value.setToken(bot, token);
 				return null;
 			},
-			removeBot: ({ bot }, ctx) => linkExclusive(async () => {
+			removeBot: ({ bot }, ctx) => linkExclusive(ctx, async () => {
 				for (const binding of Object.values(state.value.bindings))
 					if (binding.botId === bot) await unlink(binding.session, ctx);
 				await fleet.value.remove(bot);
@@ -251,7 +270,7 @@ export default defineFacet((host) => {
 				const text = await optionalText(join(dataDir(), "mcp.json"));
 				return text ? mcpServerNames(text) : [];
 			},
-			link: ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) => linkExclusive(async () => {
+			link: ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) => linkExclusive(ctx, async () => {
 				const bindings = Object.values(state.value.bindings);
 				if (bindings.some((binding) => binding.session === session))
 					throw new Error("This session is linked already: unlink it first");
@@ -290,11 +309,11 @@ export default defineFacet((host) => {
 				}, ctx);
 				return null;
 			}),
-			unlink: ({ session }, ctx) => linkExclusive(async () => {
+			unlink: ({ session }, ctx) => linkExclusive(ctx, async () => {
 				await unlink(session, ctx);
 				return null;
 			}),
-			updateLink: ({ session, wake, lock }, ctx) => linkExclusive(async () => {
+			updateLink: ({ session, wake, lock }, ctx) => linkExclusive(ctx, async () => {
 				if (!Object.values(state.value.bindings).some((binding) => binding.session === session))
 					throw new Error("This session is not linked");
 				// Both apply at once: who may wake Pi is read at each message, the lock is mirrored into the session.
