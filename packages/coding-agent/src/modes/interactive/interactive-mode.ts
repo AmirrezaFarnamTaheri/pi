@@ -5950,7 +5950,7 @@ export class InteractiveMode {
 			const search = providerRef.slice(4).trim();
 			const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
 			const providerOptions = findMatchingProviders(
-				this.getLoginProviderOptions().filter((provider) => !aliases.has(provider.id)), search,
+				this.getLoginProviderOptions().filter((provider) => !aliases.has(provider.id) && !!provider.method?.login), search,
 			);
 			if (providerOptions.length === 1) {
 				await this.startAdditionalAccountLogin(providerOptions[0]!);
@@ -6264,7 +6264,7 @@ export class InteractiveMode {
 
 	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string, addAccount = false): void {
 		const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
-		const providerOptions = this.getLoginProviderOptions(authType).filter((provider) => !addAccount || !aliases.has(provider.id));
+		const providerOptions = this.getLoginProviderOptions(authType).filter((provider) => !addAccount || (!aliases.has(provider.id) && !!provider.method?.login));
 		if (providerOptions.length === 0) {
 			const message =
 				authType === "oauth"
