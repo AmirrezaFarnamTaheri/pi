@@ -146,7 +146,10 @@ export class RotationPool {
 					typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0 ? explicit : 0,
 					hinted ?? 0));
 				slot.cooldownUntil = now + duration;
-				// Never choose the same failed identity, regardless of sticky/manual strategy.
+				// A manual pin is an identity boundary, not a selection preference.
+				// Record the failed credential's cooldown, then fail closed without
+				// submitting any part of the request under another account.
+				if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or wait for its cooldown");
 				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
 			}
 			return this.#choice(failedIndex);
