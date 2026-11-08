@@ -62,6 +62,7 @@ import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
+import { assertAccountRotationConsent } from "./account-rotation-consent.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -316,6 +317,8 @@ export interface PromptOptions {
 export interface ModelMutationOptions {
 	/** Persist the new value to global defaults. Defaults to session-only. */
 	persist?: boolean;
+	/** Caller confirmed the existing transcript may be routed through distinct accounts. */
+	accountRotationConsent?: boolean;
 }
 
 /** Result from cycleModel() */
@@ -2595,6 +2598,7 @@ export class AgentSession {
 	 * @throws Error if no auth is configured for the model
 	 */
 	async setModel(model: Model<any>, options: ModelMutationOptions = {}): Promise<void> {
+		assertAccountRotationConsent(model.provider, options.accountRotationConsent === true);
 		if (!(await this._modelRuntime.checkAuth(model.provider))) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
@@ -2661,6 +2665,7 @@ export class AgentSession {
 		const nextIndex = getNextCycleIndex(currentIndex, scopedModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const next = scopedModels[nextIndex];
+		assertAccountRotationConsent(next.model.provider, options.accountRotationConsent === true);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.model, next.thinkingLevel);
 
 		// Apply model
@@ -2693,6 +2698,7 @@ export class AgentSession {
 		const nextIndex = getNextCycleIndex(currentIndex, availableModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const nextModel = availableModels[nextIndex];
+		assertAccountRotationConsent(nextModel.provider, options.accountRotationConsent === true);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
 		this.agent.state.model = nextModel;
