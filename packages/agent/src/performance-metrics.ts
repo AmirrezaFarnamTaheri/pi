@@ -3,12 +3,24 @@ import type { AgentEvent } from "./types.ts";
 import type { Agent } from "./agent.ts";
 import type { Usage } from "@earendil-works/pi-ai/compat";
 
+export interface AgentTurnMetrics {
+	index: number;
+	durationMs: number;
+	requests: number;
+	toolCalls: number;
+	toolErrors: number;
+	costUsd: number;
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number; total: number };
+}
+
 export interface AgentRunMetrics {
 	status: "idle" | "running" | "finished" | "error" | "aborted";
 	durationMs: number;
 	timeToFirstTextMs?: number;
 	requestCount: number;
 	turnCount: number;
+	/** Per-turn provider usage and latency. */
+	turns: AgentTurnMetrics[];
 	toolCalls: number;
 	toolErrors: number;
 	toolExecutionMs: number;
@@ -73,6 +85,8 @@ export class AgentPerformanceMonitor {
 	private lastStopReason: string | undefined;
 	private requestCount = 0;
 	private turnCount = 0;
+	private activeTurn: { at: number; requests: number; calls: number; errors: number; input: number; output: number; read: number; write: number; reasoning: number; cost: number } | undefined;
+	private readonly finishedTurns: AgentTurnMetrics[] = [];
 	private toolCalls = 0;
 	private toolErrors = 0;
 	private toolExecutionMs = 0;
@@ -108,6 +122,11 @@ export class AgentPerformanceMonitor {
 		if (this.startedAt === undefined || this.endedAt !== undefined) return;
 		const now = this.now();
 		switch (event.type) {
+			case "turn_start":
+				this.activeTurn = { at: now, requests: this.requestCount, calls: this.toolCalls, errors: this.toolErrors,
+					input: this.input, output: this.output, read: this.cacheRead, write: this.cacheWrite,
+					reasoning: this.reasoning, cost: this.costUsd };
+				break;
 			case "message_update": {
 				const delta = event.assistantMessageEvent;
 				if (delta.type === "text_delta" && delta.delta.length > 0 && this.firstTextAt === undefined) {
@@ -145,9 +164,25 @@ export class AgentPerformanceMonitor {
 				this.startedTools.delete(event.toolCallId);
 				break;
 			}
-			case "turn_end":
+			case "turn_end": {
 				this.turnCount++;
+				const started = this.activeTurn;
+				if (started) {
+					const tokens = {
+						input: this.input - started.input, output: this.output - started.output,
+						cacheRead: this.cacheRead - started.read, cacheWrite: this.cacheWrite - started.write,
+						reasoning: this.reasoning - started.reasoning,
+						total: (this.input - started.input) + (this.output - started.output) +
+							(this.cacheRead - started.read) + (this.cacheWrite - started.write),
+					};
+					this.finishedTurns.push({ index: this.turnCount, durationMs: Math.max(0, now - started.at),
+						requests: this.requestCount - started.requests, toolCalls: this.toolCalls - started.calls,
+						toolErrors: this.toolErrors - started.errors,
+						costUsd: Math.round((this.costUsd - started.cost) * 1e12) / 1e12, tokens });
+					this.activeTurn = undefined;
+				}
 				break;
+			}
 			case "agent_end":
 				this.endedAt = now;
 				this.startedTools.clear();
@@ -176,6 +211,7 @@ export class AgentPerformanceMonitor {
 				? {} : { timeToFirstTextMs: Math.max(0, this.firstTextAt - this.startedAt) }),
 			requestCount: this.requestCount,
 			turnCount: this.turnCount,
+			turns: this.finishedTurns.map((turn) => ({ ...turn, tokens: { ...turn.tokens } })),
 			toolCalls: this.toolCalls,
 			toolErrors: this.toolErrors,
 			toolExecutionMs: this.toolExecutionMs,
@@ -209,6 +245,8 @@ export class AgentPerformanceMonitor {
 		this.lastStopReason = undefined;
 		this.requestCount = 0;
 		this.turnCount = 0;
+		this.activeTurn = undefined;
+		this.finishedTurns.length = 0;
 		this.toolCalls = 0;
 		this.toolErrors = 0;
 		this.toolExecutionMs = 0;
