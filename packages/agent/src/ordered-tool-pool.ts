@@ -33,6 +33,10 @@ export async function executeBoundedInOrder<T>(
 			}
 		}
 	};
-	await Promise.all(Array.from({ length: Math.min(limit, entries.length) }, worker));
+	// A failed worker stops new jobs, but all already-running tools must settle
+	// before the agent loop can report the batch finished.
+	const outcomes = await Promise.allSettled(Array.from({ length: Math.min(limit, entries.length) }, worker));
+	const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+	if (failure) throw failure.reason;
 	return results;
 }
