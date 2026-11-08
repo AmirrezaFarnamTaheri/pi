@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
 /**
@@ -18,7 +18,14 @@ function fromLauncher(home: string): (path: string, readonly: boolean) => string
 	assert(start >= 0 && end > start, "launcher hostPath source must be present");
 	return runInNewContext(`${source.slice(start, end)}\nhostPath`, {
 		homedir: () => home,
-		isAbsolute, basename, dirname, join, resolve, existsSync, mkdirSync, realpathSync,
+		isAbsolute,
+		basename,
+		dirname,
+		join,
+		resolve,
+		existsSync,
+		mkdirSync,
+		realpathSync,
 	}) as (path: string, readonly: boolean) => string;
 }
 
