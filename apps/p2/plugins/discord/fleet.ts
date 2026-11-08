@@ -234,8 +234,15 @@ export class Fleet {
 			botId !== undefined && commandOf(event.message.text, botId) !== undefined;
 		if (urgent) {
 			if (this.#urgent.length === MAX_URGENT) {
-				console.error("p2 discord: control queue saturated; dropping oldest command");
-				this.#urgent.shift();
+				console.error("p2 discord: control queue saturated; rejecting oldest command");
+				const dropped = this.#urgent.shift();
+				if (dropped?.event.kind === "message") {
+					const bot = this.connected(dropped.bot);
+					void bot?.reply(dropped.event.message.channelId, dropped.event.message.id,
+						"Pi control backlog is full; your command was not executed. Please retry.").catch(
+						(error: unknown) => console.error("p2 discord: could not notify discarded command:", error),
+						);
+				}
 			}
 			this.#urgent.push(received);
 		} else if (this.#queue.length >= MAX_QUEUED) {
