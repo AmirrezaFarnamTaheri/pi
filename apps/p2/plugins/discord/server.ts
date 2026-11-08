@@ -230,14 +230,14 @@ export default defineFacet((host) => {
 		};
 		/** Drops `session`'s link and lifts its lock; its agents stop being told they answer Discord. */
 		const unlink = async (session: string, ctx: Ctx): Promise<void> => {
+			if (!Object.values(state.value.bindings).some((binding) => binding.session === session)) return;
+			// A single persisted commit first revokes Discord ingress and records the
+			// lock-release intent. A restart can safely retry a failed lock write.
 			await state.change((draft) => {
-				for (const [channel, binding] of Object.entries(draft.bindings))
-					if (binding.session === session) delete draft.bindings[channel];
-				// A disconnect revokes queued and completed replies, including thread replies.
-				for (const [id, pending] of Object.entries(draft.pending))
-					if (pending.session === session) delete draft.pending[id];
+				draft.repairs[session] = { kind: "unlink", session, lock: null };
+				removeSessionBinding(draft as unknown as LinkRepairState, session);
 			}, ctx);
-			await locks.set({ session, lock: null }, ctx);
+			await reconcile(ctx);
 			// A session that is gone or archived has no worker to tell (and none to start).
 			const row = catalog.sessions.value.find((entry) => entry.id === session);
 			if (row && row.archivedAt === null)
@@ -316,12 +316,12 @@ export default defineFacet((host) => {
 			updateLink: ({ session, wake, lock }, ctx) => linkExclusive(ctx, async () => {
 				if (!Object.values(state.value.bindings).some((binding) => binding.session === session))
 					throw new Error("This session is not linked");
-				// Both apply at once: who may wake Pi is read at each message, the lock is mirrored into the session.
-				await locks.set({ session, lock }, ctx);
+				// Record the owner's desired policy before changing the session's lock.
+				// A crash after either write resumes the same update on startup.
 				await state.change((draft) => {
-					for (const binding of Object.values(draft.bindings))
-						if (binding.session === session) binding.wake = wake;
+					draft.repairs[session] = { kind: "update", session, lock, wake };
 				}, ctx);
+				await reconcile(ctx);
 				return null;
 			}),
 		};
