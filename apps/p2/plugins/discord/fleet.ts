@@ -19,6 +19,9 @@ export type Received = { bot: string; event: BotEvent };
 
 const MAX_QUEUED = 2_048;
 const MAX_URGENT = 256;
+const MAX_EARLY_CANDIDATE_MENTIONS = 128;
+const MAX_DEDUPLICATED_MESSAGES = 8_192;
+const MAX_REJECTION_NOTICES = 8;
 type BotFactory = (onEvent: (event: BotEvent) => void) => Bot;
 
 export class Fleet {
@@ -30,6 +33,10 @@ export class Fleet {
 	readonly #urgent: Received[] = [];
 	readonly #missed = new Set<string>();
 	readonly #waiters = new Set<() => void>();
+	readonly #candidateMentions = new WeakMap<Bot, BotEvent[]>();
+	readonly #seenMessages = new Set<string>();
+	#activeNotices = 0;
+	#controlRejectionHandler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>;
 	readonly #makeBot: BotFactory;
 	#mutation: Promise<void> = Promise.resolve();
 	#saveTail: Promise<void> = Promise.resolve();
@@ -192,17 +199,36 @@ export class Fleet {
 		this.#bots.clear();
 	}
 
-	/** A bot `id` that is not one of the fleet's yet (a token being tried); it delivers messages once adopted. */
+	/** A candidate may receive commands while its token is being durably persisted. */
 	#candidate(id: string): Bot {
+		const pending: BotEvent[] = [];
 		const bot: Bot = this.#makeBot((event) => {
-			if (this.#bots.get(id) === bot) this.#push({ bot: id, event });
+			if (this.#bots.get(id) === bot) {
+				this.#push({ bot: id, event });
+			} else if (event.kind === "message" && event.message.mentionsBot) {
+				// Bounded buffer: normal mentions can also be recovered from history.
+				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) pending.shift();
+				pending.push(event);
+			}
 		});
+		this.#candidateMentions.set(bot, pending);
 		return bot;
 	}
 
 	/** Makes `bot` the fleet's bot `id`; one connected already (a new token) catches up at once. */
 	#adopt(id: string, bot: Bot): void {
 		this.#bots.set(id, bot);
+		// Replay commands received between candidate connection and persistence.
+		// Duplicate old/new gateway events are deduplicated by their Discord IDs.
+		const early = this.#candidateMentions.get(bot) ?? [];
+		this.#candidateMentions.delete(bot);
+		const discordBotId = bot.client?.user?.id;
+		if (discordBotId) {
+			for (const event of early) {
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
+					this.#push({ bot: id, event });
+			}
+		}
 		bot.subscribe(() => {
 			const saved = this.#file.bots[id];
 			if (saved && bot.status.state === "connected") {
@@ -221,6 +247,26 @@ export class Fleet {
 		if (bot.client?.isReady()) this.#push({ bot: id, event: { kind: "ready" } });
 	}
 
+	/**
+	 * The store owns authorization against bindings, thread membership and wake
+	 * policy; Fleet must never reply to an arbitrary mentioned command by itself.
+	 */
+	setControlRejectionHandler(
+		handler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>,
+	): void {
+		this.#controlRejectionHandler = handler;
+	}
+
+	/** Shared bounded notice path for ingress and scheduler rejection. */
+	notifyControlRejected(bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]): void {
+		const handler = this.#controlRejectionHandler;
+		if (!handler || this.#activeNotices >= MAX_REJECTION_NOTICES) return;
+		this.#activeNotices++;
+		void Promise.resolve().then(() => handler(bot, message)).catch((error: unknown) =>
+			console.error("p2 discord: could not notify rejected command:", error),
+		).finally(() => { this.#activeNotices--; });
+	}
+
 	/** A dropped non-command message is recovered by a history catch-up, not silently forgotten. */
 	requestCatchUp(bot: string): void {
 		this.#missed.add(bot);
@@ -229,6 +275,13 @@ export class Fleet {
 
 	#push(received: Received): void {
 		const event = received.event;
+		if (event.kind === "message") {
+			const key = `${received.bot}:${event.message.channelId}:${event.message.id}`;
+			if (this.#seenMessages.has(key)) return;
+			this.#seenMessages.add(key);
+			if (this.#seenMessages.size > MAX_DEDUPLICATED_MESSAGES)
+				this.#seenMessages.delete(this.#seenMessages.values().next().value!);
+		}
 		const botId = this.#bots.get(received.bot)?.client?.user?.id;
 		const urgent = event.kind === "message" && event.message.mentionsBot &&
 			botId !== undefined && commandOf(event.message.text, botId) !== undefined;
@@ -236,13 +289,8 @@ export class Fleet {
 			if (this.#urgent.length === MAX_URGENT) {
 				console.error("p2 discord: control queue saturated; rejecting oldest command");
 				const dropped = this.#urgent.shift();
-				if (dropped?.event.kind === "message") {
-					const bot = this.connected(dropped.bot);
-					void bot?.reply(dropped.event.message.channelId, dropped.event.message.id,
-						"Pi control backlog is full; your command was not executed. Please retry.").catch(
-						(error: unknown) => console.error("p2 discord: could not notify discarded command:", error),
-						);
-				}
+				if (dropped?.event.kind === "message")
+					this.notifyControlRejected(dropped.bot, dropped.event.message);
 			}
 			this.#urgent.push(received);
 		} else if (this.#queue.length >= MAX_QUEUED) {
