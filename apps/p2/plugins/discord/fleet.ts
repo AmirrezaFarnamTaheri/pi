@@ -35,7 +35,8 @@ export class Fleet {
 	readonly #stops: Received[] = [];
 	readonly #missed = new Set<string>();
 	readonly #waiters = new Set<() => void>();
-	readonly #candidateMentions = new WeakMap<Bot, BotEvent[]>();
+	readonly #candidateMentions = new WeakMap<Bot, { pending: BotEvent[]; dropped: BotEvent[] }>();
+	readonly #beforeSave?: () => Promise<void>;
 	readonly #seenMessages = new Set<string>();
 	#activeNotices = 0;
 	#controlRejectionHandler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>;
@@ -43,10 +44,11 @@ export class Fleet {
 	#mutation: Promise<void> = Promise.resolve();
 	#saveTail: Promise<void> = Promise.resolve();
 
-	private constructor(path: string, file: BotsFile, makeBot: BotFactory) {
+	private constructor(path: string, file: BotsFile, makeBot: BotFactory, beforeSave?: () => Promise<void>) {
 		this.#path = path;
 		this.#file = file;
 		this.#makeBot = makeBot;
+		this.#beforeSave = beforeSave;
 	}
 
 	/** Serialize administrative changes through network calls and disk commits. */
@@ -57,10 +59,10 @@ export class Fleet {
 	}
 
 	/** The fleet of `dataDir`'s discord.json, each bot connecting in the background. */
-	static async open(dataDir: string, makeBot: BotFactory = (onEvent) => new Bot(onEvent)): Promise<Fleet> {
+	static async open(dataDir: string, makeBot: BotFactory = (onEvent) => new Bot(onEvent), beforeSave?: () => Promise<void>): Promise<Fleet> {
 		const path = join(dataDir, "discord.json");
 		const { file, migrated } = parseBots(await optionalText(path));
-		const fleet = new Fleet(path, file, makeBot);
+		const fleet = new Fleet(path, file, makeBot, beforeSave);
 		if (migrated) await fleet.#save();
 		for (const [id, { token }] of Object.entries(file.bots)) void fleet.#start(id).connect(token);
 		return fleet;
@@ -204,16 +206,27 @@ export class Fleet {
 	/** A candidate may receive commands while its token is being durably persisted. */
 	#candidate(id: string): Bot {
 		const pending: BotEvent[] = [];
+		const dropped: BotEvent[] = [];
 		const bot: Bot = this.#makeBot((event) => {
 			if (this.#bots.get(id) === bot) {
 				this.#push({ bot: id, event });
 			} else if (event.kind === "message" && event.message.mentionsBot) {
-				// Bounded buffer: normal mentions can also be recovered from history.
-				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) pending.shift();
+				const isStop = (item: BotEvent): boolean =>
+					item.kind === "message" && !!bot.client?.user?.id &&
+					commandOf(item.message.text, bot.client.user.id) === "stop";
+				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) {
+					// Reserve candidate space for stop. Drop an older non-stop
+					// first; never silently discard a stop under a status flood.
+					const index = pending.findIndex((item) => !isStop(item));
+					const displaced = index < 0 ? (isStop(event) ? pending.shift() : event)
+						: pending.splice(index, 1)[0];
+					if (displaced && dropped.length < MAX_EARLY_CANDIDATE_MENTIONS) dropped.push(displaced);
+					if (displaced === event) return;
+				}
 				pending.push(event);
 			}
 		});
-		this.#candidateMentions.set(bot, pending);
+		this.#candidateMentions.set(bot, { pending, dropped });
 		return bot;
 	}
 
@@ -222,7 +235,7 @@ export class Fleet {
 		this.#bots.set(id, bot);
 		// Replay commands received between candidate connection and persistence.
 		// Duplicate old/new gateway events are deduplicated by their Discord IDs.
-		const early = this.#candidateMentions.get(bot) ?? [];
+		const { pending: early, dropped } = this.#candidateMentions.get(bot) ?? { pending: [], dropped: [] };
 		this.#candidateMentions.delete(bot);
 		const discordBotId = bot.client?.user?.id;
 		if (discordBotId) {
@@ -230,6 +243,9 @@ export class Fleet {
 				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
 					this.#push({ bot: id, event });
 			}
+			for (const event of dropped)
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
+					this.notifyControlRejected(id, event.message);
 		}
 		bot.subscribe(() => {
 			const saved = this.#file.bots[id];
@@ -325,6 +341,7 @@ export class Fleet {
 	async #save(file: BotsFile = this.#file): Promise<void> {
 		const snapshot = `${JSON.stringify(file, null, "\t")}\n`;
 		const persist = async () => {
+			await this.#beforeSave?.();
 			// Each attempt has its own temp file; the queue also prevents stale snapshots from winning.
 			const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
 			try {
