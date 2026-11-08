@@ -19,6 +19,7 @@ export type Received = { bot: string; event: BotEvent };
 
 const MAX_QUEUED = 2_048;
 const MAX_URGENT = 256;
+const MAX_STOPS = 128;
 const MAX_EARLY_CANDIDATE_MENTIONS = 128;
 const MAX_DEDUPLICATED_MESSAGES = 8_192;
 const MAX_REJECTION_NOTICES = 8;
@@ -31,6 +32,7 @@ export class Fleet {
 	readonly #listeners = new Set<() => void>();
 	readonly #queue: Received[] = [];
 	readonly #urgent: Received[] = [];
+	readonly #stops: Received[] = [];
 	readonly #missed = new Set<string>();
 	readonly #waiters = new Set<() => void>();
 	readonly #candidateMentions = new WeakMap<Bot, BotEvent[]>();
@@ -171,8 +173,8 @@ export class Fleet {
 	/** The next received event, or undefined when `signal` aborts. */
 	async next(signal: AbortSignal): Promise<Received | undefined> {
 		while (!signal.aborted) {
-			// Stop/status/compact bypass slow history delivery, including when the normal queue is saturated.
-			const received = this.#urgent.shift() ?? this.#queue.shift();
+			// Emergency stop has its own ingress capacity, unaffected by status floods.
+			const received = this.#stops.shift() ?? this.#urgent.shift() ?? this.#queue.shift();
 			if (received) return received;
 			const bot = this.#missed.values().next().value;
 			if (bot !== undefined) {
@@ -283,9 +285,17 @@ export class Fleet {
 				this.#seenMessages.delete(this.#seenMessages.values().next().value!);
 		}
 		const botId = this.#bots.get(received.bot)?.client?.user?.id;
-		const urgent = event.kind === "message" && event.message.mentionsBot &&
-			botId !== undefined && commandOf(event.message.text, botId) !== undefined;
-		if (urgent) {
+		const command = event.kind === "message" && event.message.mentionsBot && botId !== undefined
+			? commandOf(event.message.text, botId) : undefined;
+		const urgent = command !== undefined;
+		if (command === "stop") {
+			if (this.#stops.length >= MAX_STOPS) {
+				const rejected = this.#stops.shift();
+				if (rejected?.event.kind === "message")
+					this.notifyControlRejected(rejected.bot, rejected.event.message);
+			}
+			this.#stops.push(received);
+		} else if (urgent) {
 			if (this.#urgent.length === MAX_URGENT) {
 				console.error("p2 discord: control queue saturated; rejecting oldest command");
 				const dropped = this.#urgent.shift();
