@@ -405,7 +405,7 @@ export class Relay {
 		const binding = state.bindings[pending.channelId];
 		return this.#pendingMatches(state.pending[pending.messageId], pending) &&
 			binding !== undefined && binding.session === pending.session && binding.botId === pending.botId &&
-			(pending.linkGeneration === undefined || binding.generation === pending.linkGeneration);
+			binding.generation === pending.linkGeneration;
 	}
 
 	async #forget(pending: Pending): Promise<void> {
