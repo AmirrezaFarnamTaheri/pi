@@ -13,6 +13,7 @@ import type { ConversationView } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT, type SessionLock } from "@p2/app/v1";
 import { Chat, ChatCosts } from "../../plugins/chat/contract.ts";
 import type { Binding } from "../../plugins/discord/contract.ts";
+import { resumeLinkRepairs, type LinkRepairState } from "../../plugins/discord/link-recovery.ts";
 import { DISCORD_BATCH, Discord, DiscordIngress, DiscordV2 } from "../../plugins/discord/contract.ts";
 import {
 	batchOf,
@@ -217,6 +218,61 @@ function setup(initial: Binding = binding(), onCatchUpPending?: (bot: string) =>
 
 describe("discord relay", () => {
 
+
+	it("revokes ingress, drains submitted delivery, cancels worker turns and only then unlocks during recovery", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const order: string[] = [];
+		let unblock!: () => void;
+		const deliveryGate = new Promise<void>((resolve) => { unblock = resolve; });
+		let entered!: () => void;
+		const started = new Promise<void>((resolve) => { entered = resolve; });
+		const originalDeliver = sessions.deliver.bind(sessions);
+		sessions.deliver = async (session, input) => {
+			order.push("delivery-started");
+			entered();
+			await deliveryGate;
+			order.push("delivery-finished");
+			return originalDeliver(session, input);
+		};
+		const triggered = relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> important`)));
+		await started;
+		let repairs: LinkRepairState["repairs"] = {
+			s1: { session: "s1", kind: "unlink", lock: null,
+				expectedWriteId: "locked", writeId: "unlocked" },
+		};
+		const store = {
+			value: (): LinkRepairState => ({ ...state(), repairs }),
+			change: async (edit: (draft: LinkRepairState) => void) => {
+				const draft = structuredClone({ ...state(), repairs });
+				edit(draft);
+				Object.assign(state(), { bindings: draft.bindings, pending: draft.pending });
+				repairs = draft.repairs;
+			},
+		};
+		const recovery = resumeLinkRepairs(store, async () => {
+			order.push("unlocked"); return true;
+		}, {
+			readLock: async () => ({ lock: null, writeId: "locked" }),
+			beforeUnlock: async (session) => {
+				order.push("drain-start");
+				await relay.waitForSession(session);
+				order.push("drain-finished");
+			},
+			notifyUnlinked: async () => {
+				order.push("turns-cancelled");
+			},
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(state().bindings.c1, undefined, "unlink revokes ingress immediately");
+		assert.equal(order.includes("unlocked"), false, "active admission must retain the lock");
+		unblock();
+		await Promise.all([triggered, recovery]);
+		assert.deepEqual(order, [
+			"delivery-started", "drain-start", "delivery-finished", "drain-finished",
+			"turns-cancelled", "unlocked",
+		]);
+		assert.equal(state().bindings.c1, undefined);
+	});
 	it("drains an in-flight session delivery before an unlink may release its lock", async () => {
 		const { discord, sessions, relay } = setup();
 		sessions.slow = 75;
