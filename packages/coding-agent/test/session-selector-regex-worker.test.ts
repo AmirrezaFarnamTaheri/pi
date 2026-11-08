@@ -167,6 +167,30 @@ describe("isolated session regex search", () => {
 		}
 	});
 
+
+	it("bounds retained full-transcript text independent of total message count", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-memory-limit-"));
+		try {
+			const path = join(directory, "large.jsonl");
+			writeFileSync(path, Array.from({ length: 1_000 }, (_, index) =>
+				JSON.stringify({ type: "message", message: { role: "user",
+					content: `line ${index} ` + "x".repeat(100) } }),
+			).join("\n") + "\n");
+			const fixture = { ...session("large", "x".repeat(100_000)), path };
+			const incomplete: string[][] = [];
+			const result = await filterSessionsByRegexInWorker([fixture], "no-match", "recent",
+				undefined, (ids) => incomplete.push(ids), { maxSessionTextChars: 16_384 });
+			expect(result).toEqual([]);
+			expect(incomplete).toEqual([["large"]]);
+			// The production cap is 16 MiB; the test uses a much smaller injected
+			// cap to deterministically prove we stop retaining text past the limit.
+			await expect(filterSessionsByRegexInWorker([fixture], "x", "recent",
+					undefined, undefined, { maxSessionTextChars: 32 * 1024 * 1024 })).rejects.toThrow(/cap/i);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves recent order across worker batches", async () => {
 		const items = Array.from({ length: 51 }, (_, index) =>
 			session(`s${index}`, index % 3 === 0 ? "match" : "miss"),
