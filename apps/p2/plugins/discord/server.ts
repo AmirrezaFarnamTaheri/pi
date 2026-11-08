@@ -28,6 +28,7 @@ import { Catalog, SessionLocks, SessionMoves } from "../sessions/contract.ts";
 import { StatusStore } from "../status/contract.ts";
 import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema } from "./contract.ts";
 import { FIRST_BOT, Fleet } from "./fleet.ts";
+import { LinkMutationQueue } from "./link-mutations.ts";
 import { commandOf, Relay, type RelayState, type SessionPort } from "./relay.ts";
 import { DiscordScheduler } from "./scheduler.ts";
 
@@ -101,12 +102,8 @@ export default defineFacet((host) => {
 		};
 		// Owner link mutations may await remote Discord calls; serialize their entire
 		// transaction, including unlink, to preserve the one-session/one-channel invariant.
-		let linkTail: Promise<void> = Promise.resolve();
-		const linkExclusive = <T>(action: () => Promise<T>): Promise<T> => {
-			const result = linkTail.then(action, action);
-			linkTail = result.then(() => {}, () => {});
-			return result;
-		};
+		const linkMutations = new LinkMutationQueue();
+		const linkExclusive = <T>(action: () => Promise<T>): Promise<T> => linkMutations.run(action);
 		const relay = new Relay((bot) => fleet.value.connected(bot), sessions, {
 			// The state's drafts are the same JSON as the relay's plain records.
 			value: () => state.value as RelayState,
