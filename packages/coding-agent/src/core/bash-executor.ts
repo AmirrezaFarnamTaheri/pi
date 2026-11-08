@@ -7,6 +7,7 @@
  */
 
 import type { WriteStream } from "node:fs";
+import { finished } from "node:stream/promises";
 import { splitIncompleteAnsiSuffix, stripAnsi } from "../utils/ansi.ts";
 import { createOutputFileStream } from "../utils/output-files.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
@@ -58,15 +59,50 @@ export async function executeBashWithOperations(
 
 	let tempFilePath: string | undefined;
 	let tempFileStream: WriteStream | undefined;
+	let tempFileFailed = false;
 	let totalBytes = 0;
 
-	const ensureTempFile = () => {
-		if (tempFilePath) {
-			return;
+	const disableTempFile = () => {
+		tempFileFailed = true;
+		tempFilePath = undefined;
+		tempFileStream = undefined;
+	};
+
+	const writeTempFile = (chunk: string) => {
+		const stream = tempFileStream;
+		if (!stream || tempFileFailed) return;
+		try {
+			stream.write(chunk);
+		} catch {
+			// A failed spool must not take down a successful command.
+			disableTempFile();
 		}
-		({ path: tempFilePath, stream: tempFileStream } = createOutputFileStream("pi-bash", ".log"));
-		for (const chunk of outputChunks) {
-			tempFileStream.write(chunk);
+	};
+
+	const ensureTempFile = () => {
+		if (tempFilePath || tempFileFailed) return;
+		try {
+			const { path, stream } = createOutputFileStream("pi-bash", ".log");
+			tempFilePath = path;
+			tempFileStream = stream;
+			// Node write streams report open and write failures asynchronously.
+			// Register before writing, even for a failed initial open.
+			stream.on("error", disableTempFile);
+			for (const chunk of outputChunks) writeTempFile(chunk);
+		} catch {
+			disableTempFile();
+		}
+	};
+
+	const finishTempFile = async () => {
+		const stream = tempFileStream;
+		if (!stream) return;
+		try {
+			if (!stream.destroyed) stream.end();
+			// Do not expose a path until every write has actually finished.
+			await finished(stream);
+		} catch {
+			disableTempFile();
 		}
 	};
 
@@ -86,9 +122,7 @@ export async function executeBashWithOperations(
 			ensureTempFile();
 		}
 
-		if (tempFileStream) {
-			tempFileStream.write(text);
-		}
+		writeTempFile(text);
 
 		// Keep rolling buffer
 		outputChunks.push(text);
@@ -124,7 +158,7 @@ export async function executeBashWithOperations(
 	} catch (err) {
 		// An aborted command still returns the output it produced so far
 		if (!options?.signal?.aborted) {
-			tempFileStream?.end();
+			await finishTempFile();
 			throw err;
 		}
 	}
@@ -135,7 +169,7 @@ export async function executeBashWithOperations(
 	if (truncationResult.truncated) {
 		ensureTempFile();
 	}
-	tempFileStream?.end();
+	await finishTempFile();
 	const cancelled = options?.signal?.aborted ?? false;
 
 	return {
