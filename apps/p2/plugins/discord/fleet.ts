@@ -92,7 +92,7 @@ export class Fleet {
 			const same = this.views().find(
 				(view) => view.status.state === "connected" && view.status.applicationId === status.applicationId,
 			);
-			if (same) {
+			if (same || Object.values(this.#file.bots).some((saved) => saved.applicationId === status.applicationId)) {
 				await bot.close();
 				throw new Error(`${status.user} is added already`);
 			}
