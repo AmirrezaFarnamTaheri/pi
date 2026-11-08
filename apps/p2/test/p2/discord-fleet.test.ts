@@ -159,35 +159,53 @@ describe("Discord fleet persistence and identity isolation", () => {
 	});
 
 
-	it("buffers a control message received while replacing a token until the candidate is committed", async () => {
+	it("preserves candidate stop during blocked disk save, even with offline prior bot and duplicate gateway traffic", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-candidate-"));
 		const created: FakeBot[] = [];
+		let blockSave = false;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		let signalSaving!: () => void;
+		const saving = new Promise<void>((resolve) => { signalSaving = resolve; });
 		try {
 			const fleet = await Fleet.open(dir, (onEvent) => {
 				const bot = new FakeBot(onEvent);
 				created.push(bot);
 				return bot as unknown as Bot;
-			});
+			}, async () => { if (blockSave) { signalSaving(); await gate; } });
 			const id = await fleet.add("app-one:original");
-			await fleet.next(new AbortController().signal); // initial ready
-			await fleet.setToken(id, "app-one:early-command");
-			const first = await fleet.next(new AbortController().signal);
-			assert(first?.event.kind === "message", "candidate command was preserved at handoff");
-			assert.equal(first.event.message.id, "777");
-			assert.equal(first.bot, id);
-			const after = await fleet.next(new AbortController().signal);
-			assert.equal(after?.event.kind, "ready");
-			// A duplicated gateway message after adoption must not execute twice.
-			created[1]!.emit(first.event);
-			const abort = new AbortController();
-			abort.abort();
-			assert.equal(await fleet.next(abort.signal), undefined);
+			await fleet.next(new AbortController().signal);
+			blockSave = true;
+			const changing = fleet.setToken(id, "app-one:replacement");
+			await saving;
+			created[0]!.client = undefined; // simulate old gateway offline
+			const control: BotEvent = { kind: "message", message: {
+				id: "777", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
+				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
+			} };
+			created[1]!.emit(control);
+			for (let i = 0; i < 160; i++) created[1]!.emit({ kind: "message", message: {
+				...control.message, id: String(10_000 + i), text: "<@999> status",
+			} });
+			release();
+			await changing;
+			const first = await fleet.next(AbortSignal.timeout(1_000));
+			assert(first?.event.kind === "message");
+			assert.equal(first.event.message.id, "777", "stop survived an overfull candidate handoff");
+			created[1]!.emit(control);
+			let duplicates = 0;
+			for (;;) {
+				const event = await fleet.next(AbortSignal.timeout(25));
+				if (!event) break;
+				if (event.event.kind === "message" && event.event.message.id === "777") duplicates++;
+			}
+			assert.equal(duplicates, 0, "a post-adoption duplicate must not be queued");
 			await fleet.close();
 		} finally {
+			release?.();
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
-
 
 	it("reserves stop ingress priority under a saturated status-command buffer", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-emergency-"));
