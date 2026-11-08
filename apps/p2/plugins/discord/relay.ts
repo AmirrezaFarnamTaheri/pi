@@ -478,7 +478,7 @@ export class Relay {
 		}
 		const tooLarge = turn.files.filter((file) => file.size > limit);
 		if (tooLarge.length)
-			text += `${text ? "\\n\\n" : ""}Too large for Discord: ${tooLarge.map((file) => `${file.name} (${megabytes(file.size)})`).join(", ")}`;
+			text += `${text ? "\n\n" : ""}Too large for Discord: ${tooLarge.map((file) => `${file.name} (${megabytes(file.size)})`).join(", ")}`;
 		const groups = attachmentGroups(turn.files.filter((file) => file.size <= limit), limit);
 		const posts: { text: string; files: OfferedFile[] }[] = chunkText(text).map((chunk) => ({ text: chunk, files: [] }));
 		for (const [index, group] of groups.entries()) {
