@@ -70,7 +70,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 
 		// Title
-		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
+		this.addChild(new TruncatedText(theme.fg("muted", "Account setup  ·  Esc to cancel"), 1, 0));
+		this.addChild(new Spacer(1));
 
 		// Dynamic content area
 		this.contentContainer = new Container();
@@ -241,7 +243,11 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input.setMask(secret);
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
-		if (placeholder) {
+		if (secret) {
+			this.contentContainer.addChild(new TruncatedText(theme.fg("muted",
+				"● Hidden input  ·  cleared after submission"), 1, 0));
+		}
+		if (placeholder && !secret) {
 			this.contentContainer.addChild(new Text(theme.fg("dim", `e.g., ${placeholder}`), 1, 0));
 		}
 		this.contentContainer.addChild(this.input);
