@@ -90,6 +90,8 @@ describe("Discord fleet persistence and identity isolation", () => {
 				return bot as unknown as Bot;
 			});
 			const id = await fleet.add("app-one:key");
+			// Ignore the normal connection notification before asserting message priority.
+			await fleet.next(new AbortController().signal);
 			const bot = created[0]!;
 			const normal = (text: string): BotEvent => ({
 				kind: "message",
