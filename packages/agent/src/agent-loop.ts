@@ -653,6 +653,8 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
+	// Reject unsafe configuration before firing start events or permission hooks.
+	const concurrency = configuredParallelToolLimit(config.maxParallelToolExecutions);
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
@@ -709,7 +711,7 @@ async function executeToolCallsParallel(
 	// only runs a bounded number of independent tools at once.
 	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(
 		finalizedCalls,
-		configuredParallelToolLimit(config.maxParallelToolExecutions),
+		concurrency,
 	);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
