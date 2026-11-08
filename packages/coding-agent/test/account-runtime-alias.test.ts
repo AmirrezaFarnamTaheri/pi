@@ -116,3 +116,32 @@ test("does not reuse an original provider's ambient API key in an added account"
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("two gateway logins retain distinct keys and endpoints without replacing each other", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-independent-gateway-"));
+	try {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null, accountProfilesPath: join(directory, "profiles.json"),
+			allowModelNetwork: false, refreshOnCreate: false,
+		});
+		const login = (providerId: string, key: string, endpoint: string) =>
+			runtime.login(providerId, "api_key", {
+				signal: new AbortController().signal,
+				prompt: async (prompt) => prompt.type === "secret" ? key : endpoint,
+				notify: () => {},
+			});
+		await login("antigravity-manager", "original-gateway-key", "http://127.0.0.1:8045/v1");
+		const alternate = runtime.addAccountAlias("antigravity-manager", "Second gateway");
+		await login(alternate.id, "separate-gateway-key", "https://example.test/relay/v1");
+		const first = await runtime.getAuth("antigravity-manager");
+		const second = await runtime.getAuth(alternate.id);
+		assert.equal(first?.auth.apiKey, "original-gateway-key");
+		assert.equal(second?.auth.apiKey, "separate-gateway-key");
+		assert.equal(first?.auth.baseUrl, "http://127.0.0.1:8045/v1");
+		assert.equal(second?.auth.baseUrl, "https://example.test/relay/v1");
+		assert.deepEqual(runtime.getAccountProfiles().map((profile) => profile.id), [alternate.id]);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
