@@ -20,7 +20,7 @@ const evaluation = summarizeAgentEvaluations([
 ]);
 \`\`\`
 
-The observer reports per-run wall time, first visible text latency, assistant requests, turns, tool count, tool errors, tool execution durations, tool-result UTF-8 bytes, manually reported retries, provider input/output/cache/reasoning tokens, total and provider-billed USD cost, and nested-tool model usage. Reasoning is a subset of output. Prompt-cache reads are included in total context tokens; they are not the same as input-token reduction. For user-facing reports, \`cacheReadFraction\` is the ratio of cache reads to all prompt input tokens.
+The observer reports per-run and per-turn wall time, per-turn token and cost breakdowns, first visible text latency, assistant requests, turns, tool count, tool errors, tool execution durations, tool-result UTF-8 bytes, manually reported retries, provider input/output/cache/reasoning tokens, total and provider-billed USD cost, and nested-tool model usage. Reasoning is a subset of output. Prompt-cache reads are included in total context tokens; they are not the same as input-token reduction. For user-facing reports, \`cacheReadFraction\` is the ratio of cache reads to all prompt input tokens.
 
 The \`AgentPerformanceMonitor\` snapshots do **not** contain prompts, model text, tool arguments, file paths, or tool output. \`report().status === "finished"\` is a lifecycle result, **not** a quality judgment. Correctness and success must be supplied by independent tests/evaluations. A report of task costs divided by zero successes uses \`null\` rather than Infinity.
 
