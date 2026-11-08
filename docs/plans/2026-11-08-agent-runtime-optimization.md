@@ -32,7 +32,7 @@
 - Produces: reproducible six-job build/test results and versioned JSON performance artifacts
 
 - [ ] Confirm the repo's **Settings → Actions → General** permits workflows and the CI workflow is enabled; this requires owner-side GitHub settings access that the connected GitHub tool does not expose.
-- [ ] Run `gh workflow run ci.yml --ref hardening/reliability-sync-bench-20261108` after enabling and confirm run ID, head SHA, test outcome.
+- [ ] Trigger a new pull-request event from the GitHub UI (close/reopen PR #4) or a user-authored branch push after Actions are enabled; confirm run ID, head SHA and full job outcomes. `gh workflow run` is not available until `workflow_dispatch` is present on the default branch.
 - [ ] Verify the benchmark suite after `npm ci --ignore-scripts && npm run hydrate:model-data && npm run build:offline` using `npm run bench:runtime -- --entries 12000 --samples 12 --warmups 3 --output .artifacts/runtime-baseline.json`.
 - [ ] Confirm the full CI job matrix passes without skipped test groups, and that Windows/Linux releases smoke-test the correct installed fork binary.
 - [ ] Gate all subsequent merges on these checks.
