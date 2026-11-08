@@ -181,7 +181,7 @@ function binding(patch: Partial<Binding> = {}): Binding {
 	};
 }
 
-function setup(initial: Binding = binding()) {
+function setup(initial: Binding = binding(), onCatchUpPending?: (bot: string) => void) {
 	const discord = new FakeDiscord();
 	discord.add({ id: "c1", name: "general", guildId: "g1", guildName: "Guild", lastMessageId: null });
 	discord.add({
@@ -203,7 +203,7 @@ function setup(initial: Binding = binding()) {
 			update(draft);
 			state = draft;
 		},
-	});
+	}, onCatchUpPending);
 	return { discord, sessions, relay, offline, state: () => state };
 }
 
@@ -626,6 +626,23 @@ describe("discord relay", () => {
 		assert.equal(lines.length, 201);
 		assert.equal(lines[1], "Ada: line 251");
 		assert.equal(lines.at(-1), "Ada: @Pi what happened?");
+	});
+
+
+	it("bounds each disconnected catch-up scan and persists its resumable progress", async () => {
+		const continued: string[] = [];
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
+		for (let index = 0; index < 450; index++) discord.say("c1", message(`chatter ${index}`));
+		const trigger = discord.say("c1", message(`<@${BOT}> latest question`));
+		await relay.catchUp("bot-a");
+		assert(discord.requests.length <= 4, "the catch-up scan must not exhaust arbitrary history in one task");
+		assert.equal(sessions.delivered.length, 0, "the trigger is beyond this scan slice");
+		assert.equal(continued.length, 1, "a bounded continuation must be requested");
+		assert(state().bindings.c1?.catchUpScan, "the scan checkpoint must survive reconnects");
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1);
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${trigger.id}`);
+		assert.equal(state().bindings.c1?.cursor, trigger.id);
 	});
 
 	it("catches up after downtime: one batch per link and thread, every message from the cursor to the newest allowed mention", async () => {
