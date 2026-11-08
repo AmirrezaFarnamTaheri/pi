@@ -4,7 +4,7 @@
 // unlinking lifts the lock.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { obj } from "@earendil-works/pi-schema";
+import { nul, obj, opt, str, union } from "@earendil-works/pi-schema";
 import {
 	type AcceptsTable,
 	BACKGROUND_CONTEXT,
@@ -17,6 +17,7 @@ import {
 	isOwner,
 	type Ref,
 	record,
+	SessionLockSchema,
 	signalOf,
 	sleep,
 } from "@p2/app/v1";
@@ -26,23 +27,32 @@ import { EnvService } from "../envs/contract.ts";
 import { isSandbox } from "../envs/schema.ts";
 import { Catalog, SessionLocks, SessionMoves } from "../sessions/contract.ts";
 import { StatusStore } from "../status/contract.ts";
-import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema } from "./contract.ts";
+import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema, WakeSchema } from "./contract.ts";
 import { FIRST_BOT, Fleet } from "./fleet.ts";
 import { LinkMutationQueue } from "./link-mutations.ts";
+import { removeSessionBinding, resumeLinkRepairs, type LinkRepairState } from "./link-recovery.ts";
 import { commandOf, Relay, type RelayState, type SessionPort } from "./relay.ts";
 import { DiscordScheduler } from "./scheduler.ts";
 
+const LinkRepairSchema = obj({
+	kind: str(),
+	session: str(),
+	lock: union([SessionLockSchema, nul()]),
+	wake: opt(WakeSchema),
+});
+
 const State = defineState("p2.discord-bindings", {
-	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema) }),
-	// 2: several bots; links and pending replies name theirs (the first release's one bot is `FIRST_BOT`).
-	version: 2,
-	initial: () => ({ bindings: {}, pending: {} }),
+	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema), repairs: record(LinkRepairSchema) }),
+	// 3: persisted intent journal for interruption-safe lock/link operations.
+	version: 3,
+	initial: () => ({ bindings: {}, pending: {}, repairs: {} }),
 	migrate: (old, from) => {
+		if (from === 2) return { ...(old as Record<string, unknown>), repairs: {} } as never;
 		if (from !== 1) throw new Error(`Unknown p2.discord-bindings version ${from}`);
 		const value = old as { bindings: Record<string, object>; pending: Record<string, object> };
 		const named = (entries: Record<string, object>) =>
 			Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, { ...entry, botId: FIRST_BOT }]));
-		return { bindings: named(value.bindings), pending: named(value.pending) } as never;
+		return { bindings: named(value.bindings), pending: named(value.pending), repairs: {} } as never;
 	},
 	persist: true,
 	checkpointWhen: () => true,
