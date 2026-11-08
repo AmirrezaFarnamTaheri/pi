@@ -26,6 +26,7 @@ test("artifact-scoped SBOM walks workspace and transitive runtime dependencies b
     name: "monorepo", version: "0.1.0", lockfileVersion: 3,
     packages: {
       "": { name: "monorepo", version: "0.1.0", devDependencies: { unrelated: "1.0.0" } },
+      "node_modules/@scope/pi-coding-agent": { link: true, resolved: "packages/coding-agent" },
       "packages/coding-agent": { version: "1.5.0", dependencies: { "@scope/pi-ai": "1.5.0", "a": "1.0.0" } },
       "node_modules/@scope/pi-ai": { link: true, resolved: "packages/ai" },
       "packages/ai": { version: "1.5.0", dependencies: { "@scope/z": "2.0.0" } },
@@ -36,7 +37,7 @@ test("artifact-scoped SBOM walks workspace and transitive runtime dependencies b
   };
   const bom = createCycloneDxBom(lock, { rootPath: "packages/coding-agent", sourceSha: "123456" });
   assert.deepEqual(bom.components.map((part) => part.name), ["@scope/pi-ai", "@scope/z", "a"]);
-  assert.equal(bom.metadata.component.name, "packages/coding-agent");
+  assert.equal(bom.metadata.component.name, "@scope/pi-coding-agent");
   assert.throws(() => createCycloneDxBom(lock, { rootPath: "packages/does-not-exist" }), /Missing artifact root/i);
 });
 
