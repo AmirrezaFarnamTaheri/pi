@@ -132,7 +132,11 @@ export class AssistantMessageComponent extends Container {
 			// A completed block has the same output across streaming updates. Keep
 			// its cached wrap/transform result until source or stream state changes.
 			// Theme changes still force invalidation through invalidate().
-			if (reused && (slot.text !== text || streamingChanged)) markdown.setText(text);
+			// Extension transformers can depend on external mutable state, even
+			// if the source text is identical. Preserve their historical call semantics.
+			if (reused && (slot.text !== text || streamingChanged || this.markdownTransformers.length > 0)) {
+				markdown.setText(text);
+			}
 			this.markdownSlots.push({ kind, markdown, text });
 			return markdown;
 		};
