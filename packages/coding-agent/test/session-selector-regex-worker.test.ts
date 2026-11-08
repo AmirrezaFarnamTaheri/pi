@@ -116,6 +116,25 @@ describe("isolated session regex search", () => {
 		}
 	});
 
+
+	it("preserves beginning and end regex anchors across streamed JSONL chunks", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-anchors-"));
+		try {
+			const path = join(directory, "anchored.jsonl");
+			writeFileSync(path, [
+				JSON.stringify({ type: "message", message: { role: "user", content: "start-" + "x".repeat(150_000) } }),
+				JSON.stringify({ type: "message", message: { role: "assistant", content: "final" } }),
+			].join("\n") + "\n");
+			const item = { ...session("anchored", "x".repeat(100_000)), path };
+			const begin = await filterSessionsByRegexInWorker([item], "^final", "recent");
+			expect(begin).toEqual([]);
+			const end = await filterSessionsByRegexInWorker([item], "final$", "recent");
+			expect(end.map((entry) => entry.id)).toEqual(["anchored"]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves recent order across worker batches", async () => {
 		const items = Array.from({ length: 51 }, (_, index) =>
 			session(`s${index}`, index % 3 === 0 ? "match" : "miss"),
