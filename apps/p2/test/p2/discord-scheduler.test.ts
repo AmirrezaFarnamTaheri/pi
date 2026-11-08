@@ -76,6 +76,41 @@ describe("discord event scheduler", () => {
 		await scheduler.idle();
 	});
 
+
+	it("defers rejected catch-up triggers until capacity returns rather than spinning", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const missed: string[] = [];
+		const scheduler = new DiscordScheduler((bot) => missed.push(bot), () => {}, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "same", priority: false, run: () => gate });
+		scheduler.enqueue({ bot: "b", key: "same", priority: false, run: async () => {} });
+		assert.equal(scheduler.enqueue({ bot: "b", key: "catchup", priority: false, catchUp: true, run: async () => {} }), false);
+		assert.deepEqual(missed, [], "no immediate retry while queue remains saturated");
+		release();
+		await scheduler.idle();
+		assert.deepEqual(missed, ["b"], "one deferred retry is requested when capacity returns");
+	});
+
+	it("bounds asynchronous rejection notices even under sustained command overload", async () => {
+		let unblock!: () => void;
+		const gate = new Promise<void>((resolve) => { unblock = resolve; });
+		let notices = 0;
+		let freeNotices!: () => void;
+		const noticeGate = new Promise<void>((resolve) => { freeNotices = resolve; });
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: () => gate });
+		scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+		for (let i = 0; i < 100; i++) scheduler.enqueue({
+			bot: "b", key: "different", priority: true, run: async () => {},
+			onRejected: async () => { notices++; await noticeGate; },
+		});
+		await tick();
+		assert(notices <= 8, "rejection notices must use a bounded async pool");
+		freeNotices();
+		unblock();
+		await scheduler.idle();
+	});
+
 	it("bounds pending deliveries and requests a catch-up instead of storing unbounded events", async () => {
 		const missed: string[] = [];
 		let release!: () => void;
