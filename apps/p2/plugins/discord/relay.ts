@@ -95,6 +95,8 @@ export type StatePort = {
 export const PAGE = 100;
 /** Messages one batch puts into the input at most: the newest; the header counts the earlier ones left out. */
 export const BATCH_CAP = 200;
+/** Maximum Discord history API pages examined in one catch-up invocation, across all links. */
+export const CATCH_UP_PAGES = 4;
 /** Discord's limit for one message's text. */
 export const MESSAGE_LIMIT = 2000;
 /** Attachments up to this size are downloaded into the session; larger ones are listed as links. */
@@ -117,12 +119,19 @@ export class Relay {
 	readonly #delivering = new Map<string, { bot: string; count: number }>();
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
+	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
 
 	/** `discord`: bot `bot` while it is connected. */
-	constructor(discord: (bot: string) => DiscordPort | undefined, sessions: SessionPort, state: StatePort) {
+	constructor(
+		discord: (bot: string) => DiscordPort | undefined,
+		sessions: SessionPort,
+		state: StatePort,
+		resumeCatchUp?: (bot: string) => void,
+	) {
 		this.#discord = discord;
 		this.#sessions = sessions;
 		this.#state = state;
+		this.#resumeCatchUp = resumeCatchUp;
 	}
 
 	#port(bot: string): DiscordPort {
@@ -347,33 +356,73 @@ export class Relay {
 	 */
 	async catchUp(bot: string): Promise<void> {
 		const port = this.#port(bot);
-		for (const binding of Object.values(this.#state.value().bindings)) {
+		let remaining = CATCH_UP_PAGES;
+		let continuation = false;
+		links: for (const binding of Object.values(this.#state.value().bindings)) {
 			if (binding.botId !== bot) continue;
-			const places: { id: string; cursor: string | null; thread: boolean }[] = [
-				{ id: binding.channelId, cursor: binding.cursor, thread: false },
-				...Object.entries(binding.threads).map(([id, known]) => ({ id, cursor: known.cursor, thread: true })),
+			const places: { id: string; cursor: string | null; scan?: string; thread: boolean }[] = [
+				{ id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan, thread: false },
+				...Object.entries(binding.threads).map(([id, known]) => ({
+					id, cursor: known.cursor, scan: known.catchUpScan, thread: true,
+				})),
 			];
 			for (const place of places) {
+				if (remaining === 0) {
+					continuation = true;
+					break links;
+				}
 				try {
+					// Scanning has its own persisted checkpoint; delivery still starts at the last
+					// delivered cursor so chatter before a later mention is not lost.
+					let after = place.scan && (place.cursor === null || BigInt(place.scan) > BigInt(place.cursor))
+						? place.scan : place.cursor ?? "0";
 					let newest: DiscordMessage | undefined;
-					// A missed command is stale: it neither runs nor triggers a delivery.
-					for await (const message of history(port, place.id, place.cursor))
-						if (
-							!message.author.bot &&
-							message.mentionsBot &&
-							mayWake(binding.wake, message.author.id, message.roles) &&
-							!this.#isCommand(binding, message, port.botId)
-						)
-							newest = message;
-					if (!newest) continue;
-					const thread = place.thread ? await port.channel(place.id) : undefined;
-					await this.deliver(binding.channelId, newest, thread);
+					let more = false;
+					let scanned = false;
+					do {
+						const page = await port.messages(place.id, { after, limit: PAGE });
+						remaining--;
+						if (!page.length) {
+							more = false;
+							break;
+						}
+						scanned = true;
+						for (const message of page)
+							if (
+								!message.author.bot &&
+								message.mentionsBot &&
+								mayWake(binding.wake, message.author.id, message.roles) &&
+								!this.#isCommand(binding, message, port.botId)
+							)
+								newest = message;
+						after = page.at(-1)!.id;
+						more = page.length === PAGE;
+					} while (more && remaining > 0);
+					if (newest) {
+						const thread = place.thread ? await port.channel(place.id) : undefined;
+						await this.deliver(binding.channelId, newest, thread);
+					}
+					if (scanned) await this.#state.change((draft) => {
+						const current = draft.bindings[binding.channelId];
+						if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
+						const target = place.thread ? current.threads[place.id] : current;
+						if (!target) return;
+						if (target.cursor !== null && BigInt(after) <= BigInt(target.cursor))
+							delete target.catchUpScan;
+						else target.catchUpScan = after;
+					});
+					if (more) continuation = true;
+					if (remaining === 0) {
+						continuation = true;
+						break links;
+					}
 				} catch (error) {
 					// A channel or thread that went away (or a session that cannot take it) skips only itself.
 					console.error("p2 discord: catching up failed:", error instanceof Error ? error.message : error);
 				}
 			}
 		}
+		if (continuation) this.#resumeCatchUp?.(bot);
 	}
 
 	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
