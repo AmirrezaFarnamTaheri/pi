@@ -6130,7 +6130,16 @@ export class InteractiveMode {
 	}
 
 	private async enableAccountRotation(sourceProviderId: string): Promise<void> {
-		const virtual = this.session.modelRuntime.getModel("account-profiles", sourceProviderId);
+		const runtime = this.session.modelRuntime;
+		const members = [sourceProviderId, ...runtime.getAccountProfiles()
+			.filter((profile) => profile.sourceProviderId === sourceProviderId)
+			.map((profile) => profile.id)];
+		const connected = members.filter((providerId) => runtime.hasConfiguredAuth(providerId));
+		if (connected.length < 2) {
+			this.showError("Sign in to at least two distinct accounts for this provider before enabling rotation.");
+			return;
+		}
+		const virtual = runtime.getModel("account-profiles", sourceProviderId);
 		if (!virtual) { this.showError("Add another account for this provider to enable rotation."); return; }
 		try {
 			await this.session.setModel(virtual, { persist: true });
@@ -6145,8 +6154,12 @@ export class InteractiveMode {
 	private showAccountRotationSelector(): void {
 		const sources = [...new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.sourceProviderId))];
 		if (sources.length === 0) { this.showStatus("Add a second account before enabling rotation."); return; }
-		const items = sources.map((source) => ({ source,
-			name: this.session.modelRuntime.getModel("account-profiles", source)?.name ?? source }));
+		const items = sources.map((source) => {
+			const memberIds = [source, ...this.session.modelRuntime.getAccountProfiles()
+				.filter((profile) => profile.sourceProviderId === source).map((profile) => profile.id)];
+			const connected = memberIds.filter((id) => this.session.modelRuntime.hasConfiguredAuth(id)).length;
+			return { source, name: `${this.session.modelRuntime.getModel("account-profiles", source)?.name ?? source}  ·  ${connected} connected` };
+		});
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent("Choose an automatic rotation group",
 				items.map((item) => item.name),
