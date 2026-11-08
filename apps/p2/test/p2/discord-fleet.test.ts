@@ -138,6 +138,8 @@ describe("Discord fleet persistence and identity isolation", () => {
 			});
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			assert.equal(bot.replies.length, 1);
+			assert.equal(bot.replies[0]!.channelId, "channel");
+			assert.equal(bot.replies[0]!.messageId, "1");
 			assert.match(bot.replies[0]!.text, /not executed|retry/i);
 			await fleet.close();
 		} finally {
