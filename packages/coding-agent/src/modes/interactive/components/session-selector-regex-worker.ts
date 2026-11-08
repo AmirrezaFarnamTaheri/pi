@@ -5,111 +5,27 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = String.raw`
-"use strict";
-const { parentPort } = require("node:worker_threads");
-const { createReadStream } = require("node:fs");
-
-// Hard memory ceiling per JSONL entry; a huge single JSON string cannot be
-// parsed safely without a streaming JSON tokenizer, so reject it explicitly.
-const MAX_LINE_CHARS = 512 * 1024;
-const MATCH_CHUNK_CHARS = 16 * 1024;
-const MATCH_OVERLAP_CHARS = 16 * 1024;
-
-/** Incrementally scan JSONL user/assistant text without joining all messages. */
-async function matchHistoryFile(path, regex) {
-  let line = "";
-  let overlap = "";
-  let contentStarted = false;
-  let scannedChars = 0;
-  // Anchors belong to the entire transcript, never the temporary rolling window.
-  const startAnchored = regex.source.startsWith("^");
-  const endAnchored = regex.source.endsWith("$") && regex.source.at(-2) !== "\\";
-  const append = (text) => {
-    if (!text) return false;
-    for (let start = 0; start < text.length; start += MATCH_CHUNK_CHARS) {
-      const candidate = overlap + text.slice(start, start + MATCH_CHUNK_CHARS);
-      if (!endAnchored && (!startAnchored || scannedChars === 0) && regex.test(candidate)) return true;
-      scannedChars += text.slice(start, start + MATCH_CHUNK_CHARS).length;
-      overlap = candidate.slice(-MATCH_OVERLAP_CHARS);
-    }
-    return false;
-  };
-  const processLine = (json) => {
-    let entry;
-    try { entry = JSON.parse(json); } catch { return false; }
-    if (entry?.type !== "message") return false;
-    const message = entry.message;
-    if (!message || (message.role !== "user" && message.role !== "assistant")) return false;
-    const content = message.content;
-    const text = typeof content === "string"
-      ? [content]
-      : Array.isArray(content)
-        ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text)
-        : [];
-    for (const part of text) {
-      if (!part) continue;
-      if (contentStarted && append(" ")) return true;
-      contentStarted = true;
-      if (append(part)) return true;
-    }
-    return false;
-  };
-
-  for await (const chunk of createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 })) {
-    let start = 0;
-    while (start < chunk.length) {
-      const newline = chunk.indexOf("\n", start);
-      const fragment = newline === -1 ? chunk.slice(start) : chunk.slice(start, newline);
-      if (line.length + fragment.length > MAX_LINE_CHARS)
-        throw new Error("Session history line too large for bounded regex search");
-      line += fragment;
-      if (newline === -1) break;
-      if (processLine(line)) return true;
-      line = "";
-      start = newline + 1;
-    }
-  }
-  if (line && processLine(line)) return true;
-  return endAnchored && (!startAnchored || scannedChars <= MATCH_OVERLAP_CHARS)
-    ? regex.test(overlap)
-    : false;
-}
-
-parentPort.on("message", async ({ pattern, sessions }) => {
-  try {
-    const regex = new RegExp(pattern, "i");
-    const scores = [];
-    for (const { name, id, text, path, cwd } of sessions) {
-      if (name && regex.test(name)) { scores.push(0); continue; }
-      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }
-      scores.push(text === undefined
-        ? (await matchHistoryFile(path, regex) ? 1 : -1)
-        : (regex.test(text) ? 1 : -1));
-    }
-    parentPort.postMessage({ scores });
-  } catch (error) {
-    parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
-  }
-});
-`;
+const REGEX_WORKER_CODE = "\"use strict\";\nconst { parentPort } = require(\"node:worker_threads\");\nconst { createReadStream } = require(\"node:fs\");\n\n// JavaScript regex has unbounded lookaround, anchors, and backtracking.\n// Arbitrary patterns cannot be matched correctly with rolling windows.\n// Assemble one transcript up to a hard cap in a disposable worker; report\n// oversized or unreadable histories instead of returning false positives.\nconst MAX_LINE_CHARS = 512 * 1024;\nconst MAX_TEXT_CHARS = 16 * 1024 * 1024;\n\nasync function matchHistoryFile(path, regex) {\n  const chunks = [];\n  let length = 0;\n  let line = \"\";\n  const addText = (text) => {\n    const extra = text.length + (chunks.length ? 1 : 0);\n    if (length + extra > MAX_TEXT_CHARS) throw new Error(\"session text exceeds regex memory cap\");\n    if (chunks.length) length += 1;\n    chunks.push(text);\n    length += text.length;\n  };\n  const processLine = (raw) => {\n    let entry;\n    try { entry = JSON.parse(raw); } catch { return; }\n    if (entry?.type !== \"message\") return;\n    const message = entry.message;\n    if (!message || (message.role !== \"user\" && message.role !== \"assistant\")) return;\n    const content = message.content;\n    const text = typeof content === \"string\" ? content\n      : Array.isArray(content)\n        ? content.filter((part) => part?.type === \"text\").map((part) => part.text).join(\" \")\n        : \"\";\n    if (text) addText(text);\n  };\n  for await (const chunk of createReadStream(path, { encoding: \"utf8\", highWaterMark: 64 * 1024 })) {\n    let from = 0;\n    for (;;) {\n      const at = chunk.indexOf(\"\\n\", from);\n      const fragment = at < 0 ? chunk.slice(from) : chunk.slice(from, at);\n      if (line.length + fragment.length > MAX_LINE_CHARS)\n        throw new Error(\"session history line too large for regex search\");\n      line += fragment;\n      if (at < 0) break;\n      processLine(line);\n      line = \"\";\n      from = at + 1;\n    }\n  }\n  if (line) processLine(line);\n  return regex.test(chunks.join(\" \"));\n}\n\nparentPort.on(\"message\", async ({ pattern, sessions }) => {\n  try {\n    const regex = new RegExp(pattern, \"i\");\n    const scores = [];\n    const incomplete = [];\n    for (const { name, id, text, path, cwd } of sessions) {\n      if (name && regex.test(name)) { scores.push(0); continue; }\n      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }\n      try {\n        scores.push(text === undefined\n          ? (await matchHistoryFile(path, regex) ? 1 : -1)\n          : (regex.test(text) ? 1 : -1));\n      } catch {\n        incomplete.push(id);\n        scores.push(-1);\n      }\n    }\n    parentPort.postMessage({ scores, incomplete });\n  } catch (error) {\n    parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });\n  }\n});\n";
 
 const SEARCH_BUDGET_MS = 500;
 const BATCH_SIZE = 16;
 const MAX_PATTERN_LENGTH = 2048;
 const INLINE_TEXT_LIMIT = 64 * 1024;
-type SearchResponse = { scores?: number[]; error?: string };
+type SearchResponse = { scores?: number[]; incomplete?: string[]; error?: string };
 
 /**
  * Search full session texts off the UI thread. Serial batches bound the size
- * of each structured-clone transfer. Large JSONL files are scanned incrementally with bounded line buffers inside the
- * worker, and an idle batch deadline terminates non-progressing regex work.
+ * of each structured-clone transfer. Arbitrary regex needs a complete string to
+ * preserve JavaScript semantics, so the disposable worker reads one session at a time
+ * with explicit file/line and total-text memory caps; oversize entries are reported
+ * without hiding matches in other sessions.
  */
 export async function filterSessionsByRegexInWorker(
 	sessions: readonly SessionInfo[],
 	pattern: string,
 	sortMode: SortMode,
 	signal?: AbortSignal,
+	onIncomplete?: (sessionIds: string[]) => void,
 ): Promise<SessionInfo[]> {
 	if (!pattern || pattern.length > MAX_PATTERN_LENGTH) throw new Error("Invalid regex search length");
 	if (signal?.aborted) throw new Error("Regex search cancelled");
@@ -137,18 +53,22 @@ export async function filterSessionsByRegexInWorker(
 	resetIdleTimeout();
 
 	const matched: { session: SessionInfo; score: number }[] = [];
+	const incomplete: string[] = [];
 	try {
 		for (let start = 0; start < sessions.length; start += BATCH_SIZE) {
 			if (signal?.aborted) throw new Error("Regex search cancelled");
 			const batch = sessions.slice(start, start + BATCH_SIZE);
 			const scores = await new Promise<number[]>((resolve, rejectRequest) => {
-				const onMessage = ({ scores, error }: SearchResponse) => {
+				const onMessage = ({ scores, error, incomplete: missing }: SearchResponse) => {
 					resetIdleTimeout();
 					worker.off("message", onMessage);
 					rejectActive = undefined;
 					if (error) rejectRequest(new Error(error));
 					else if (!scores) rejectRequest(new Error("Regex worker returned no results"));
-					else resolve(scores);
+					else {
+						if (missing?.length) incomplete.push(...missing);
+						resolve(scores);
+					}
 				};
 				rejectActive = (error: Error) => {
 					worker.off("message", onMessage);
@@ -182,6 +102,7 @@ export async function filterSessionsByRegexInWorker(
 		if (sortMode !== "recent") {
 			matched.sort((left, right) => left.score - right.score || right.session.modified.getTime() - left.session.modified.getTime());
 		}
+		if (incomplete.length) onIncomplete?.(incomplete);
 		return matched.map(({ session }) => session);
 	} finally {
 		if (timeout !== undefined) clearTimeout(timeout);
