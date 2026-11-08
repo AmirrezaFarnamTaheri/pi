@@ -2,6 +2,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { auditForkWorkflows } from "./check-fork-workflows.mjs";
 
@@ -59,4 +61,23 @@ test("fork release uses hash-pinned catalog and requires a successful CI run for
   assert.match(release, /GITHUB_SHA/);
   assert.match(release, /git merge-base --is-ancestor/);
   assert.match(release, /sha256sum -c/);
+});
+
+test("corrupted release assets fail checksum verification before publication", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-fork-checksum-"));
+  try {
+    const filename = "release-asset.tar.gz";
+    writeFileSync(join(root, filename), "valid");
+    const hash = createHash("sha256").update("valid").digest("hex");
+    writeFileSync(join(root, "SHA256SUMS"), hash + "  " + filename + "\n");
+    assert.equal(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
+    writeFileSync(join(root, filename), "corrupted");
+    assert.notEqual(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
+    const release = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "fork-github-release.yml"), "utf8");
+    const publish = release.slice(release.indexOf("  publish-github-release:"));
+    assert.match(publish, /set -euo pipefail[\s\S]*sha256sum -c SHA256SUMS[\s\S]*gh release create/);
+    assert.doesNotMatch(publish.slice(0, publish.indexOf("gh release create")), /sha256sum -c SHA256SUMS\s*\|\|\s*true/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
