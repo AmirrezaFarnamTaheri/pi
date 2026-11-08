@@ -122,6 +122,33 @@ export class Relay {
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
 	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
+	/** Submission work pinned to its session until it has finished, including worker RPC. */
+	readonly #inFlight = new Map<string, Set<Promise<unknown>>>();
+
+	#trackSession<T>(session: string, task: Promise<T>): Promise<T> {
+		let active = this.#inFlight.get(session);
+		if (!active) {
+			active = new Set();
+			this.#inFlight.set(session, active);
+		}
+		active.add(task);
+		const done = () => {
+			active!.delete(task);
+			if (active!.size === 0 && this.#inFlight.get(session) === active) this.#inFlight.delete(session);
+		};
+		void task.then(done, done);
+		return task;
+	}
+
+	/** Unlink must revoke binding and await all worker submissions before removing its lock. */
+	async waitForSession(session: string): Promise<void> {
+		for (;;) {
+			const active = this.#inFlight.get(session);
+			if (!active?.size) return;
+			await Promise.allSettled([...active]);
+		}
+	}
+
 
 	/** `discord`: bot `bot` while it is connected. */
 	constructor(
@@ -161,9 +188,12 @@ export class Relay {
 		}
 		// Another bot in the channel may be mentioned too: only the link's own bot listens.
 		if (binding.botId !== bot || !mayWake(binding.wake, message.author.id, message.roles)) return;
+		// Invalidate an in-flight channel lookup if unlink/relink completed during that await.
+		const current = this.#state.value().bindings[binding.channelId];
+		if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
 		// A command runs now, never behind the delivery under way (a stop must reach the running turn).
 		const command = commandOf(message.text, port.botId);
-		if (command) await this.#command(binding, thread, message, command);
+		if (command) await this.#trackSession(binding.session, this.#command(binding, thread, message, command));
 		else await this.deliver(binding.channelId, message, thread);
 	}
 
@@ -211,7 +241,13 @@ export class Relay {
 	 * then advances the cursor and records the pending reply. A session that cannot take it gets a notice instead. One
 	 * delivery at a time per channel or thread: a later one starts from the cursor the earlier one left.
 	 */
-	async deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
+	deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
+		const session = this.#state.value().bindings[channelId]?.session;
+		const task = this.#deliverQueued(channelId, trigger, thread);
+		return session ? this.#trackSession(session, task) : task;
+	}
+
+	private async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
 		const target = thread?.id ?? channelId;
 		// "Typing" at once, before the wait for an earlier delivery and the history's pages: `typing()` refreshes it
 		// until the delivery ends, then the pending reply keeps it on.
