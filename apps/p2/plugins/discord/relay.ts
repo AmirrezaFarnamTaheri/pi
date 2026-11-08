@@ -194,7 +194,8 @@ export class Relay {
 		if (binding.botId !== bot || !mayWake(binding.wake, message.author.id, message.roles)) return;
 		// Invalidate an in-flight channel lookup if unlink/relink completed during that await.
 		const current = this.#state.value().bindings[binding.channelId];
-		if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
+		if (!current || current.session !== binding.session || current.generation !== binding.generation ||
+			!mayWake(current.wake, message.author.id, message.roles)) return;
 		// A command runs now, never behind the delivery under way (a stop must reach the running turn).
 		const command = commandOf(message.text, port.botId);
 		if (command) await this.#trackSession(binding.session, this.#command(binding, thread, message, command));
@@ -270,7 +271,7 @@ export class Relay {
 		return session ? this.#trackSession(session, task) : task;
 	}
 
-	private async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
+	async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
 		const target = thread?.id ?? channelId;
 		// "Typing" at once, before the wait for an earlier delivery and the history's pages: `typing()` refreshes it
 		// until the delivery ends, then the pending reply keeps it on.
