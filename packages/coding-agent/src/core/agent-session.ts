@@ -62,7 +62,7 @@ import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
-import { assertAccountRotationConsent } from "./account-rotation-consent.ts";
+import { allowedCycleModels, assertAccountRotationConsent } from "./account-rotation-consent.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -452,6 +452,8 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	/** Session-scoped consent; never inherited from a globally persisted rotation default. */
+	private _rotationConsentSessionId?: string;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
 	// Tool registry for extension getTools/setTools
@@ -1897,6 +1899,8 @@ export class AgentSession {
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+		if (this.model?.provider === "account-profiles")
+			assertAccountRotationConsent(this.model.provider, true, this._rotationConsentSessionId, this.sessionManager.getSessionId());
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -2156,6 +2160,8 @@ export class AgentSession {
 	 * Returns the run trigger, or undefined when the prompt was handled or queued.
 	 */
 	private async _preparePrompt(text: string, options?: PromptOptions): Promise<BeforeAgentStartTrigger | undefined> {
+		if (this.model?.provider === "account-profiles")
+			assertAccountRotationConsent(this.model.provider, true, this._rotationConsentSessionId, this.sessionManager.getSessionId());
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 
@@ -2606,6 +2612,7 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(model);
 		this.agent.state.model = model;
+		this._rotationConsentSessionId = model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2657,19 +2664,22 @@ export class AgentSession {
 		const availableIds = new Set(
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
-		const scopedModels = this._scopedModels.filter((scoped) =>
+		const consent = options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		const scopedModels = allowedCycleModels(this._scopedModels.filter((scoped) =>
 			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
-		);
+		), consent).map((scoped) => scoped);
 		const currentModel = this.model;
 		const currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
 		const nextIndex = getNextCycleIndex(currentIndex, scopedModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const next = scopedModels[nextIndex];
-		assertAccountRotationConsent(next.model.provider, options.accountRotationConsent === true);
+		assertAccountRotationConsent(next.model.provider, consent);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.model, next.thinkingLevel);
 
 		// Apply model
 		this.agent.state.model = next.model;
+		this._rotationConsentSessionId = next.model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2692,16 +2702,19 @@ export class AgentSession {
 		direction: "forward" | "backward",
 		options: ModelMutationOptions,
 	): Promise<ModelCycleResult | undefined> {
-		const availableModels = this._modelRuntime.getAvailableSnapshot();
+		const consent = options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		const availableModels = allowedCycleModels(this._modelRuntime.getAvailableSnapshot(), consent);
 		const currentModel = this.model;
 		const currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
 		const nextIndex = getNextCycleIndex(currentIndex, availableModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const nextModel = availableModels[nextIndex];
-		assertAccountRotationConsent(nextModel.provider, options.accountRotationConsent === true);
+		assertAccountRotationConsent(nextModel.provider, consent);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
 		this.agent.state.model = nextModel;
+		this._rotationConsentSessionId = nextModel.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
