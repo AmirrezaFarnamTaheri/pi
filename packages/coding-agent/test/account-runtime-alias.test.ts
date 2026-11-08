@@ -84,7 +84,7 @@ test("restores an account whose extension source provider is registered after ru
 		runtime.registerNativeProvider({
 			id: "late-test-provider",
 			name: "Late test provider",
-			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {}, source: "test" }) } },
+			auth: { apiKey: { name: "Test", login: async () => ({ type: "api_key", key: "fixture" }), resolve: async () => ({ auth: {}, source: "test" }) } },
 			getModels: () => [],
 			stream: () => { throw new Error("unused"); },
 			streamSimple: () => { throw new Error("unused"); },
