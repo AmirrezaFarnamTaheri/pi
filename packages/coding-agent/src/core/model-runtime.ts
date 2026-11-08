@@ -586,12 +586,14 @@ export class ModelRuntime implements Models {
 		}
 	}
 
-	/** Remove only the unused account identity. Existing credentials must be logged out first. */
-	removeAccountAlias(id: string): void {
+	/** Explicitly disconnect the selected identity before removing only its profile. */
+	async removeAccountAlias(id: string): Promise<void> {
 		const path = this.accountProfilesPath;
 		if (!path || !this.accountProfiles.has(id)) return;
-		this.accountProfiles.delete(id);
+		// Fail closed: a failed logout must never leave an orphaned stored credential.
+		await this.logout(id);
 		removeAccountProfile(path, id);
+		this.accountProfiles.delete(id);
 		this.nativeExtensionProviders.delete(id);
 		this.recomposeProvider(id);
 		this.updateModelSnapshot();
