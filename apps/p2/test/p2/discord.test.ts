@@ -685,6 +685,8 @@ describe("discord relay", () => {
 		await relay.catchUp("bot-a");
 		assert.equal(sessions.delivered.length, 0);
 		assert(continued.length > 0);
+		// Deleting an earlier place must not cause the next one to be skipped.
+		delete state().bindings.c1!.threads.t2;
 		await relay.catchUp("bot-a");
 		assert.equal(sessions.delivered.length, 1, "continuation must advance to the next place");
 		assert.equal(sessions.delivered[0]?.requestId, `discord:${newest.id}`);
@@ -737,6 +739,26 @@ describe("discord relay", () => {
 	});
 
 
+
+	it("preserves context behind 1600 bot posts instead of delivering just the mention", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		discord.say("c1", message("human before the bot flood"));
+		for (let index = 0; index < 1600; index++)
+			discord.say("c1", message(`bot ${index}`, { author: { id: "bot", name: "Bot", bot: true } }));
+		await relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> tell me what happened`)));
+		assert.match(sessions.delivered[0]?.text ?? "", /human before the bot flood/);
+	});
+
+	it("does not advance the cursor after an incomplete bounded reverse-history scan", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
+		discord.say("c1", message("human further back"));
+		for (let index = 0; index < 3500; index++)
+			discord.say("c1", message(`bot ${index}`, { author: { id: "bot", name: "Bot", bot: true } }));
+		const trigger = discord.say("c1", message(`<@${BOT}> summarize`));
+		await assert.rejects(relay.onMessage("bot-a", trigger), /incomplete|budget|history/i);
+		assert.equal(sessions.delivered.length, 0);
+		assert.notEqual(state().bindings.c1?.cursor, trigger.id);
+	});
 	it("does not checkpoint past a missed mention when its session temporarily refuses delivery", async () => {
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
 		const missed = discord.say("c1", message(`<@${BOT}> retry after recovery`));
@@ -745,6 +767,7 @@ describe("discord relay", () => {
 		assert.equal(sessions.delivered.length, 0);
 		assert.notEqual(state().bindings.c1?.catchUpScan, missed.id);
 		sessions.refusal = undefined;
+		relay.retryDeferredCatchUps(Date.now() + 30_000);
 		await relay.catchUp("bot-a");
 		assert.equal(sessions.delivered.length, 1);
 		assert.equal(sessions.delivered[0]?.requestId, `discord:${missed.id}`);
