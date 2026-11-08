@@ -651,6 +651,28 @@ describe("discord relay", () => {
 	});
 
 
+
+	it("reaches later threads instead of repeatedly rescanning the first four idle places", async () => {
+		const continued: string[] = [];
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
+		const row = state().bindings.c1!;
+		for (let index = 2; index <= 6; index++) {
+			const id = `t${index}`;
+			discord.add({
+				id, name: id, guildId: "g1", guildName: "Guild",
+				thread: { parentId: "c1", createdAt: 1_000, createdId: "1" }, lastMessageId: null,
+			});
+			row.threads[id] = { conversation: index, name: id, cursor: "1" };
+		}
+		const newest = discord.say("t6", message(`<@${BOT}> find this later thread`));
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 0);
+		assert(continued.length > 0);
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1, "continuation must advance to the next place");
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${newest.id}`);
+	});
+
 	it("bounds each disconnected catch-up scan and persists its resumable progress", async () => {
 		const continued: string[] = [];
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
