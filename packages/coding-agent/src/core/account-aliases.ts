@@ -132,9 +132,32 @@ export function createApiKeyAccountAlias(source: Provider, id: string, envVar: s
 	});
 }
 
-/** New login accounts retain normal OAuth and API-key methods, but never share saved credentials. */
+/**
+ * A separate sign-in identity. Unlike a provider's original auth, this API-key
+ * adapter must NEVER fall back to ambient environment keys or models.json keys.
+ * Only credentials explicitly stored under this alias may authorize requests.
+ */
 export function createStoredAccountAlias(source: Provider, id: string, name?: string): Provider {
-	if (!source.auth.oauth && !source.auth.apiKey) throw new Error(`Provider ${source.id} does not support stored login`);
-	const alias = accountAlias(source, id, source.auth);
+	if (!source.auth.oauth && !source.auth.apiKey?.login) {
+		throw new Error(`Provider ${source.id} cannot add an independent login`);
+	}
+	const apiKey = source.auth.apiKey;
+	const isolatedApiKey = apiKey?.login ? {
+		...apiKey,
+		check: async (input: Parameters<NonNullable<typeof apiKey.check>>[0]) => {
+			if (!input.credential) return undefined;
+			if (apiKey.check) return apiKey.check(input);
+			return (await apiKey.resolve(input))
+				? { type: "api_key" as const, source: "stored credential" } : undefined;
+		},
+		resolve: async (input: Parameters<typeof apiKey.resolve>[0]) => {
+			if (!input.credential) return undefined;
+			return apiKey.resolve(input);
+		},
+	} : undefined;
+	const alias = accountAlias(source, id, {
+		...(isolatedApiKey ? { apiKey: isolatedApiKey } : {}),
+		...(source.auth.oauth ? { oauth: source.auth.oauth } : {}),
+	});
 	return name ? { ...alias, name } : alias;
 }
