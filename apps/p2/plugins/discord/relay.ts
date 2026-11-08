@@ -293,6 +293,9 @@ export class Relay {
 		);
 		let delivered: { conversation: number; submissionId: number };
 		try {
+			// A channel may be unlinked while its history is being fetched.
+			const latest = this.#state.value().bindings[channelId];
+			if (!latest || latest.session !== binding.session || latest.generation !== binding.generation) return;
 			delivered = await this.#sessions.deliver(binding.session, {
 				...(conversation === undefined ? {} : { conversation }),
 				requestId: `discord:${trigger.id}`,
@@ -317,7 +320,7 @@ export class Relay {
 		}
 		await this.#state.change((draft) => {
 			const current = draft.bindings[channelId];
-			if (!current) return;
+			if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
 			if (thread) {
 				const known = current.threads[thread.id];
 				if (known) known.cursor = trigger.id;
@@ -330,6 +333,7 @@ export class Relay {
 				messageId: trigger.id,
 				submissionId: delivered.submissionId,
 				since: Date.now(),
+				...(binding.generation === undefined ? {} : { linkGeneration: binding.generation }),
 			};
 		});
 	}
@@ -375,9 +379,10 @@ export class Relay {
 		const now = Date.now();
 		for (const pending of Object.values(this.#state.value().pending)) {
 			if ((sessions && !sessions.has(pending.session)) || this.#checking.has(pending.messageId)) continue;
-			// A bot that is not connected (or was removed) keeps its replies until it is, or they time out.
+			if ((pending.retryAt ?? 0) > now) continue;
+			// Losing the connection never means discarding a completed response, even after a long outage.
 			const port = this.#discord(pending.botId);
-			if (!port && now - pending.since < PENDING_TIMEOUT_MS) continue;
+			if (!port) continue;
 			this.#checking.add(pending.messageId);
 			try {
 				await this.#check(port, pending, now);
@@ -387,7 +392,33 @@ export class Relay {
 		}
 	}
 
-	async #check(port: DiscordPort | undefined, pending: Pending, now: number): Promise<void> {
+	/** Ensure a pending reply still belongs to the exact live channel link. */
+	#pendingMatches(current: Pending | undefined, pending: Pending): boolean {
+		return current !== undefined && current.messageId === pending.messageId &&
+			current.submissionId === pending.submissionId && current.session === pending.session &&
+			current.channelId === pending.channelId && current.botId === pending.botId &&
+			current.linkGeneration === pending.linkGeneration;
+	}
+
+	#pendingIsCurrent(pending: Pending): boolean {
+		const state = this.#state.value();
+		const binding = state.bindings[pending.channelId];
+		return this.#pendingMatches(state.pending[pending.messageId], pending) &&
+			binding !== undefined && binding.session === pending.session && binding.botId === pending.botId &&
+			(pending.linkGeneration === undefined || binding.generation === pending.linkGeneration);
+	}
+
+	async #forget(pending: Pending): Promise<void> {
+		await this.#state.change((draft) => {
+			if (this.#pendingMatches(draft.pending[pending.messageId], pending)) delete draft.pending[pending.messageId];
+		});
+	}
+
+	async #check(port: DiscordPort, pending: Pending, now: number): Promise<void> {
+		if (!this.#pendingIsCurrent(pending)) {
+			await this.#forget(pending);
+			return;
+		}
 		let turn: TurnState;
 		try {
 			turn = await this.#sessions.turn(pending.session, pending.submissionId);
@@ -400,19 +431,30 @@ export class Relay {
 			if (now - pending.since < PENDING_TIMEOUT_MS) return;
 			turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
 		}
-		try {
-			// A stopped turn posts nothing: the stop command answered already.
-			if (turn.state !== "stopped") {
-				if (!port) throw new Error("its bot is not connected");
-				await this.#reply(port, pending, turn);
-			}
-		} catch (error) {
-			// A channel that went away: the reply is dropped, as Discord has nowhere to show it.
-			console.error("p2 discord: posting a reply failed:", error instanceof Error ? error.message : error);
+		// A stopped turn posts nothing; unlinking or relinking also revokes its right to post.
+		if (turn.state === "stopped" || !this.#pendingIsCurrent(pending)) {
+			await this.#forget(pending);
+			return;
 		}
-		await this.#state.change((draft) => {
-			delete draft.pending[pending.messageId];
-		});
+		try {
+			if (await this.#reply(port, pending, turn)) await this.#forget(pending);
+		} catch (error) {
+			console.error("p2 discord: posting a reply failed:", error instanceof Error ? error.message : error);
+			if (!this.#pendingIsCurrent(pending) || isPermanentReplyFailure(error)) {
+				await this.#forget(pending);
+				return;
+			}
+			// Only a confirmed permanent channel/access error drops an answer.
+			// Persist bounded exponential retry delay; successes reset it per posted chunk.
+			const count = Math.min(32, (this.#state.value().pending[pending.messageId]?.retryCount ?? 0) + 1);
+			const delay = Math.min(10 * 60_000, 1_000 * 2 ** Math.min(10, count - 1));
+			await this.#state.change((draft) => {
+				const current = draft.pending[pending.messageId];
+				if (!this.#pendingMatches(current, pending)) return;
+				current!.retryCount = count;
+				current!.retryAt = now + delay;
+			});
+		}
 	}
 
 	/**
@@ -424,40 +466,45 @@ export class Relay {
 		port: DiscordPort,
 		pending: Pending,
 		turn: Extract<TurnState, { state: "answered" | "unanswered" }>,
-	): Promise<void> {
+	): Promise<boolean> {
+		if (!this.#pendingIsCurrent(pending)) return false;
 		let text = turn.state === "answered" ? turn.text : `(No answer: ${turn.reason})`;
-		const limit = turn.files.length ? await port.uploadLimit(pending.replyChannelId) : 0;
+		const limit = pending.uploadLimit ?? (turn.files.length ? await port.uploadLimit(pending.replyChannelId) : 0);
+		if (turn.files.length && pending.uploadLimit === undefined) {
+			await this.#state.change((draft) => {
+				const current = draft.pending[pending.messageId];
+				if (this.#pendingMatches(current, pending)) current!.uploadLimit = limit;
+			});
+		}
 		const tooLarge = turn.files.filter((file) => file.size > limit);
 		if (tooLarge.length)
-			text += `${text ? "\n\n" : ""}Too large for Discord: ${tooLarge.map((file) => `${file.name} (${megabytes(file.size)})`).join(", ")}`;
-		const groups = attachmentGroups(
-			turn.files.filter((file) => file.size <= limit),
-			limit,
-		);
-		const posts: { text: string; files: OfferedFile[] }[] = chunkText(text).map((chunk) => ({
-			text: chunk,
-			files: [],
-		}));
+			text += `${text ? "\\n\\n" : ""}Too large for Discord: ${tooLarge.map((file) => `${file.name} (${megabytes(file.size)})`).join(", ")}`;
+		const groups = attachmentGroups(turn.files.filter((file) => file.size <= limit), limit);
+		const posts: { text: string; files: OfferedFile[] }[] = chunkText(text).map((chunk) => ({ text: chunk, files: [] }));
 		for (const [index, group] of groups.entries()) {
 			const last = posts.at(-1);
 			if (index === 0 && last) last.files = group;
 			else posts.push({ text: "", files: group });
 		}
-		for (const [index, post] of posts.entries()) {
+		for (let index = pending.nextPost ?? 0; index < posts.length; index++) {
+			if (!this.#pendingIsCurrent(pending)) return false;
+			const post = posts[index]!;
 			const files: { name: string; data: Uint8Array }[] = [];
-			for (const file of post.files) {
-				try {
-					files.push({ name: file.name, data: await this.#readFile(pending.session, file) });
-				} catch (error) {
-					console.error(
-						`p2 discord: reading ${file.name} failed:`,
-						error instanceof Error ? error.message : error,
-					);
-				}
-			}
-			if (!post.text && !files.length) continue;
-			await port.reply(pending.replyChannelId, index === 0 ? pending.messageId : undefined, post.text, files);
+			for (const file of post.files)
+				files.push({ name: file.name, data: await this.#readFile(pending.session, file) });
+			if (!this.#pendingIsCurrent(pending)) return false;
+			if (post.text || files.length)
+				await port.reply(pending.replyChannelId, index === 0 ? pending.messageId : undefined, post.text, files);
+			// Checkpoint each posted chunk so a later HTTP 429 never duplicates earlier successful chunks.
+			await this.#state.change((draft) => {
+				const current = draft.pending[pending.messageId];
+				if (!this.#pendingMatches(current, pending)) return;
+				current!.nextPost = index + 1;
+				current!.retryCount = 0;
+				current!.retryAt = 0;
+			});
 		}
+		return this.#pendingIsCurrent(pending);
 	}
 
 	/** Offered file `file` of `session`, whole. */
@@ -465,11 +512,14 @@ export class Relay {
 		const parts: Uint8Array[] = [];
 		for (let offset = 0; offset < file.size; ) {
 			const part = await this.#sessions.read(session, file.id, offset, Math.min(READ_CHUNK, file.size - offset));
-			if (!part.length) break;
+			if (!part.length || part.length > Math.min(READ_CHUNK, file.size - offset))
+				throw new Error(`Offered file ${file.name} ended before its declared size`);
 			parts.push(part);
 			offset += part.length;
 		}
-		return Buffer.concat(parts);
+		const data = Buffer.concat(parts);
+		if (data.length !== file.size) throw new Error(`Offered file ${file.name} is incomplete`);
+		return data;
 	}
 
 	/**
@@ -486,6 +536,15 @@ export class Relay {
 				?.typing(channel)
 				.catch(() => {});
 	}
+}
+
+/** Discord API code 10003 means the channel no longer exists; 50001/50013 deny access. */
+function isPermanentReplyFailure(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const failure = error as { code?: unknown; rawError?: { code?: unknown } };
+	const code = failure.code ?? failure.rawError?.code;
+	return code === 10003 || code === "10003" || code === 50001 || code === "50001" ||
+		code === 50013 || code === "50013";
 }
 
 /**
