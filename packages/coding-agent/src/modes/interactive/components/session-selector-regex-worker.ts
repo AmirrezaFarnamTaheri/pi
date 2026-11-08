@@ -59,7 +59,7 @@ async function matchHistoryFile(path, regex, maxTextChars) {
   return regex.test(chunks.join(" "));
 }
 
-parentPort.on("message", async ({ pattern, sessions }) => {
+parentPort.on("message", async ({ pattern, sessions, maxTextChars }) => {
   try {
     const regex = new RegExp(pattern, "i");
     const scores = [];
@@ -81,7 +81,6 @@ parentPort.on("message", async ({ pattern, sessions }) => {
     parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
 });
-
 `;
 
 const SEARCH_BUDGET_MS = 500;
