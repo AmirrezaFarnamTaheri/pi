@@ -9,6 +9,8 @@ export type ScheduledDiscordEvent = {
 	bot: string;
 	key: string;
 	priority: boolean;
+	/** A reconnect scan; defer it under pressure rather than immediately requeueing it. */
+	catchUp?: boolean;
 	/** Called when a control event cannot be accepted; must not throw synchronously. */
 	onRejected?(): Promise<void>;
 	run(): Promise<void>;
@@ -20,6 +22,9 @@ export class DiscordScheduler {
 	readonly #normalActive = new Set<string>();
 	readonly #priorityActive = new Set<string>();
 	readonly #idle = new Set<() => void>();
+	readonly #deferredCatchUps = new Set<string>();
+	#rejectionNotices = 0;
+	readonly #maxRejectionNotices = 8;
 	readonly #overflow: (bot: string) => void;
 	readonly #error: (error: unknown) => void;
 	readonly #maxNormal: number;
@@ -54,9 +59,16 @@ export class DiscordScheduler {
 		if (queue.length >= limit) {
 			if (event.priority) {
 				try { this.#error(new Error("Discord control command backlog saturated")); } catch { /* Continue to rejection notice. */ }
-				void Promise.resolve().then(() => event.onRejected?.()).catch((error: unknown) => {
-					try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
-				});
+				if (event.onRejected && this.#rejectionNotices < this.#maxRejectionNotices) {
+					this.#rejectionNotices++;
+					void Promise.resolve().then(() => event.onRejected?.()).catch((error: unknown) => {
+						try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
+					}).finally(() => { this.#rejectionNotices--; });
+				}
+			} else if (event.catchUp) {
+				// A ready event rejected while full must not request another ready event
+				// synchronously: that turns one backlog into a tight infinite retry loop.
+				this.#deferredCatchUps.add(event.bot);
 			} else this.#overflow(event.bot);
 			return false;
 		}
@@ -70,6 +82,7 @@ export class DiscordScheduler {
 		this.#stopped = true;
 		this.#normal.length = 0;
 		this.#priority.length = 0;
+		this.#deferredCatchUps.clear();
 		this.#notifyIdle();
 	}
 
@@ -113,6 +126,15 @@ export class DiscordScheduler {
 		if (!this.#stopped) {
 			this.#start(this.#priority, this.#priorityActive, this.#maxPriority);
 			this.#start(this.#normal, this.#normalActive, this.#maxNormal);
+			if (this.#normal.length < this.#maxPending) {
+				// Drain at most one deferred bot per capacity change; coalescing by bot
+				// prevents sustained saturation from producing an unbounded retry storm.
+				const bot = this.#deferredCatchUps.values().next().value;
+				if (bot !== undefined) {
+					this.#deferredCatchUps.delete(bot);
+					try { this.#overflow(bot); } catch (error) { this.#error(error); }
+				}
+			}
 		}
 		this.#notifyIdle();
 	}
