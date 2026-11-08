@@ -201,6 +201,25 @@ export class Relay {
 		else await this.deliver(binding.channelId, message, thread);
 	}
 
+	/**
+	 * Only the actual linked bot may acknowledge an overloaded command. Resolve
+	 * thread membership before the final state lookup, so unlink/relink changes
+	 * during the network request cannot leak a notice to a stale channel.
+	 */
+	async mayNotifyControlRejected(bot: string, message: DiscordMessage): Promise<boolean> {
+		if (message.author.bot || !message.mentionsBot) return false;
+		const port = this.#discord(bot);
+		if (!port || !commandOf(message.text, port.botId)) return false;
+		let channelId = message.channelId;
+		if (!this.#state.value().bindings[channelId]) {
+			const thread = await port.channel(channelId).catch(() => undefined);
+			if (!thread?.thread) return false;
+			channelId = thread.thread.parentId;
+		}
+		const binding = this.#state.value().bindings[channelId];
+		return binding?.botId === bot && mayWake(binding.wake, message.author.id, message.roles);
+	}
+
 	/** Runs channel command `command` of `message` on the channel's main conversation or the thread's subagent. */
 	async #command(
 		binding: Binding,
