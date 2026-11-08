@@ -79,14 +79,30 @@ jobs:
           node scripts/generate-coding-agent-install-lock.mjs --check
           cp packages/coding-agent/install-lock/package.json release-assets/pi-coding-agent-install-package.json
           cp packages/coding-agent/install-lock/package-lock.json release-assets/pi-coding-agent-install-package-lock.json
+          cp nix/model-catalog.json release-assets/MODEL_CATALOG_PIN.json
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          node scripts/create-fork-sbom.mjs package-lock.json release-assets/SBOM.cdx.json
+          node -e '
+            const fs = require("node:fs");
+            const catalog = JSON.parse(fs.readFileSync("nix/model-catalog.json", "utf8"));
+            const manifest = {
+              sourceCommit: process.env.GITHUB_SHA,
+              sourceTimestamp: Number(process.env.SOURCE_DATE_EPOCH),
+              modelCatalogRevision: catalog.revision,
+              releaseTag: process.env.GITHUB_REF_NAME.replace(/^release\\/fork-/, ""),
+              modelDataPolicy: "immutable-sha256-pin",
+              releaseChannel: "github-fork-only"
+            };
+            fs.writeFileSync("release-assets/BUILD_MANIFEST.json", JSON.stringify(manifest, null, 2) + "\\n");
+          '
           (
             cd release-assets
-            sha256sum pi-*.tar.gz pi-*.zip pi-coding-agent-install-*.json > SHA256SUMS
+            sha256sum pi-*.tar.gz pi-*.zip pi-coding-agent-install-*.json MODEL_CATALOG_PIN.json SBOM.cdx.json BUILD_MANIFEST.json > SHA256SUMS
           )
           cat > release-assets/RELEASE_NOTES.md <<EOF
           Fork-only binary release of Pi $tag (source commit $GITHUB_SHA).
 
-          Six platform archives, the reproducible source archive, installer lockfiles and SHA256SUMS are attached.
+          Six platform archives, the reproducible source archive, installer lockfiles, CycloneDX SBOM, immutable model-catalog pin, build manifest and SHA256SUMS are attached.
           See the commit history and the fork changelog for included fixes.
 
           This release is published on the fork only. It does not publish the upstream @earendil-works npm packages.
@@ -191,8 +207,8 @@ jobs:
             echo "::error::Tag already exists: $tag"
             exit 1
           fi
-          assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/SHA256SUMS)
-          test "${#assets[@]}" -eq 10
+          assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/MODEL_CATALOG_PIN.json release-assets/SBOM.cdx.json release-assets/BUILD_MANIFEST.json release-assets/SHA256SUMS)
+          test "${#assets[@]}" -eq 13
           gh release create "$tag" \
             --target "$GITHUB_SHA" --prerelease \
             --title "Pi fork $tag" \
