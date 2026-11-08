@@ -200,3 +200,31 @@ describe("rotation state restored after another provider was selected", () => {
 		expect(chosen.index).toBe(2);
 	});
 });
+
+
+describe("pinned account retry safety", () => {
+	it("never sends a retry to a different account when the pinned account receives 429", () => {
+		const pool = new RotationPool(accounts, 1_000);
+		pool.pin(accounts[0]!);
+		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(0);
+		expect(() => pool.choose({
+			reason: "retry",
+			failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false },
+			now: 1,
+		})).toThrow(/pinned account/i);
+		expect(pool.status(1)[0]?.failureCount).toBe(1);
+		expect(pool.status(1)[0]?.pinned).toBe(true);
+		expect(() => pool.choose({ reason: "user", now: 10 })).toThrow(/pinned account/i);
+		expect(pool.choose({ reason: "user", now: 1_002 }).index).toBe(0);
+	});
+
+	it("does not switch to a newly pinned identity on another account's failing request", () => {
+		const pool = new RotationPool(accounts, 1_000);
+		pool.pin(accounts[1]!);
+		expect(() => pool.choose({
+			reason: "retry",
+			failed: { target: accounts[0]!, errorMessage: "401 Unauthorized", hasOutput: false },
+			now: 1,
+		})).toThrow(/pinned account/i);
+	});
+});
