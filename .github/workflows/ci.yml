@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  # An owner can verify PR heads through Actions -> CI -> Run workflow.
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, "hardening/**", "perf/**", "sync/**", "ci/**"]
     # The release commit is pushed together with the next commit, so a push to main never builds it; the tag run does,
     # and preview-packages.yml releases its packages on pkg.earendil.com.
     tags: ['v*.*.*']
