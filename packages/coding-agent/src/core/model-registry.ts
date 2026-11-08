@@ -218,6 +218,11 @@ export class ModelRegistry {
 		this.runtime.registerNativeProvider(providerOrName);
 	}
 
+	/** Atomic validation and single-snapshot registration of extension provider configs. */
+	registerProviderBatch(registrations: readonly { providerId: string; config: ProviderConfigInput }[]): void {
+		this.runtime.registerProviderBatch(registrations);
+	}
+
 	unregisterProvider(providerName: string): void {
 		this.runtime.unregisterProvider(providerName);
 	}

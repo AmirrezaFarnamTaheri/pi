@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import { ToolUpdateTracker } from "./tool-update-tracker.ts";
+import { configuredParallelToolLimit, executeBoundedInOrder } from "./ordered-tool-pool.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -643,9 +644,6 @@ async function executeToolCallsSequential(
 	};
 }
 
-/** A bounded worker pool prevents large model-generated batches from exhausting resources. */
-const MAX_PARALLEL_TOOL_EXECUTIONS = 8;
-
 /** Prepare calls in order, run the allowed ones concurrently, and emit results in call order. */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
@@ -655,6 +653,8 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
+	// Reject unsafe configuration before firing start events or permission hooks.
+	const concurrency = configuredParallelToolLimit(config.maxParallelToolExecutions);
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
@@ -709,16 +709,10 @@ async function executeToolCallsParallel(
 
 	// Preparation remains ordered (especially permission hooks), but execution
 	// only runs a bounded number of independent tools at once.
-	const orderedFinalizedCalls = new Array<FinalizedToolCallOutcome>(finalizedCalls.length);
-	let nextCall = 0;
-	const runNext = async (): Promise<void> => {
-		while (nextCall < finalizedCalls.length) {
-			const index = nextCall++;
-			const entry = finalizedCalls[index]!;
-			orderedFinalizedCalls[index] = typeof entry === "function" ? await entry() : entry;
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_TOOL_EXECUTIONS, finalizedCalls.length) }, runNext));
+	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(
+		finalizedCalls,
+		concurrency,
+	);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);

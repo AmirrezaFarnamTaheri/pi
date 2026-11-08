@@ -24,6 +24,8 @@ export interface InputOptions {
 	prompt?: string;
 	placeholder?: string;
 	placeholderStyle?: (text: string) => string;
+	/** Mask terminal display while retaining the value for authentication callbacks. */
+	mask?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ export class Input implements Component, Focusable {
 	private readonly prompt: string;
 	private readonly placeholder: string;
 	private readonly placeholderStyle: (text: string) => string;
+	private masked: boolean;
 	private renderedStartColumn = 0;
 	public onSubmit?: (value: string) => void;
 	public onEscape?: () => void;
@@ -57,10 +60,33 @@ export class Input implements Component, Focusable {
 		this.prompt = options.prompt ?? "> ";
 		this.placeholder = options.placeholder ?? "";
 		this.placeholderStyle = options.placeholderStyle ?? ((text) => text);
+		this.masked = options.mask ?? false;
 	}
 
 	getValue(): string {
 		return this.value;
+	}
+
+	setMask(masked: boolean): void {
+		if (this.masked === masked) return;
+		// A secret must never become plaintext when the next prompt reuses this control.
+		if (this.masked) this.value = "";
+		this.cursor = 0;
+		this.masked = masked;
+		this.undoStack.clear();
+		this.killRing = new KillRing();
+		this.lastAction = null;
+	}
+
+	/** Drop all secret-bearing transient state, not just the displayed characters. */
+	clearSensitiveValue(): void {
+		this.value = "";
+		this.cursor = 0;
+		this.pasteBuffer = "";
+		this.isInPaste = false;
+		this.lastAction = null;
+		this.undoStack.clear();
+		this.killRing = new KillRing();
 	}
 
 	setValue(value: string): void {
@@ -291,7 +317,7 @@ export class Input implements Component, Focusable {
 		if (this.cursor === 0) return;
 		this.pushUndo();
 		const deletedText = this.value.slice(0, this.cursor);
-		this.killRing.push(deletedText, { prepend: true, accumulate: this.lastAction === "kill" });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: true, accumulate: this.lastAction === "kill" });
 		this.lastAction = "kill";
 		this.value = this.value.slice(this.cursor);
 		this.cursor = 0;
@@ -301,7 +327,7 @@ export class Input implements Component, Focusable {
 		if (this.cursor >= this.value.length) return;
 		this.pushUndo();
 		const deletedText = this.value.slice(this.cursor);
-		this.killRing.push(deletedText, { prepend: false, accumulate: this.lastAction === "kill" });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: false, accumulate: this.lastAction === "kill" });
 		this.lastAction = "kill";
 		this.value = this.value.slice(0, this.cursor);
 	}
@@ -320,7 +346,7 @@ export class Input implements Component, Focusable {
 		this.cursor = oldCursor;
 
 		const deletedText = this.value.slice(deleteFrom, this.cursor);
-		this.killRing.push(deletedText, { prepend: true, accumulate: wasKill });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: true, accumulate: wasKill });
 		this.lastAction = "kill";
 
 		this.value = this.value.slice(0, deleteFrom) + this.value.slice(this.cursor);
@@ -341,13 +367,14 @@ export class Input implements Component, Focusable {
 		this.cursor = oldCursor;
 
 		const deletedText = this.value.slice(this.cursor, deleteTo);
-		this.killRing.push(deletedText, { prepend: false, accumulate: wasKill });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: false, accumulate: wasKill });
 		this.lastAction = "kill";
 
 		this.value = this.value.slice(0, this.cursor) + this.value.slice(deleteTo);
 	}
 
 	private yank(): void {
+		if (this.masked) return;
 		const text = this.killRing.peek();
 		if (!text) return;
 
@@ -359,6 +386,7 @@ export class Input implements Component, Focusable {
 	}
 
 	private yankPop(): void {
+		if (this.masked) return;
 		if (this.lastAction !== "yank" || this.killRing.length <= 1) return;
 
 		this.pushUndo();
@@ -377,10 +405,12 @@ export class Input implements Component, Focusable {
 	}
 
 	private pushUndo(): void {
+		if (this.masked) return;
 		this.undoStack.push({ value: this.value, cursor: this.cursor });
 	}
 
 	private undo(): void {
+		if (this.masked) return;
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
 		this.value = snapshot.value;
@@ -418,13 +448,15 @@ export class Input implements Component, Focusable {
 
 	render(width: number): string[] {
 		// Calculate visible window
+		// Match UTF-16 offsets so the cursor never indexes unmasked credential text.
+		const displayValue = this.masked ? "•".repeat(this.value.length) : this.value;
 		const availableWidth = width - visibleWidth(this.prompt);
 
 		if (availableWidth <= 0) {
 			return [truncateToWidth(this.prompt, width, "")];
 		}
 
-		if (this.value.length === 0 && this.placeholder) {
+		if (displayValue.length === 0 && this.placeholder) {
 			const placeholder = truncateToWidth(this.placeholder, availableWidth, "");
 			const graphemes = [...segmenter.segment(placeholder)];
 			const atCursor = graphemes[0]?.segment ?? " ";
@@ -439,16 +471,16 @@ export class Input implements Component, Focusable {
 		let visibleText = "";
 		let cursorDisplay = this.cursor;
 		this.renderedStartColumn = 0;
-		const totalWidth = visibleWidth(this.value);
+		const totalWidth = visibleWidth(displayValue);
 
 		if (totalWidth < availableWidth) {
 			// Everything fits (leave room for cursor at end)
-			visibleText = this.value;
+			visibleText = displayValue;
 		} else {
 			// Need horizontal scrolling
 			// Reserve one column for cursor if it's at the end
-			const scrollWidth = this.cursor === this.value.length ? availableWidth - 1 : availableWidth;
-			const cursorCol = visibleWidth(this.value.slice(0, this.cursor));
+			const scrollWidth = this.cursor === displayValue.length ? availableWidth - 1 : availableWidth;
+			const cursorCol = visibleWidth(displayValue.slice(0, this.cursor));
 
 			if (scrollWidth > 0) {
 				const halfWidth = Math.floor(scrollWidth / 2);
@@ -466,8 +498,8 @@ export class Input implements Component, Focusable {
 				}
 
 				this.renderedStartColumn = startCol;
-				visibleText = sliceByColumn(this.value, startCol, scrollWidth, true);
-				const beforeCursor = sliceByColumn(this.value, startCol, Math.max(0, cursorCol - startCol), true);
+				visibleText = sliceByColumn(displayValue, startCol, scrollWidth, true);
+				const beforeCursor = sliceByColumn(displayValue, startCol, Math.max(0, cursorCol - startCol), true);
 				cursorDisplay = beforeCursor.length;
 			} else {
 				visibleText = "";

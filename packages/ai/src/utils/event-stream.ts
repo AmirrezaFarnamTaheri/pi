@@ -1,5 +1,14 @@
 import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
 
+/**
+ * "result-only" omits progress events produced when nobody is iterating.
+ * It is intended for callers that await only result(), not for replayable streams.
+ * The default "all" mode preserves the existing lossless replay contract.
+ */
+export interface EventStreamOptions {
+	retention?: "all" | "result-only";
+}
+
 class FifoQueue<T> {
 	private incoming: T[] = [];
 	private outgoing: T[] = [];
@@ -33,6 +42,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private waitingForCapacity = new Set<() => void>();
 	/** Only block a producer when there is an actual async iterator consuming events. */
 	private activeIterators = 0;
+	private readonly retainUnconsumedEvents: boolean;
 	protected done = false;
 	private finalResultPromise: Promise<R>;
 	private resolveFinalResult!: (result: R) => void;
@@ -42,7 +52,11 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private isComplete: (event: T) => boolean;
 	private extractResult: (event: T) => R;
 
-	constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
+	constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R, options: EventStreamOptions = {}) {
+		if (options.retention !== undefined && options.retention !== "all" && options.retention !== "result-only") {
+			throw new RangeError("Unsupported event stream retention mode");
+		}
+		this.retainUnconsumedEvents = options.retention !== "result-only";
 		this.isComplete = isComplete;
 		this.extractResult = extractResult;
 		this.finalResultPromise = new Promise((resolve, reject) => {
@@ -82,7 +96,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		const waiter = this.waiting.dequeue();
 		if (waiter) {
 			waiter({ value: event, done: false });
-		} else {
+		} else if (this.retainUnconsumedEvents || this.activeIterators > 0) {
+			// Explicit result-only consumers need no backlog when nothing is
+			// iterating. Active iterators remain lossless.
 			this.queue.enqueue(event);
 		}
 	}
@@ -172,6 +188,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 			}
 		} finally {
 			this.activeIterators--;
+			// In result-only mode, abandon any backlog once the last live consumer exits.
+			// Otherwise an early break retains progress events indefinitely.
+			if (this.activeIterators === 0 && !this.retainUnconsumedEvents) this.queue = new FifoQueue<T>();
 			// Breaking out of for-await no longer requires future consumption.
 			this.wakeAllCapacityWaiters();
 		}
@@ -193,7 +212,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 	readonly #startedAt = Date.now();
 	readonly #startedAtMonotonic = performance.now();
 
-	constructor() {
+	constructor(options: EventStreamOptions = {}) {
 		super(
 			(event) => event.type === "done" || event.type === "error",
 			(event) => {
@@ -204,6 +223,7 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 				}
 				throw new Error("Unexpected event type for final result");
 			},
+			options,
 		);
 	}
 
@@ -225,6 +245,6 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 }
 
 /** Factory function for AssistantMessageEventStream (for use in extensions) */
-export function createAssistantMessageEventStream(): AssistantMessageEventStream {
-	return new AssistantMessageEventStream();
+export function createAssistantMessageEventStream(options: EventStreamOptions = {}): AssistantMessageEventStream {
+	return new AssistantMessageEventStream(options);
 }

@@ -64,8 +64,8 @@ jobs:
           cat > release-assets/RELEASE_NOTES.md <<EOF
           Fork-only binary release of Pi $tag (source commit $GITHUB_SHA).
 
-          Includes the runtime performance and correctness fixes from fork PR #3.
           Six platform archives, the reproducible source archive, installer lockfiles and SHA256SUMS are attached.
+          See the commit history and the fork changelog for included fixes.
 
           This release is published on the fork only. It does not publish the upstream @earendil-works npm packages.
           EOF

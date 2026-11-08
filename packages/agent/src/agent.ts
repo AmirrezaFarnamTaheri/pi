@@ -140,6 +140,8 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	/** Optional bounded tool worker concurrency; default eight. */
+	maxParallelToolExecutions?: number;
 	/**
 	 * How requests identify the app to providers, merged field by field over `DEFAULT_AGENT_IDENTITY`
 	 * (`{ attribution: PI_ATTRIBUTION }`). Pass `{ attribution: null }` to send no attribution headers.
@@ -200,6 +202,7 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	public maxParallelToolExecutions?: number;
 	/** Request identity forwarded to the stream function, over `DEFAULT_AGENT_IDENTITY`. */
 	public identity?: ClientIdentity;
 
@@ -227,6 +230,7 @@ export class Agent {
 		this.transport = runtimeOptions.transport ?? "auto";
 		this.maxRetryDelayMs = runtimeOptions.maxRetryDelayMs;
 		this.toolExecution = runtimeOptions.toolExecution ?? "parallel";
+		this.maxParallelToolExecutions = runtimeOptions.maxParallelToolExecutions;
 		this.identity = runtimeOptions.identity;
 	}
 
@@ -455,6 +459,7 @@ export class Agent {
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			identity: this.identity,
 			toolExecution: this.toolExecution,
+			maxParallelToolExecutions: this.maxParallelToolExecutions,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			finishTurn: this.finishTurn,

@@ -76,13 +76,13 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 	private allProviders: AuthSelectorProvider[];
 	private filteredProviders: AuthSelectorProvider[];
 	private selectedIndex: number = 0;
-	private mode: "login" | "logout";
+	private mode: "login" | "logout" | "add";
 	private onSelectCallback: (providerId: string, authType: AuthSelectorProvider["authType"]) => void;
 	private onCancelCallback: () => void;
 	private showAuthTypeLabels: boolean;
 
 	constructor(
-		mode: "login" | "logout",
+		mode: "login" | "logout" | "add",
 		providers: AuthSelectorProvider[],
 		onSelect: (providerId: string, authType: AuthSelectorProvider["authType"]) => void,
 		onCancel: () => void,
@@ -102,11 +102,15 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Add title
-		const title = mode === "login" ? "Select provider to configure:" : "Select provider to logout:";
+		const title = mode === "add" ? "Add a separate account" : mode === "login" ? "Connect a provider" : "Disconnect a provider";
 		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
 		this.addChild(new Spacer(1));
 
-		this.searchInput = new Input();
+		this.addChild(new TruncatedText(theme.fg("muted", mode === "add"
+			? "A new identity is created; existing sign-ins stay connected."
+			: mode === "login" ? "Select a provider and authentication method." : "Only the selected stored credential will be removed."), 1, 0));
+		this.addChild(new Spacer(1));
+		this.searchInput = new Input({ prompt: "⌕ ", placeholder: "Search providers…" });
 		if (initialSearchInput) {
 			this.searchInput.setValue(initialSearchInput);
 		}
@@ -123,6 +127,8 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.listContainer = new Container();
 		this.addChild(this.listContainer);
 
+		this.addChild(new Spacer(1));
+		this.addChild(new TruncatedText(theme.fg("muted", "↑↓ navigate   Enter select   Esc back"), 1, 0));
 		this.addChild(new Spacer(1));
 
 		// Add bottom border
@@ -146,6 +152,9 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 
 	private updateList(): void {
 		this.listContainer.clear();
+		this.listContainer.addChild(new TruncatedText(theme.fg("muted",
+			`  ${this.filteredProviders.length} match${this.filteredProviders.length === 1 ? "" : "es"}`), 1, 0));
+		this.listContainer.addChild(new Spacer(1));
 
 		const startIndex = Math.max(
 			0,
