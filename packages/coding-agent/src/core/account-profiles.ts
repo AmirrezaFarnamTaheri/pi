@@ -1,6 +1,6 @@
 /** Credential-free, persistent account identities for independently authenticated provider aliases. */
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import lockfile from "proper-lockfile";
 
@@ -42,14 +42,13 @@ export function loadAccountProfiles(path: string): AccountProfile[] {
 
 function withAccountFileLock<T>(path: string, edit: (current: AccountProfile[]) => { next?: AccountProfile[]; result: T }): T {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	// Lock the destination name BEFORE its initial creation. Another process must
+	// never observe an empty file between open("wx") and the initial JSON write.
+	const unlock = lockfile.lockSync(path, { realpath: false, retries: 6 });
 	try {
-		closeSync(openSync(path, "wx", 0o600));
-		writeFileSync(path, INITIAL, { encoding: "utf8", mode: 0o600 });
-	} catch (error) {
-		if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-	}
-	const unlock = lockfile.lockSync(path, { retries: 6 });
-	try {
+		if (!existsSync(path)) {
+			writeFileSync(path, INITIAL, { encoding: "utf8", mode: 0o600, flag: "wx" });
+		}
 		const { next, result } = edit(loadAccountProfiles(path));
 		if (next) {
 			const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
