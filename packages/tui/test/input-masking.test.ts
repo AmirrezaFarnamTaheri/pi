@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "vitest";
+import { test } from "node:test";
 import { Input } from "../src/components/input.ts";
 
 test("secret input never renders the credential or exposes it via cursor movement", () => {
