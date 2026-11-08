@@ -8,12 +8,14 @@ import {
 	mkdtempSync,
 	openSync,
 	readFileSync,
+	statSync,
 	rmSync,
 	writeFileSync,
 	writeSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { utimesSync } from "fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
@@ -91,6 +93,25 @@ describe("loadEntriesFromFile", () => {
 		);
 		const entries = loadEntriesFromFile(file);
 		expect(entries).toHaveLength(2);
+	});
+
+	it("preserves UTF-8 across read boundaries in multi-megabyte JSONL records", () => {
+		const file = join(tempDir, "large-utf8-record.jsonl");
+		const content = "🌍".repeat(800_000);
+		const header = { type: "session", version: 3, id: "large-utf8", timestamp: "2025-01-01T00:00:00Z", cwd: tempDir };
+		const entry = {
+			type: "custom",
+			id: "large-entry",
+			parentId: null,
+			timestamp: "2025-01-01T00:00:01Z",
+			customType: "large-record",
+			data: content,
+		};
+		writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(entry)}`);
+		const entries = loadEntriesFromFile(file);
+		expect(entries).toHaveLength(2);
+		expect(entries[1]).toMatchObject(entry);
+		expect(readFileSync(file, "utf8").endsWith("\n")).toBe(true);
 	});
 
 	it("adds a newline after an unterminated valid record", () => {
@@ -509,5 +530,83 @@ describe("SessionManager session file creation", () => {
 
 		session.appendMessage(userMsg("second question"));
 		expect(readSessionFileRoles(session.getSessionFile()!)).toEqual(["session", "model_change", "user"]);
+	});
+});
+
+
+describe("session discovery stat cache", () => {
+	it("reuses unchanged JSONL summaries and invalidates them when the session grows", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-session-discovery-cache-"));
+		const path = join(dir, "test-session.jsonl");
+		const initial = [
+			JSON.stringify({ type: "session", version: 3, id: "cache-id", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
+			JSON.stringify({
+				type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
+				message: { role: "user", content: "first", timestamp: 1 },
+			}),
+		].join("\n");
+		try {
+			writeFileSync(path, `${initial}\n`);
+			const initialList = await SessionManager.list(dir, dir);
+			expect(initialList).toHaveLength(1);
+			const unchanged = await SessionManager.list(dir, dir);
+			expect(unchanged[0]).toEqual(initialList[0]);
+			expect(unchanged[0]).not.toBe(initialList[0]);
+
+			appendFileSync(path, `${JSON.stringify({
+				type: "message", id: "m2", parentId: "m1", timestamp: "2026-01-01T00:00:02Z",
+				message: { role: "user", content: "second", timestamp: 2 },
+			})}\n`);
+			const modified = await SessionManager.list(dir, dir);
+			expect(modified[0]).not.toBe(initialList[0]);
+			expect(modified[0]).toMatchObject({ messageCount: 2, allMessagesText: "first second" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("session summary cache ownership and rewrite safety", () => {
+	it("does not reuse caller mutations or mutated Date objects", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-session-cache-mutation-"));
+		const path = join(dir, "editable.jsonl");
+		try {
+			writeFileSync(path, [
+				JSON.stringify({ type: "session", version: 3, id: "mutable", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
+				JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
+					message: { role: "user", content: "original", timestamp: 1 } }),
+			].join("\n") + "\n");
+			const first = (await SessionManager.list(dir, dir))[0]!;
+			first.name = "changed by caller";
+			first.created.setFullYear(2000);
+			first.modified.setFullYear(2000);
+			const again = (await SessionManager.list(dir, dir))[0]!;
+			expect(again.name).toBeUndefined();
+			expect(again.created.getUTCFullYear()).toBe(2026);
+			expect(again.modified.getUTCFullYear()).not.toBe(2000);
+			expect(again).not.toBe(first);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("detects a same-length replacement with preserved modification time", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-session-cache-rewrite-"));
+		const path = join(dir, "same-size.jsonl");
+		try {
+			const firstText = [
+				JSON.stringify({ type: "session", version: 3, id: "rewrite", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
+				JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
+					message: { role: "user", content: "alpha", timestamp: 1 } }),
+			].join("\n") + "\n";
+			writeFileSync(path, firstText);
+			expect((await SessionManager.list(dir, dir))[0]?.allMessagesText).toBe("alpha");
+			const statBefore = statSync(path);
+			writeFileSync(path, firstText.replace("alpha", "bravo"));
+			utimesSync(path, statBefore.atime, statBefore.mtime);
+			expect((await SessionManager.list(dir, dir))[0]?.allMessagesText).toBe("bravo");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

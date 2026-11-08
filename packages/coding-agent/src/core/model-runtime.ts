@@ -97,6 +97,7 @@ import {
 interface RegisteredVirtualModel {
 	model: Model<Api>;
 	route: VirtualModelDefinition["route"];
+	shouldRetry?: VirtualModelDefinition["shouldRetry"];
 }
 
 interface ModelRuntimeSnapshot {
@@ -196,6 +197,7 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
+	private extensionRefreshQueued = false;
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -883,6 +885,8 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		// An explicitly requested refresh subsumes any queued registration batch.
+		this.extensionRefreshQueued = false;
 		this.config = await ModelConfig.load(this.modelsPath);
 		this.configureRadiusProviders();
 		if (options.providers) {
@@ -925,6 +929,17 @@ export class ModelRuntime implements Models {
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
+	private scheduleExtensionRefresh(): void {
+		if (this.extensionRefreshQueued) return;
+		this.extensionRefreshQueued = true;
+		queueMicrotask(() => {
+			if (!this.extensionRefreshQueued) return;
+			this.extensionRefreshQueued = false;
+			// Synchronous registrations already refreshed provider and model snapshots.
+			void this.refresh({ allowNetwork: false });
+		});
+	}
+
 	registerNativeProvider(provider: Provider): void {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
@@ -936,7 +951,7 @@ export class ModelRuntime implements Models {
 			configuredRequestAuthStatus(this.config.getProvider(provider.id), undefined),
 			provider.auth.oauth && !provider.auth.apiKey ? "oauth" : "api_key",
 		);
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	/**
@@ -982,7 +997,7 @@ export class ModelRuntime implements Models {
 			configuredRequestAuthStatus(this.config.getProvider(providerId), effective),
 			effective.oauth && !effective.apiKey ? "oauth" : "api_key",
 		);
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	unregisterProvider(providerId: string): void {
@@ -990,7 +1005,7 @@ export class ModelRuntime implements Models {
 		this.nativeExtensionProviders.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	/**
@@ -1006,7 +1021,11 @@ export class ModelRuntime implements Models {
 			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
 		}
 		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
-		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		models.set(id, {
+			model: createVirtualModel(definition),
+			route: (request) => definition.route(request),
+			...(definition.shouldRetry ? { shouldRetry: definition.shouldRetry } : {}),
+		});
 		this.virtualModels.set(providerId, models);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
@@ -1016,7 +1035,7 @@ export class ModelRuntime implements Models {
 			this.snapshot = { ...this.snapshot, auth, configuredProviders };
 		}
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	unregisterVirtualModel(providerId: string, id: string): void {
@@ -1025,7 +1044,13 @@ export class ModelRuntime implements Models {
 		if (models.size === 0) this.virtualModels.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
+	}
+
+	/** Allow opt-in, scoped recovery without changing ordinary provider retry policy. */
+	shouldRetryVirtualFailure(model: Model<Api>, message: AssistantMessage): boolean {
+		if (!isVirtualModel(model) || message.stopReason !== "error") return false;
+		return this.virtualModels.get(model.provider)?.get(model.id)?.shouldRetry?.(message) ?? false;
 	}
 
 	/**

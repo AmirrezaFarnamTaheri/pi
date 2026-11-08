@@ -102,6 +102,72 @@ function ids(rows: readonly { readonly id: number }[]): number[] {
 	return rows.map(({ id }) => id);
 }
 
+describe("identical live-query refreshes", () => {
+	it("shares one transactional SQL read across identical subscriptions", async () => {
+		const rows = [{ id: 1, text: "one", meta: null }];
+		const operations: { sql: string; params: unknown[] }[] = [];
+		const step = {
+			all: async <T extends object>(sql: string, ...params: unknown[]): Promise<T[]> => {
+				operations.push({ sql, params });
+				return rows as unknown as T[];
+			},
+		} as Step;
+		const common = query(Items).orderBy((item) => item.id, "desc");
+		const handle = {
+			sql: { table: "items", select: () => ({ sql: "select items", params: [] }) },
+			store: {},
+			owner: {},
+			definition: {
+				key: ["id"],
+				rows: {
+					physical: ["id", "text", "meta"],
+					decode: (row: unknown) => row,
+				},
+			},
+		} as never;
+		const owner = { label: "test", report: () => {} };
+		const batch = {} as never;
+		const first = new LiveQuery(handle, common, 3, owner, batch);
+		const second = new LiveQuery(handle, common, 3, owner, batch);
+		const refreshed = new QueryRefresh([first, second], context);
+		await refreshed.write.apply(step);
+		refreshed.adopt();
+		expect(operations).toHaveLength(1);
+		expect(first.value).toEqual(rows);
+		expect(second.value).toEqual(rows);
+	});
+});
+
+describe("live-query bindings and read caching", () => {
+	it("shares identical bigint-bound reads without throwing on JSON serialization", async () => {
+		const executed: string[] = [];
+		const handle = {
+			sql: {
+				table: "items",
+				select: () => ({ sql: "select where id = ?", params: [42n] }),
+			},
+			owner: {},
+			definition: { key: ["id"], rows: { physical: ["id", "text"], decode: (row: unknown) => row } },
+		} as never;
+		const owner = { label: "test", report: () => {} };
+		const q = query(Items);
+		const a = new LiveQuery(handle, q, 1, owner, {} as never);
+		const b = new LiveQuery(handle, q, 1, owner, {} as never);
+		const step = {
+			all: async <T extends object>(sql: string, ...params: unknown[]): Promise<T[]> => {
+				executed.push(sql);
+				expect(params).toEqual([42n]);
+				return [{ id: 42, text: "item" }] as T[];
+			},
+		} as Step;
+		const refresh = new QueryRefresh([a, b], context);
+		await refresh.write.apply(step);
+		refresh.adopt();
+		expect(executed).toHaveLength(1);
+		expect(a.value).toEqual(b.value);
+	});
+});
+
 describe("activation", () => {
 	it("runs the query before the object goes live, over the rows already stored", async () => {
 		const store = await memoryStore();

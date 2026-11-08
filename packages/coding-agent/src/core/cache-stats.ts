@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "./session-manager.ts";
+import type { SessionEntry, SessionManager } from "./session-manager.ts";
 
 /**
  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
@@ -162,6 +162,133 @@ export function collectCacheMisses(
 }
 
 /**
+ * Replay token misses only along the active branch. Idle-time labels consider
+ * intervening provider requests from other branches, which may have refreshed
+ * a shared cache prefix before the current branch resumed.
+ */
+export function collectActiveBranchCacheMisses(
+	session: Pick<SessionManager, "getBranch" | "getEntries">,
+	models: ModelPriceSource,
+): Map<AssistantMessage, CacheMiss> {
+	const misses = collectCacheMisses(session.getBranch(), models);
+	if (misses.size === 0) return misses;
+	let latestRequestTime: number | undefined;
+	for (const entry of session.getEntries()) {
+		if (entry.type === "message" && entry.message.role === "assistant") {
+			const message = entry.message;
+			const miss = misses.get(message);
+			if (miss && latestRequestTime !== undefined) {
+				miss.idleMs = Math.min(miss.idleMs, Math.max(0, message.timestamp - latestRequestTime));
+			}
+			const usage = message.usage;
+			if (usage && usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(message.timestamp)) {
+				latestRequestTime = Math.max(latestRequestTime ?? -Infinity, message.timestamp);
+			}
+		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const usage = entry.usage;
+			const time = Date.parse(entry.timestamp);
+			if (usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(time)) {
+				latestRequestTime = Math.max(latestRequestTime ?? -Infinity, time);
+			}
+		}
+	}
+	return misses;
+}
+
+/**
+ * The latest request's cache-miss inputs can normally be found at the tail:
+ * a recent cache-reading or cache-writing turn provides all sticky cache
+ * evidence. Unlike scan(), this does not collect a map or totals for every
+ * historical turn. It visits older entries only when cache support has not
+ * yet been established in the current compaction segment.
+ */
+function lastRequestForMiss(entries: SessionEntry[]): PreviousRequest | undefined {
+	let latest: PreviousRequest | undefined;
+	let reportedCache = false;
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (entry.type === "compaction" || entry.type === "branch_summary") break;
+		if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+			if (promptTokens > 0) {
+				if (!latest) latest = {
+					promptTokens,
+					modelKey: `${entry.provider}/${entry.model}`,
+					timestamp: Date.parse(entry.timestamp),
+					reportedCache: true,
+				};
+				reportedCache = true;
+			}
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			const request = asPreviousRequest(entry.message, false);
+			if (request) {
+				latest ??= request;
+				if (request.reportedCache) reportedCache = true;
+			}
+		}
+		if (latest && reportedCache) break;
+	}
+	return latest ? { ...latest, reportedCache } : undefined;
+}
+
+/**
+ * The last known request for each ancestry node is immutable for an append-only
+ * session. Only previously unseen nodes are visited after each append or branch.
+ */
+const requestStatesBySession = new WeakMap<SessionManager, WeakMap<SessionEntry, PreviousRequest | undefined>>();
+
+function lastRequestForSession(session: SessionManager): PreviousRequest | undefined {
+	let states = requestStatesBySession.get(session);
+	if (!states) {
+		states = new WeakMap();
+		requestStatesBySession.set(session, states);
+	}
+	const unseen: SessionEntry[] = [];
+	let current = session.getLeafEntry();
+	let remaining = session.getEntryCount();
+	while (current && !states.has(current)) {
+		if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
+		unseen.push(current);
+		current = current.parentId ? session.getEntry(current.parentId) : undefined;
+	}
+	let prev = current ? states.get(current) : undefined;
+	for (let index = unseen.length - 1; index >= 0; index--) {
+		const entry = unseen[index]!;
+		if (entry.type === "compaction" || entry.type === "branch_summary") {
+			prev = undefined;
+		} else if (entry.type === "usage" && entry.kind === "cache_warm") {
+			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+			if (promptTokens > 0) {
+				prev = {
+					promptTokens,
+					modelKey: `${entry.provider}/${entry.model}`,
+					timestamp: Date.parse(entry.timestamp),
+					reportedCache: true,
+				};
+			}
+		} else if (entry.type === "message" && entry.message.role === "assistant") {
+			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+		}
+		states.set(entry, prev);
+	}
+	return prev;
+}
+
+/** Detect the next message's miss without building the full active branch. */
+export function detectCacheMissForSession(
+	session: SessionManager,
+	message: AssistantMessage,
+	models: ModelPriceSource,
+): CacheMiss | undefined {
+	const miss = detectMiss(lastRequestForSession(session), message, models);
+	const latestRequestTime = session.getLatestProviderRequestTimestamp();
+	if (miss && latestRequestTime !== undefined) {
+		miss.idleMs = Math.min(miss.idleMs, Math.max(0, message.timestamp - latestRequestTime));
+	}
+	return miss;
+}
+
+/**
  * Detect a cache miss on a just-completed assistant message.
  * `entries` must not yet contain `message` (message_end fires before persistence).
  */
@@ -170,5 +297,5 @@ export function detectCacheMiss(
 	message: AssistantMessage,
 	models: ModelPriceSource,
 ): CacheMiss | undefined {
-	return detectMiss(scan(entries, models).prev, message, models);
+	return detectMiss(lastRequestForMiss(entries), message, models);
 }

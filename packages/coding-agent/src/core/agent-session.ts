@@ -1281,7 +1281,10 @@ export class AgentSession {
 	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
 		const mapped = this._entryIdsByMessage.get(message);
 		if (mapped) return mapped;
-		for (const entry of [...this.sessionManager.getBranch()].reverse()) {
+		// getBranch() returns a fresh array, so it can be scanned from the newest entry without another copy.
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index]!;
 			if (entry.type === "message" && entry.message === message) return entry.id;
 		}
 
@@ -3871,7 +3874,8 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
-		return isRetryableAssistantError(message);
+		const selected = this.model;
+		return (selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) || isRetryableAssistantError(message);
 	}
 
 	/**

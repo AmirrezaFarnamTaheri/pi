@@ -1,8 +1,8 @@
 import { Type } from "typebox";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
 import type { Api, AssistantMessage, Context, Message, Model, SystemMessage, Tool } from "../src/types.ts";
-import { resolveTranscriptTools } from "../src/utils/transcript.ts";
+import { declarationsEqual, getCurrentTools, getToolStateChanges, resolveTranscriptTools } from "../src/utils/transcript.ts";
 
 class PayloadCaptured extends Error {}
 
@@ -647,5 +647,78 @@ describe("transcript system messages", () => {
 		expect(payload.tools?.map((value) => value.function?.name)).toEqual(["late_tool"]);
 		expect(payload.messages.map((message) => message.role)).toEqual(["system", "user"]);
 		expect(payload.messages[0]?.content).toBe("base prompt\n\nupdated guidance\n\n<rules>\nnew rules\n</rules>");
+	});
+});
+
+
+describe("declaration comparison avoids redundant schema copying", () => {
+	it("ignores nonenumerable schema metadata while distinguishing serialized changes", () => {
+		const schema = { type: "object", properties: { term: { type: "string" } } };
+		Object.defineProperty(schema, "kind", { value: "object", enumerable: false });
+		const first = { name: "search", description: "Search", parameters: schema };
+		const clone = { name: "search", description: "Search", parameters: JSON.parse(JSON.stringify(schema)) };
+		const changed = { ...clone, description: "Search updated" };
+		expect(declarationsEqual(first as never, clone as never)).toBe(true);
+		expect(declarationsEqual(first as never, changed as never)).toBe(false);
+	});
+});
+
+describe("tool-state comparison efficiency", () => {
+	test("compares existing declarations once and preserves changed/removal semantics", () => {
+		let serialized = 0;
+		const schema = () => ({
+			type: "object",
+			properties: { value: { type: "string" } },
+			toJSON() {
+				serialized++;
+				return { type: "object", properties: { value: { type: "string" } } };
+			},
+		});
+		const previous = ["stable", "changed", "removed"].map((name) => ({
+			name,
+			description: name,
+			parameters: schema(),
+		}));
+		const current = [
+			{ name: "stable", description: "stable", parameters: schema() },
+			{ name: "changed", description: "updated", parameters: schema() },
+			{ name: "added", description: "added", parameters: schema() },
+		];
+		const changes = getToolStateChanges(previous as never, current as never);
+		expect(changes.toolsAdded.map((tool) => tool.name)).toEqual(["changed", "added"]);
+		expect(changes.toolsRemoved.map((tool) => tool.name)).toEqual(["changed", "removed"]);
+		expect(serialized).toBe(6);
+	});
+});
+
+
+describe("segmented tool-state replay", () => {
+	test("preserves delta ordering without building a combined transcript", () => {
+		const prefix = [{ role: "system", content: "", toolsAdded: [tool("first"), tool("second")], timestamp: 0 }, { role: "system", content: "", toolsRemoved: [{ name: "first" }], timestamp: 1 }] satisfies Message[];
+		const pending = [{ role: "system", content: "", toolsAdded: [tool("third"), { ...tool("second"), description: "changed" }], timestamp: 2 }, { role: "system", content: "", toolsAdded: [tool("first")], timestamp: 3 }] satisfies Message[];
+		expect(getCurrentTools(prefix, pending)).toEqual(getCurrentTools([...prefix, ...pending]));
+		expect(getCurrentTools(prefix, pending).map((t) => t.name)).toEqual(["second", "third", "first"]);
+		 expect(prefix).toHaveLength(2);
+		 expect(pending).toHaveLength(2);
+	});
+});
+
+describe("root-serialized declarations", () => {
+	test("honors schema toJSON at the root rather than at its parameters property", () => {
+		const left = {
+			name: "special",
+			description: "key-sensitive",
+			parameters: {
+				toJSON(key: string) { return { type: key === "" ? "string" : "object" }; },
+			},
+		};
+		const right = {
+			name: "special",
+			description: "key-sensitive",
+			parameters: {
+				toJSON(key: string) { return { type: key === "" ? "number" : "object" }; },
+			},
+		};
+		expect(declarationsEqual(left as never, right as never)).toBe(false);
 	});
 });

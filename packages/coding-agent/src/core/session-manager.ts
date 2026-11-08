@@ -11,7 +11,7 @@ import {
 	type UserMessage,
 	uuidv7,
 } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -407,7 +407,11 @@ function buildSessionPath(
 
 	const path: SessionEntry[] = [];
 	let current: SessionEntry | undefined = leaf;
+	// A corrupt JSONL session can contain cyclic parent IDs. A valid ancestry
+	// cannot visit more entries than the index contains.
+	let remaining = Math.max(1, index.size);
 	while (current) {
+		if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 		path.push(current);
 		current = current.parentId ? index.get(current.parentId) : undefined;
 	}
@@ -478,7 +482,11 @@ export function buildContextEntries(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionEntry[] {
-	const path = buildSessionPath(entries, leafId, byId);
+	return contextEntriesFromPath(buildSessionPath(entries, leafId, byId));
+}
+
+/** Reuse the already indexed active branch instead of traversing it a second time. */
+function contextEntriesFromPath(path: SessionEntry[]): SessionEntry[] {
 	let compaction: CompactionEntry | null = null;
 
 	for (const entry of path) {
@@ -507,7 +515,8 @@ export function buildContextEntries(
 			contextEntries.push(entry);
 		}
 	}
-	contextEntries.push(...path.slice(compactionIdx + 1));
+	// Spread-call arguments have an engine-specific limit (~100k+ entries).
+	for (let i = compactionIdx + 1; i < path.length; i++) contextEntries.push(path[i]!);
 	return contextEntries;
 }
 
@@ -546,9 +555,12 @@ export function buildSessionProjection(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionProjection {
-	const path = buildSessionPath(entries, leafId, byId);
+	return projectSessionPath(buildSessionPath(entries, leafId, byId));
+}
+
+function projectSessionPath(path: SessionEntry[]): SessionProjection {
 	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const contextEntries = buildContextEntries(entries, leafId, byId);
+	const contextEntries = contextEntriesFromPath(path);
 	const edits = new Map<string, ContextEditEntry>();
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
@@ -630,7 +642,7 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	if (!existsSync(resolvedFilePath)) return [];
 
 	const entries: FileEntry[] = [];
-	let pending = "";
+	const lineParts: string[] = [];
 	const fd = openSync(resolvedFilePath, "r");
 	try {
 		const decoder = new StringDecoder("utf8");
@@ -640,24 +652,33 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
 			if (bytesRead === 0) break;
 
-			pending += decoder.write(buffer.subarray(0, bytesRead));
+			// Scan newly decoded bytes only: never rescan a growing JSONL record.
+			const chunk = decoder.write(buffer.subarray(0, bytesRead));
 			let lineStart = 0;
-			let newlineIndex = pending.indexOf("\n", lineStart);
+			let newlineIndex = chunk.indexOf("\n");
 			while (newlineIndex !== -1) {
-				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+				const part = chunk.slice(lineStart, newlineIndex);
+				let line = part;
+				if (lineParts.length > 0) {
+					lineParts.push(part);
+					line = lineParts.join("");
+				}
+				const entry = parseSessionEntryLine(line);
 				if (entry) entries.push(entry);
+				lineParts.length = 0;
 				lineStart = newlineIndex + 1;
-				newlineIndex = pending.indexOf("\n", lineStart);
+				newlineIndex = chunk.indexOf("\n", lineStart);
 			}
-			pending = pending.slice(lineStart);
+			if (lineStart < chunk.length) lineParts.push(chunk.slice(lineStart));
 		}
-
-		pending += decoder.end();
-		const finalEntry = parseSessionEntryLine(pending);
-		if (finalEntry) entries.push(finalEntry);
+		const last = decoder.end();
+		if (last) lineParts.push(last);
 	} finally {
 		closeSync(fd);
 	}
+	const pending = lineParts.join("");
+	const finalEntry = parseSessionEntryLine(pending);
+	if (finalEntry) entries.push(finalEntry);
 
 	// Validate session header before repairing the file.
 	if (entries.length === 0) return entries;
@@ -797,6 +818,77 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
+/** Independent copies prevent callers from modifying the summary held in the LRU. */
+function copySessionInfo(info: SessionInfo): SessionInfo {
+	return { ...info, created: new Date(info.created.getTime()), modified: new Date(info.modified.getTime()) };
+}
+
+/** Hash a file as a stream to validate cached summaries without buffering JSONL histories. */
+async function sessionFileDigest(path: string, signal?: AbortSignal): Promise<string> {
+	const hash = createHash("sha256");
+	for await (const bytes of createReadStream(path, { signal })) hash.update(bytes);
+	return hash.digest("hex");
+}
+
+/**
+ * Session discovery is invoked repeatedly when the picker changes scope. Keep a
+ * small, stat- and digest-validated LRU of parsed entries so unchanged JSONL histories need
+ * not be decoded again. Large transcripts are intentionally not retained.
+ */
+class SessionInfoCache {
+	readonly #entries = new Map<string, { size: number; mtime: number; ctime: number; digest: string; info: SessionInfo; bytes: number }>();
+	#totalBytes = 0;
+	readonly maxBytes: number;
+	readonly maxEntries: number;
+
+	constructor(maxBytes = 16 * 1024 * 1024, maxEntries = 256) {
+		this.maxBytes = maxBytes;
+		this.maxEntries = maxEntries;
+	}
+
+	/** Return a copy of the cached summary when the file is unchanged by stat and content hash, else evict it. */
+	async get(path: string, stats: Stats, signal?: AbortSignal): Promise<SessionInfo | undefined> {
+		const entry = this.#entries.get(path);
+		if (!entry) return undefined;
+		if (entry.size !== stats.size || entry.mtime !== stats.mtimeMs || entry.ctime !== stats.ctimeMs) {
+			this.#remove(path, entry);
+			return undefined;
+		}
+		// Some filesystems have coarse timestamps; a same-sized rewrite can look
+		// identical to stat(). Compare bytes before trusting a parsed summary.
+		if (await sessionFileDigest(path, signal) !== entry.digest) {
+			this.#remove(path, entry);
+			return undefined;
+		}
+		this.#entries.delete(path);
+		this.#entries.set(path, entry);
+		return copySessionInfo(entry.info);
+	}
+
+	/** Store a copy of a parsed summary, evicting least recently used entries over the byte and entry limits. */
+	put(path: string, stats: Stats, info: SessionInfo, digest: string): void {
+		const bytes = 512 + 2 * (info.allMessagesText.length + info.firstMessage.length + (info.name?.length ?? 0));
+		const old = this.#entries.get(path);
+		if (old) this.#remove(path, old);
+		if (bytes > this.maxBytes) return;
+		this.#entries.set(path, { size: stats.size, mtime: stats.mtimeMs, ctime: stats.ctimeMs, info: copySessionInfo(info), digest, bytes });
+		this.#totalBytes += bytes;
+		while (this.#entries.size > this.maxEntries || this.#totalBytes > this.maxBytes) {
+			const oldest = this.#entries.keys().next().value;
+			if (oldest === undefined) break;
+			this.#remove(oldest, this.#entries.get(oldest)!);
+		}
+	}
+
+	/** Drop one entry and its byte accounting. */
+	#remove(path: string, entry: { bytes: number }): void {
+		this.#entries.delete(path);
+		this.#totalBytes -= entry.bytes;
+	}
+}
+
+const sessionInfoCache = new SessionInfoCache();
+
 async function buildSessionInfo(
 	filePath: string,
 	signal?: AbortSignal,
@@ -804,6 +896,8 @@ async function buildSessionInfo(
 ): Promise<SessionInfo | null> {
 	try {
 		const stats = fileStats ?? (await stat(filePath));
+		const cached = await sessionInfoCache.get(filePath, stats, signal);
+		if (cached) return cached;
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
 		let firstMessage = "";
@@ -811,10 +905,12 @@ async function buildSessionInfo(
 		let name: string | undefined;
 		let lastActivityTime: number | undefined;
 
-		const rl = createInterface({
-			input: createReadStream(filePath, { encoding: "utf8", signal }),
-			crlfDelay: Infinity,
-		});
+		// Hash raw bytes as readline parses them, instead of reading the entire
+		// JSONL file a second time on every cold cache fill.
+		const input = createReadStream(filePath, { signal });
+		const hash = createHash("sha256");
+		input.on("data", (bytes) => { hash.update(bytes); });
+		const rl = createInterface({ input, crlfDelay: Infinity });
 
 		for await (const line of rl) {
 			const entry = parseSessionEntryLine(line);
@@ -853,6 +949,7 @@ async function buildSessionInfo(
 		}
 
 		if (!header) return null;
+		const digest = hash.digest("hex");
 
 		const cwd = typeof header.cwd === "string" ? header.cwd : "";
 		const parentSessionPath = header.parentSession;
@@ -864,7 +961,7 @@ async function buildSessionInfo(
 					? new Date(headerTime)
 					: stats.mtime;
 
-		return {
+		const info: SessionInfo = {
 			path: filePath,
 			id: header.id,
 			cwd,
@@ -876,6 +973,13 @@ async function buildSessionInfo(
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.join(" "),
 		};
+		// A session may have been appended while it was streamed. Cache only
+		// snapshots whose metadata remained unchanged across the read.
+		const current = await stat(filePath);
+		if (current.size === stats.size && current.mtimeMs === stats.mtimeMs && current.ctimeMs === stats.ctimeMs) {
+			sessionInfoCache.put(filePath, stats, info, digest);
+		}
+		return info;
 	} catch {
 		signal?.throwIfAborted();
 		return null;
@@ -922,6 +1026,19 @@ function sortSessionInfos(sessions: SessionInfo[]): SessionInfo[] {
 	return sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 }
 
+/** Keep progressive session results sorted, without re-sorting every published prefix. */
+export function insertSessionByActivity(sorted: SessionInfo[], session: SessionInfo): void {
+	const modified = session.modified.getTime();
+	let low = 0;
+	let high = sorted.length;
+	while (low < high) {
+		const middle = (low + high) >>> 1;
+		if (sorted[middle]!.modified.getTime() >= modified) low = middle + 1;
+		else high = middle;
+	}
+	sorted.splice(low, 0, session);
+}
+
 function buildSessionInfosWithConcurrency(
 	files: SessionFileCandidate[],
 	onLoaded: (info: SessionInfo | null, index: number) => void,
@@ -960,18 +1077,39 @@ async function listSessionsFromDir(
 			files,
 			(info) => {
 				loaded++;
-				if (info) partialSessions.push(info);
+				if (info) insertSessionByActivity(partialSessions, info);
 				const publishPartial =
 					loaded === 1 || loaded % CURRENT_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === files.length;
-				onProgress?.(loaded, total, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+				onProgress?.(loaded, total, publishPartial ? [...partialSessions] : undefined);
 			},
 			signal,
 		);
+		signal?.throwIfAborted();
 		return results.filter((info): info is SessionInfo => info !== null);
 	} catch {
 		signal?.throwIfAborted();
 		return [];
 	}
+}
+
+/** Return the timestamp only for requests that actually reached a provider. */
+function providerRequestTimestamp(entry: SessionEntry): number | undefined {
+	if (entry.type === "message" && entry.message.role === "assistant") {
+		// Older or partially recovered transcripts may lack usage metadata.
+		const usage = entry.message.usage;
+		if (!usage) return undefined;
+		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(entry.message.timestamp)
+			? entry.message.timestamp
+			: undefined;
+	}
+	if (entry.type === "usage" && entry.kind === "cache_warm") {
+		const usage = entry.usage;
+		const timestamp = Date.parse(entry.timestamp);
+		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(timestamp)
+			? timestamp
+			: undefined;
+	}
+	return undefined;
 }
 
 /**
@@ -994,9 +1132,14 @@ export class SessionManager {
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
+	/** Lazily built, append-maintained index for branch navigation. */
+	private childrenByParent?: Map<string, SessionEntry | SessionEntry[]>;
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/** Cache the frame-time footer title until the append-only session array changes. */
+	private sessionNameCache?: { entries: FileEntry[]; length: number; name: string | undefined };
+	private latestProviderRequestTimestamp: number | undefined;
 
 	private constructor(
 		cwd: string,
@@ -1071,6 +1214,9 @@ export class SessionManager {
 		};
 		this.fileEntries = [header];
 		this.byId.clear();
+		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
+		this.latestProviderRequestTimestamp = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1103,6 +1249,9 @@ export class SessionManager {
 
 	private _buildIndex(): void {
 		this.byId.clear();
+		this.childrenByParent = undefined;
+		this.sessionNameCache = undefined;
+		this.latestProviderRequestTimestamp = undefined;
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
@@ -1110,6 +1259,7 @@ export class SessionManager {
 			if (entry.type === "session") continue;
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;
+			this.trackProviderRequest(entry);
 			if (entry.type === "label") {
 				if (entry.label) {
 					this.labelsById.set(entry.targetId, entry.label);
@@ -1189,6 +1339,13 @@ export class SessionManager {
 		}
 	}
 
+	private trackProviderRequest(entry: SessionEntry): void {
+		const timestamp = providerRequestTimestamp(entry);
+		if (timestamp !== undefined) {
+			this.latestProviderRequestTimestamp = Math.max(this.latestProviderRequestTimestamp ?? -Infinity, timestamp);
+		}
+	}
+
 	private _appendEntry(entry: SessionEntry): void {
 		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
@@ -1204,6 +1361,15 @@ export class SessionManager {
 			this.leafId = previousLeafId;
 			throw error;
 		}
+		// Publish to the navigation cache only after persistence succeeds. A
+		// failed append has already rolled back its in-memory parent/leaf state.
+		if (entry.parentId !== null && this.childrenByParent) {
+			const siblings = this.childrenByParent.get(entry.parentId);
+			if (!siblings) this.childrenByParent.set(entry.parentId, entry);
+			else if (Array.isArray(siblings)) siblings.push(entry);
+			else this.childrenByParent.set(entry.parentId, [siblings, entry]);
+		}
+		this.trackProviderRequest(entry);
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1325,18 +1491,21 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Get the current session name from the latest session_info entry, if any. */
+	/** Get the latest session title in O(1) on repeated UI frames. */
 	getSessionName(): string | undefined {
-		// Walk entries in reverse to find the latest session_info entry.
-		// Empty names explicitly clear the session title. Reads fileEntries directly: the footer
-		// calls this on every frame, and getEntries() copies the whole session.
-		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
-			const entry = this.fileEntries[i];
+		const entries = this.fileEntries;
+		const cached = this.sessionNameCache;
+		if (cached?.entries === entries && cached.length === entries.length) return cached.name;
+		let name: string | undefined;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i]!;
 			if (entry.type === "session_info") {
-				return entry.name?.trim() || undefined;
+				name = entry.name?.trim() || undefined;
+				break;
 			}
 		}
-		return undefined;
+		this.sessionNameCache = { entries, length: entries.length, name };
+		return name;
 	}
 
 	/**
@@ -1424,17 +1593,29 @@ export class SessionManager {
 		return this.byId.get(id);
 	}
 
+	/** Latest provider request across all branches, independent of the active prompt. */
+	getLatestProviderRequestTimestamp(): number | undefined {
+		return this.latestProviderRequestTimestamp;
+	}
+
 	/**
 	 * Get all direct children of an entry.
 	 */
 	getChildren(parentId: string): SessionEntry[] {
-		const children: SessionEntry[] = [];
-		for (const entry of this.byId.values()) {
-			if (entry.parentId === parentId) {
-				children.push(entry);
+		if (!this.childrenByParent) {
+			const index = new Map<string, SessionEntry | SessionEntry[]>();
+			for (const entry of this.byId.values()) {
+				if (entry.parentId === null) continue;
+				const siblings = index.get(entry.parentId);
+				if (!siblings) index.set(entry.parentId, entry);
+				else if (Array.isArray(siblings)) siblings.push(entry);
+				else index.set(entry.parentId, [siblings, entry]);
 			}
+			this.childrenByParent = index;
 		}
-		return children;
+		// Preserve the shallow-copy contract without keeping a singleton array per parent.
+		const children = this.childrenByParent.get(parentId);
+		return children ? (Array.isArray(children) ? children.slice() : [children]) : [];
 	}
 
 	/**
@@ -1481,7 +1662,9 @@ export class SessionManager {
 		const path: SessionEntry[] = [];
 		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
+		let remaining = this.byId.size;
 		while (current) {
+			if (remaining-- === 0) throw new Error("Cycle detected in session entry parent chain");
 			path.push(current);
 			current = current.parentId ? this.byId.get(current.parentId) : undefined;
 		}
@@ -1494,7 +1677,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildContextEntries(): SessionEntry[] {
-		return buildContextEntries(this.getEntries(), this.leafId, this.byId);
+		return contextEntriesFromPath(this.getBranch());
 	}
 
 	/**
@@ -1502,7 +1685,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildSessionProjection(): SessionProjection {
-		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
+		return projectSessionPath(this.getBranch());
 	}
 
 	buildSessionContext(): SessionContext {
@@ -1568,11 +1751,21 @@ export class SessionManager {
 		// Sort children by timestamp (oldest first, newest at bottom)
 		// Use iterative approach to avoid stack overflow on deep trees
 		const stack: SessionTreeNode[] = [...roots];
+		let visited = 0;
 		while (stack.length > 0) {
 			const node = stack.pop()!;
-			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-			stack.push(...node.children);
+			visited++;
+			// Parse each timestamp once rather than O(siblings * log siblings) times.
+			if (node.children.length > 1) {
+				const sorted = node.children.map((child) => ({ child, time: Date.parse(child.entry.timestamp) }));
+				sorted.sort((a, b) => a.time - b.time);
+				for (let i = 0; i < sorted.length; i++) node.children[i] = sorted[i]!.child;
+			}
+			// A root may have more siblings than V8 permits as function arguments.
+			for (const child of node.children) stack.push(child);
 		}
+		// Disconnected cyclic components have no root, and must not disappear silently.
+		if (visited !== nodeMap.size) throw new Error("Cycle detected in session entry parent chain");
 
 		return roots;
 	}
@@ -2011,15 +2204,16 @@ export class SessionManager {
 				(info, index) => {
 					loaded++;
 					if (index === 0) firstCandidateLoaded = true;
-					if (info) partialSessions.push(info);
+					if (info) insertSessionByActivity(partialSessions, info);
 					const publishPartial =
 						firstCandidateLoaded &&
 						(index === 0 || loaded % ALL_SESSION_LIST_PUBLISH_INTERVAL === 0 || loaded === totalFiles);
-					progress?.(loaded, totalFiles, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
+					progress?.(loaded, totalFiles, publishPartial ? [...partialSessions] : undefined);
 				},
 				abortSignal,
 			);
 
+			abortSignal?.throwIfAborted();
 			return sortSessionInfos(results.filter((info): info is SessionInfo => info !== null));
 		} catch {
 			abortSignal?.throwIfAborted();
