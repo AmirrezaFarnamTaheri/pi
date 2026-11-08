@@ -428,7 +428,10 @@ class SessionList implements Component, Focusable {
 			this.regexAbort = controller;
 			this.regexDelay = setTimeout(() => {
 				this.regexDelay = undefined;
-				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal)
+				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal, (ids) => {
+					if (this.regexSearchVersion === version && !controller.signal.aborted)
+						this.onError?.(`Regex search incomplete: skipped ${ids.length} oversized or unreadable session${ids.length === 1 ? "" : "s"} (${ids.slice(0, 3).join(", ")}).`);
+				})
 					.then((filtered) => {
 						if (this.regexSearchVersion !== version || controller.signal.aborted) return;
 						this.filteredSessions = filtered.map((session) => ({
