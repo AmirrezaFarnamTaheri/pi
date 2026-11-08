@@ -145,3 +145,21 @@ describe("discord event scheduler", () => {
 		await scheduler.idle();
 	});
 });
+
+test("idle waits for an outstanding asynchronous rejected-command notice", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+  scheduler.enqueue({ bot: "b", key: "queued", priority: true, run: async () => {} });
+  scheduler.enqueue({ bot: "b", key: "reject", priority: true, run: async () => {},
+    onRejected: () => gate });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let idle = false;
+  void scheduler.idle().then(() => { idle = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(idle, false);
+  release();
+  await scheduler.idle();
+  assert.equal(idle, true);
+});
