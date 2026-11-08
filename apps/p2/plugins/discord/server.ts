@@ -38,6 +38,8 @@ const LinkRepairSchema = obj({
 	kind: str(),
 	session: str(),
 	lock: union([SessionLockSchema, nul()]),
+	expectedLock: opt(union([SessionLockSchema, nul()])),
+	proposedLock: opt(union([SessionLockSchema, nul()])),
 	wake: opt(WakeSchema),
 });
 
@@ -113,24 +115,24 @@ export default defineFacet((host) => {
 		// Owner link mutations may await remote Discord calls; serialize their entire
 		// transaction, including unlink, to preserve the one-session/one-channel invariant.
 		const linkMutations = new LinkMutationQueue();
-		const reconcile = async (ctx: Ctx): Promise<void> => {
-			const unlinks = Object.values(state.value.repairs)
-				.filter((repair) => repair.kind === "unlink")
-				.map((repair) => repair.session);
-			await resumeLinkRepairs({
-				value: () => state.value as unknown as LinkRepairState,
-				change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
-			}, async (session, lock) => {
-				await locks.set({ session, lock }, ctx);
-			});
-			for (const session of unlinks) {
+		const reconcile = (ctx: Ctx): Promise<void> => resumeLinkRepairs({
+			value: () => state.value as unknown as LinkRepairState,
+			change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
+		}, async (session, lock, expected) => {
+			if (expected !== undefined) {
+				const { applied } = await locks.compareAndSet({ session, previous: expected, lock }, ctx);
+				return applied;
+			}
+			await locks.set({ session, lock }, ctx);
+			return true;
+		}, {
+			beforeUnlock: (session) => relay.waitForSession(session),
+			notifyUnlinked: async (session) => {
 				const row = catalog.sessions.value.find((entry) => entry.id === session);
 				if (row && row.archivedAt === null)
-					await ingress(session, (worker, scope) => worker.unlinked(scope)).catch((error: unknown) =>
-						console.error("p2 discord: telling the session it is unlinked failed:", errorText(error)),
-					);
-			}
-		};
+					await ingress(session, (worker, scope) => worker.unlinked(scope));
+			},
+		});
 		const linkExclusive = <T>(ctx: Ctx, action: () => Promise<T>): Promise<T> => linkMutations.run(async () => {
 			// No new mutation can bypass an unfinished durable repair.
 			if (Object.keys(state.value.repairs).length) await reconcile(ctx);
@@ -184,6 +186,10 @@ export default defineFacet((host) => {
 		self.onLive(async (ctx) => {
 			for (let tick = 1; !signalOf(ctx).aborted; tick++) {
 				await sleep(TYPING_MS, ctx);
+				if (Object.keys(state.value.repairs).length)
+					await linkMutations.run(() => reconcile(ctx)).catch((error: unknown) =>
+						console.error("p2 discord: retrying pending link recovery:", errorText(error)));
+
 				await relay.typing();
 				if (tick % CHECK_EVERY === 0 && Object.keys(state.value.pending).length)
 					await relay.checkPending().catch(() => {});
@@ -246,7 +252,7 @@ export default defineFacet((host) => {
 			// A single persisted commit first revokes Discord ingress and records the
 			// lock-release intent. A restart can safely retry a failed lock write.
 			await state.change((draft) => {
-				draft.repairs[session] = { kind: "unlink", session, lock: null };
+				draft.repairs[session] = { kind: "unlink", session, lock: null, expectedLock: locks.locks.value[session] ?? null };
 				removeSessionBinding(draft as unknown as LinkRepairState, session);
 			}, ctx);
 			await reconcile(ctx);
@@ -291,7 +297,7 @@ export default defineFacet((host) => {
 				// Relocation may remain in the safer sandbox if a later step fails.
 				const priorLock = locks.locks.value[session] ?? null;
 				await state.change((draft) => {
-					draft.repairs[session] = { kind: "link", session, lock: priorLock };
+					draft.repairs[session] = { kind: "link", session, lock: priorLock, proposedLock: lock };
 				}, ctx);
 				try {
 					// As the owner's Relocate: the session works in the sandbox from now on.
@@ -345,7 +351,7 @@ export default defineFacet((host) => {
 				// Record the owner's desired policy before changing the session's lock.
 				// A crash after either write resumes the same update on startup.
 				await state.change((draft) => {
-					draft.repairs[session] = { kind: "update", session, lock, wake };
+					draft.repairs[session] = { kind: "update", session, lock, expectedLock: locks.locks.value[session] ?? null, wake };
 				}, ctx);
 				await reconcile(ctx);
 				return null;
