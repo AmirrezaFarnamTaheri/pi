@@ -48,6 +48,37 @@ describe("fork model-data hydration entry point", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it("hydrates a valid catalog with the real default provider-file generator", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-fork-real-hydrate-"));
+    try {
+      mkdirSync(join(root, "nix"));
+      const providers = join(root, "packages", "ai", "src", "providers");
+      mkdirSync(providers, { recursive: true });
+      writeFileSync(join(root, "packages", "ai", "src", "models.generated.ts"),
+        'import { FIXTURE_CLASSIFIER_MODELS, FIXTURE_IMAGE_MODELS, FIXTURE_MODELS } from "./providers/fixture.models.ts";\\n');
+      const model = {
+        type: "chat", id: "fixture-model", provider: "fixture", api: "openai-responses",
+        name: "Fixture", baseUrl: "https://example.invalid", input: ["text"],
+        reasoning: false, contextWindow: 4096, maxTokens: 1024,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const bytes = Buffer.from(JSON.stringify({ fixture: [model] }));
+      writeFileSync(join(root, "nix", "model-catalog.json"),
+        JSON.stringify({ revision: digest(bytes) }));
+      const revision = await hydratePinnedModelData({
+        root, fetchCatalog: async () => new Response(bytes),
+      });
+      assert.equal(revision, digest(bytes));
+      const output = JSON.parse(readFileSync(join(providers, "data", "fixture.json"), "utf8"));
+      assert.deepEqual(output["openai-responses"]["chat:fixture-model"], model);
+      const manifest = JSON.parse(readFileSync(join(providers, "data", ".manifest.json"), "utf8"));
+      assert.equal(manifest.generatedAt, "1970-01-01T00:00:00.000Z");
+      assert.equal(readdirSync(providers).some((name) => name.startsWith(".model-hydration-")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("cleans temporary downloaded bytes on a failed hydration step", async () => {
     const { root, bytes } = setup();
     try {
