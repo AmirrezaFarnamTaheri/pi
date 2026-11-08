@@ -144,14 +144,19 @@ export function createStoredAccountAlias(source: Provider, id: string, name?: st
 	const apiKey = source.auth.apiKey;
 	const isolatedApiKey = apiKey?.login ? {
 		...apiKey,
+		login: async (interaction: Parameters<NonNullable<typeof apiKey.login>>[0]) => {
+			const credential = await apiKey.login!(interaction);
+			if (!credential.key) throw new Error("Independent API-key accounts require a stored key");
+			return credential;
+		},
 		check: async (input: Parameters<NonNullable<typeof apiKey.check>>[0]) => {
-			if (!input.credential) return undefined;
+			if (!input.credential?.key) return undefined;
 			if (apiKey.check) return apiKey.check(input);
 			return (await apiKey.resolve(input))
 				? { type: "api_key" as const, source: "stored credential" } : undefined;
 		},
 		resolve: async (input: Parameters<typeof apiKey.resolve>[0]) => {
-			if (!input.credential) return undefined;
+			if (!input.credential?.key) return undefined;
 			return apiKey.resolve(input);
 		},
 	} : undefined;
