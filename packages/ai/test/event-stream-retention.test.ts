@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EventStream } from "../src/utils/event-stream.ts";
+import { EventStream, createAssistantMessageEventStream } from "../src/utils/event-stream.ts";
 
 describe("EventStream opt-in result-only retention", () => {
 	it("preserves historical events by default for late consumers", async () => {
@@ -40,6 +40,29 @@ describe("EventStream opt-in result-only retention", () => {
 		await consuming;
 		expect(seen).toEqual([1, 2]);
 		expect(await stream.result()).toBe(2);
+	});
+
+	it("allows assistant response callers to opt out without losing the final response", async () => {
+		const stream = createAssistantMessageEventStream({ retention: "result-only" });
+		const message = {
+			role: "assistant" as const,
+			content: [],
+			api: "openai-responses" as const,
+			provider: "openai" as const,
+			model: "test-model",
+			timestamp: Date.now(),
+			stopReason: "stop" as const,
+			usage: {
+				input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+		stream.push({ type: "done", reason: "stop", message });
+		expect(await stream.result()).toBe(message);
+		expect(message).toHaveProperty("durationMs");
+		const replay: unknown[] = [];
+		for await (const event of stream) replay.push(event);
+		expect(replay).toEqual([]);
 	});
 
 	it("still propagates producer failure to both result and iteration", async () => {
