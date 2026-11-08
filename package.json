@@ -55,7 +55,8 @@
 		"release:major": "node scripts/release.mjs major",
 		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
 		"prepare": "husky",
-		"check:fork-workflows": "node scripts/check-fork-workflows.mjs"
+		"check:fork-workflows": "node scripts/check-fork-workflows.mjs",
+		"bench:runtime": "node scripts/bench-runtime.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
