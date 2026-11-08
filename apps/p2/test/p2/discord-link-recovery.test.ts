@@ -52,3 +52,14 @@ it("finishes interrupted update of lock and wake policy", async () => {
   assert.equal(locks.get("s1"), null);
   assert.deepEqual(store.value().repairs, {});
 });
+
+it("keeps a committed link and does not overwrite its live lock during recovery", async () => {
+  const { store } = fakeState({
+    bindings: { c1: { session: "s1" } }, pending: {},
+    repairs: { s1: { session: "s1", kind: "link", lock: null } },
+  });
+  let writes = 0;
+  await resumeLinkRepairs(store, async () => { writes++; });
+  assert.equal(writes, 0);
+  assert.deepEqual(store.value().repairs, {});
+});
