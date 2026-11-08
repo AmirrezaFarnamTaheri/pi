@@ -49,8 +49,6 @@ import {
 	type TUI,
 	TuiAltScreen,
 	TuiMainScreen,
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -141,6 +139,7 @@ import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
+import { type Expandable, ExpandableText, BuiltInHeader } from "./components/built-in-header.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
@@ -209,11 +208,6 @@ import { createInteractiveTui, createInteractiveTuiReference } from "./tui-rende
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
-/** Interface for components that can be expanded/collapsed */
-interface Expandable {
-	setExpanded(expanded: boolean): void;
-}
-
 interface ActiveEditor extends EditorComponent {
 	getCursor?(): { line: number; col: number };
 }
@@ -234,38 +228,6 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
-}
-
-class ExpandableText extends ThemedText implements Expandable {
-	private readonly state: { expanded: boolean };
-
-	constructor(
-		getCollapsedText: () => string,
-		getExpandedText: () => string,
-		expanded = false,
-		paddingX = 0,
-		paddingY = 0,
-	) {
-		const state = { expanded };
-		super(() => (state.expanded ? getExpandedText() : getCollapsedText()), paddingX, paddingY);
-		this.state = state;
-	}
-
-	setExpanded(expanded: boolean): void {
-		this.state.expanded = expanded;
-		this.invalidate();
-	}
-}
-
-/** The built-in header. Clicking its logo (the first two lines, after one column of padding) plays an easter egg. */
-class BuiltInHeader extends ExpandableText {
-	onLogoClick: ((column: number, row: number) => void) | undefined;
-
-	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "click" || event.y > 1 || event.x < 1 || event.x > 4 || !this.onLogoClick) return undefined;
-		this.onLogoClick(event.screenX - event.x + 1, event.screenY - event.y);
-		return { handled: true };
-	}
 }
 
 type ExtensionDialogComponent = Component & { dispose?(): void };
