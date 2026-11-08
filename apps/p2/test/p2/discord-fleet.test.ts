@@ -11,6 +11,10 @@ class FakeBot {
 	status: BotStatus = { state: "connecting" };
 	client: { isReady: () => boolean; user: { id: string } } | undefined;
 	readonly #onEvent: (event: BotEvent) => void;
+	readonly replies: { channelId: string; messageId: string | undefined; text: string }[] = [];
+	async reply(channelId: string, messageId: string | undefined, text: string): Promise<void> {
+		this.replies.push({ channelId, messageId, text });
+	}
 	readonly #listeners = new Set<() => void>();
 
 	constructor(onEvent: (event: BotEvent) => void) {
@@ -107,6 +111,34 @@ describe("Discord fleet persistence and identity isolation", () => {
 			);
 			const fleet = await Fleet.open(dir, (onEvent) => new FakeBot(onEvent) as unknown as Bot);
 			await assert.rejects(fleet.setToken("legacy", "different:key"), /identity|connect|original/i);
+			await fleet.close();
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+
+	it("acknowledges discarded commands when the urgent ingress buffer is saturated", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-discord-overflow-"));
+		const created: FakeBot[] = [];
+		try {
+			const fleet = await Fleet.open(dir, (onEvent) => {
+				const bot = new FakeBot(onEvent);
+				created.push(bot);
+				return bot as unknown as Bot;
+			});
+			await fleet.add("app-one:key");
+			const bot = created[0]!;
+			for (let i = 0; i <= 256; i++) bot.emit({
+				kind: "message",
+				message: {
+					id: String(i + 1), channelId: "channel", author: { id: "user", name: "user", bot: false },
+					roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
+				},
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(bot.replies.length, 1);
+			assert.match(bot.replies[0]!.text, /not executed|retry/i);
 			await fleet.close();
 		} finally {
 			await rm(dir, { recursive: true, force: true });
