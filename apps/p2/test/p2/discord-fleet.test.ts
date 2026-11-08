@@ -34,6 +34,13 @@ class FakeBot {
 		this.client = { isReady: () => true, user: { id: "999" } };
 		this.status = { state: "connected", applicationId: app, user: app, inviteUrl: "", guilds: [] };
 		for (const listener of this.#listeners) listener();
+		if (token.includes("early-command")) this.emit({
+			kind: "message",
+			message: {
+				id: "777", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
+				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
+			},
+		});
 		return this.status;
 	}
 	async close(): Promise<void> {
@@ -145,6 +152,36 @@ describe("Discord fleet persistence and identity isolation", () => {
 			assert.equal(bot.replies[0]!.channelId, "channel");
 			assert.equal(bot.replies[0]!.messageId, "1");
 			assert.match(bot.replies[0]!.text, /not executed|retry/i);
+			await fleet.close();
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+
+	it("buffers a control message received while replacing a token until the candidate is committed", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-discord-candidate-"));
+		const created: FakeBot[] = [];
+		try {
+			const fleet = await Fleet.open(dir, (onEvent) => {
+				const bot = new FakeBot(onEvent);
+				created.push(bot);
+				return bot as unknown as Bot;
+			});
+			const id = await fleet.add("app-one:original");
+			await fleet.next(new AbortController().signal); // initial ready
+			await fleet.setToken(id, "app-one:early-command");
+			const first = await fleet.next(new AbortController().signal);
+			assert(first?.event.kind === "message", "candidate command was preserved at handoff");
+			assert.equal(first.event.message.id, "777");
+			assert.equal(first.bot, id);
+			const after = await fleet.next(new AbortController().signal);
+			assert.equal(after?.event.kind, "ready");
+			// A duplicated gateway message after adoption must not execute twice.
+			created[1]!.emit(first.event);
+			const abort = new AbortController();
+			abort.abort();
+			assert.equal(await fleet.next(abort.signal), undefined);
 			await fleet.close();
 		} finally {
 			await rm(dir, { recursive: true, force: true });
