@@ -27,7 +27,7 @@ If you believe you found a security vulnerability in pi or another package in
 this repository, please report it privately by either:
 
 - Opening a private vulnerability report through [this fork's GitHub Security Advisories](https://github.com/AmirrezaFarnamTaheri/pi/security/advisories/new) when private reporting is enabled, or
-- Contacting the repository owner privately through a verified contact method published on the fork's GitHub profile. Do not send credentials or vulnerability details to an unverified address
+- Contacting the repository owner privately through a verified contact method published on the fork's GitHub profile. Do not send credentials or vulnerability details to an unverified address. If neither private channel is available, do not disclose exploit details publicly; request that the maintainer enable private vulnerability reporting.
 
 Please include:
 
@@ -52,10 +52,10 @@ to the upstream maintainer.
 - Behavior of pi extensions or skills installed by the user
 - Risks from working in untrusted repositories
 - Risks from installing untrusted extensions, skills, packages, or tools
-- Isuses caused by non trustworthy MITM proxies
+- Issues caused by untrusted MITM proxies
 - Public internet exposure of a Pi installation
 - Prompt injection attacks
-- Exposed secrets that are third-party/user-controlled credentials
+- Exposed third-party/user-controlled credentials unrelated to this fork. Leaked tokens, including personal tokens, **are in scope** when they grant write, release, or administrative access to this fork.
 - Reports requiring the ability to create, modify, delete, or replace files,
   directories, symlinks, environment variables, shell configuration, or other
   user-controlled local state on the target machine. This includes `~/.pi`,
@@ -84,5 +84,4 @@ When possible, include the exact affected path, package version or commit SHA,
 configuration, and a proof of concept against the latest release or latest
 `main`.  For dependency reports, include evidence that the shipped dependency is
 affected and that the issue is reachable through Pi.  For exposed-secret reports,
-include evidence that the credential is owned by this fork or demonstrates an access boundary crossing in software
-distributed by the fork. For upstream secrets, contact the upstream maintainer.
+include evidence that the credential grants access to this fork, its release infrastructure, or a maintainer account, or demonstrates an access boundary crossing in the fork. For upstream secrets, contact the upstream maintainer.
