@@ -98,7 +98,14 @@ jobs:
           npm run build
           npm run check
           npm run test:scripts
-          npm run test --workspaces --if-present
+          npm run test --workspace packages/coding-agent
+          npm run test --workspace packages/durable
+          args=()
+          for dir in packages/*/; do
+            case "$dir" in packages/coding-agent/ | packages/durable/) continue ;; esac
+            args+=(--workspace "${dir%/}")
+          done
+          npm run test --if-present "${args[@]}"
           npm run test:mcp-conformance
           ( cd apps/p2 && node --import ./src/source.ts --test test/p2/virtual-list.test.ts )
 
