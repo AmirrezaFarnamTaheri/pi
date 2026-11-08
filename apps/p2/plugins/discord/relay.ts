@@ -34,8 +34,8 @@ export type DiscordChannel = {
 export type DiscordPort = {
 	readonly botId: string;
 	channel(id: string): Promise<DiscordChannel>;
-	/** The first `limit` messages after `after` (oldest first; `"0"`: from the channel's start). */
-	messages(channelId: string, query: { after: string; limit: number }): Promise<DiscordMessage[]>;
+	/** A page before or after a snowflake, always returned oldest first. */
+	messages(channelId: string, query: { after?: string; before?: string; limit: number }): Promise<DiscordMessage[]>;
 	/**
 	 * Posts `text` (at most 2000 characters; may be empty with files) with `files` attached (at most 10, together within
 	 * `uploadLimit`), as a reply to `messageId` when given.
@@ -97,6 +97,8 @@ export const PAGE = 100;
 export const BATCH_CAP = 200;
 /** Maximum Discord history API pages examined in one catch-up invocation, across all links. */
 export const CATCH_UP_PAGES = 4;
+/** Maximum forward history pages per delivery before switching to newest-message pagination. */
+export const DELIVERY_HISTORY_PAGES = 32;
 /** Discord's limit for one message's text. */
 export const MESSAGE_LIMIT = 2000;
 /** Attachments up to this size are downloaded into the session; larger ones are listed as links. */
@@ -276,18 +278,32 @@ export class Relay {
 		// Everything since the cursor, page by page; only the newest BATCH_CAP go into the input. A thread's first
 		// batch starts with what its channel said after the channel's cursor until the thread was made: its subagent
 		// is forked from before that and never saw it (the channel's cursor stays: the main agent gets it too).
-		const window = new BatchWindow(BATCH_CAP);
+		let window = new BatchWindow(BATCH_CAP);
 		const before = thread?.thread && cursor === null ? thread.thread.createdId : undefined;
+		let truncated = false;
+		const markTruncated = () => { truncated = true; };
 		if (before !== undefined)
-			for await (const message of history(port, channelId, binding.cursor, before))
+			for await (const message of history(port, channelId, binding.cursor, before, markTruncated))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
-		for await (const message of history(port, where, cursor, trigger.id))
+		for await (const message of history(port, where, cursor, trigger.id, markTruncated))
 			if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+		if (truncated) {
+			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
+			// fetch recent pages backwards from the trigger instead of unbounded older pages.
+			window = new BatchWindow(BATCH_CAP);
+			if (before !== undefined)
+				for (const message of await recentHistory(port, channelId, binding.cursor, before, true))
+					if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
+			for (const message of await recentHistory(port, where, cursor, trigger.id, false))
+				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
-		const left = window.omitted
-			? `; the ${window.omitted} earliest are left out, the newest ${window.kept} follow`
-			: "";
+		const left = truncated
+			? `; deep Discord history truncated after ${DELIVERY_HISTORY_PAGES} API pages; newest ${window.kept} messages shown`
+			: window.omitted
+				? `; the ${window.omitted} earliest are left out, the newest ${window.kept} follow`
+				: "";
 		const channelName = `#${binding.channelName}`;
 		const header = !thread
 			? `[Discord ${channelName} (${binding.guildName}): ${plural(window.total)} since the last delivery${left}]`
@@ -315,7 +331,7 @@ export class Relay {
 				context: {
 					channel: binding.channelName,
 					guild: binding.guildName,
-					messages: window.total,
+					messages: truncated ? Math.max(window.total, DELIVERY_HISTORY_PAGES * PAGE) : window.total,
 					...(thread ? { thread: thread.name } : {}),
 				},
 				files: batch.files,
