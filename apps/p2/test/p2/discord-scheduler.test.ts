@@ -111,6 +111,25 @@ describe("discord event scheduler", () => {
 		await scheduler.idle();
 	});
 
+
+	it("runs stop in a reserved lane even when other priority commands are saturated", async () => {
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => { release = resolve; });
+		const seen: string[] = [];
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "c1", priority: true, run: () => blocked });
+		scheduler.enqueue({ bot: "b", key: "c1", priority: true, run: async () => { seen.push("status"); } });
+		assert.equal(scheduler.enqueue({
+			bot: "b", key: "c1", priority: true, stop: true,
+			run: async () => { seen.push("stop"); },
+		}), true);
+		await tick();
+		assert.deepEqual(seen, ["stop"], "stop is not held by the saturated regular control lane");
+		release();
+		await scheduler.idle();
+		assert.deepEqual(seen, ["stop", "status"]);
+	});
+
 	it("bounds pending deliveries and requests a catch-up instead of storing unbounded events", async () => {
 		const missed: string[] = [];
 		let release!: () => void;
