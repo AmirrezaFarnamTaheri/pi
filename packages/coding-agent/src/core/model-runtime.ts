@@ -624,7 +624,7 @@ export class ModelRuntime implements Models {
 			}
 			const pools = new Map<string, RotationPool>();
 			const memberSet = new Set(memberIds);
-			this.registerVirtualModel<{ active?: { provider: string; model: string } }>({
+			this.registerVirtualModel({
 				provider: "account-profiles",
 				id: sourceId,
 				name: `Rotate ${this.getProvider(sourceId)?.name ?? sourceId} (${memberIds.length} accounts)`,
@@ -639,7 +639,7 @@ export class ModelRuntime implements Models {
 					if (request.signal?.aborted) throw new Error("Account rotation cancelled");
 					const previous = request.previous?.model;
 					const failed = request.failed?.model;
-					const state = request.state?.active;
+					const state = (request.state as { active?: { provider: string; model: string } } | undefined)?.active;
 					const retained = request.reason === "retry" ? failed : request.reason === "continuation" ? previous : undefined;
 					const preferredId = retained && memberSet.has(retained.provider)
 						? retained.id
