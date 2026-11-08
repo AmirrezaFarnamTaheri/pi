@@ -23,24 +23,37 @@ export function verifyPinnedCatalogBytes(bytes, revision) {
   return actual;
 }
 
-async function main() {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/** Network and file I/O can be injected so failures are tested without live credentials. */
+export async function hydratePinnedModelData({
+  root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
+  tempRoot = tmpdir(),
+  fetchCatalog = fetch,
+  hydrate,
+} = {}) {
   const { revision } = JSON.parse(readFileSync(join(root, "nix/model-catalog.json"), "utf8"));
   const url = pinnedCatalogUrl(revision);
-  const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+  const response = await fetchCatalog(url, { signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error(`Pinned model catalog fetch failed: HTTP ${response.status}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   verifyPinnedCatalogBytes(bytes, revision);
-  const temporary = mkdtempSync(join(tmpdir(), "pi-fork-model-catalog-"));
+  const temporary = mkdtempSync(join(tempRoot, "pi-fork-model-catalog-"));
   try {
     const catalog = join(temporary, "models.all.json");
     writeFileSync(catalog, bytes);
-    const { hydrateModelCatalog } = await import("../packages/ai/scripts/hydrate-model-catalog.ts");
-    hydrateModelCatalog(join(root, "packages/ai"), catalog);
-    console.log(`Hydrated immutable model catalog ${revision}`);
+    if (hydrate) await hydrate(join(root, "packages/ai"), catalog);
+    else {
+      const { hydrateModelCatalog } = await import("../packages/ai/scripts/hydrate-model-catalog.ts");
+      hydrateModelCatalog(join(root, "packages/ai"), catalog);
+    }
+    return revision;
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+async function main() {
+  const revision = await hydratePinnedModelData();
+  console.log(`Hydrated immutable model catalog ${revision}`);
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
