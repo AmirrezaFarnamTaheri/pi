@@ -117,3 +117,64 @@ it("keeps an unlink repair durable when notifying its worker fails, then retries
   assert.equal(notifications, 2);
   assert.deepEqual(store.value().repairs, {});
 });
+
+it("restores prior lock only if the interrupted link's write identity is still current", async () => {
+  const prior = { mcp: ["all"], projectMcp: false, instructions: true, capabilities: [] };
+  const restrictive = { mcp: [], projectMcp: false, instructions: false, capabilities: [] };
+  const { store } = fakeState({ bindings: {}, pending: {}, repairs: {
+    s1: { session: "s1", kind: "link", lock: prior, proposedLock: restrictive,
+      expectedWriteId: "original", writeId: "link-attempt" },
+  } });
+  let current = { lock: restrictive, writeId: "link-attempt" };
+  await resumeLinkRepairs(store, async (_, lock, expected, newWriteId) => {
+    if (expected !== current.writeId) return false;
+    current = { lock, writeId: newWriteId };
+    return true;
+  }, { readLock: async () => current });
+  assert.deepEqual(current.lock, prior);
+  assert.notEqual(current.writeId, "link-attempt");
+  assert.deepEqual(store.value().repairs, {});
+});
+
+it("never restores a broad old lock after B-C-B owner edits with the same value", async () => {
+  const oldWide = { mcp: ["*"], projectMcp: true, instructions: true, capabilities: [] };
+  const narrow = { mcp: [], projectMcp: false, instructions: false, capabilities: [] };
+  const { store } = fakeState({ bindings: {}, pending: {}, repairs: {
+    s1: { session: "s1", kind: "link", lock: oldWide, proposedLock: narrow,
+      expectedWriteId: "old", writeId: "link" },
+  } });
+  let called = false;
+  await resumeLinkRepairs(store, async () => { called = true; return false; },
+    { readLock: async () => ({ lock: narrow, writeId: "owner-reapplied-B" }) });
+  assert.equal(called, false);
+  assert.deepEqual(store.value().repairs, {});
+});
+
+it("rolls wake policy forward after lock CAS succeeded but before binding write", async () => {
+  const narrow = { mcp: [], projectMcp: false, instructions: false, capabilities: [] };
+  const wake = { anyone: false, users: ["owner"], roles: [] };
+  const { store } = fakeState({ bindings: {
+    c1: { session: "s1", wake: { anyone: true, users: [], roles: [] } },
+  }, pending: {}, repairs: {
+    s1: { session: "s1", kind: "update", lock: narrow, wake,
+      expectedWriteId: "old", writeId: "committed" },
+  } });
+  let calls = 0;
+  await resumeLinkRepairs(store, async () => { calls++; throw new Error("must not repeat CAS"); },
+    { readLock: async () => ({ lock: narrow, writeId: "committed" }) });
+  assert.equal(calls, 0);
+  assert.deepEqual(store.value().bindings.c1.wake, wake);
+  assert.deepEqual(store.value().repairs, {});
+});
+
+it("reports a conflicting owner lock update instead of claiming wake policy succeeded", async () => {
+  const wideWake = { anyone: true, users: [], roles: [] };
+  const { store } = fakeState({ bindings: { c1: { session: "s1", wake: wideWake } },
+    pending: {}, repairs: { s1: { session: "s1", kind: "update", lock: null,
+      wake: { anyone: false, users: ["owner"], roles: [] },
+      expectedWriteId: "before", writeId: "ours" } } });
+  await assert.rejects(resumeLinkRepairs(store, async () => { throw Error("must not mutate lock"); },
+    { readLock: async () => ({ lock: null, writeId: "another-owner" }) }), /conflict/i);
+  assert.deepEqual(store.value().bindings.c1.wake, wideWake);
+  assert.deepEqual(store.value().repairs, {});
+});
