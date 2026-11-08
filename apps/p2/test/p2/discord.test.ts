@@ -216,6 +216,20 @@ function setup(initial: Binding = binding(), onCatchUpPending?: (bot: string) =>
 }
 
 describe("discord relay", () => {
+
+	it("drains an in-flight session delivery before an unlink may release its lock", async () => {
+		const { discord, sessions, relay } = setup();
+		sessions.slow = 75;
+		const trigger = discord.say("c1", message(`<@${BOT}> send`));
+		const work = relay.onMessage("bot-a", trigger);
+		let drained = false;
+		const drain = relay.waitForSession("s1").then(() => { drained = true; });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(drained, false, "drain does not release lock while the worker is active");
+		await work;
+		await drain;
+		assert.equal(drained, true);
+	});
 	it("delivers the messages since the cursor when someone allowed mentions Pi; others are ignored", async () => {
 		const { discord, sessions, relay, state } = setup();
 		discord.say("c1", message("before the bot"));
