@@ -36,3 +36,35 @@ test("account aliases persist and do not replace the source provider or each oth
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("offers opt-in automatic rotation only when an independent account exists", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-rotation-runtime-"));
+	try {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
+			accountProfilesPath: join(directory, "account-profiles.json"),
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		assert.equal(runtime.getModel("account-profiles", "antigravity-manager"), undefined);
+		const account = runtime.addAccountAlias("antigravity-manager", "Backup");
+		const rotation = runtime.getModel("account-profiles", "antigravity-manager");
+		assert.ok(rotation);
+		assert.equal(rotation?.api, "pi-virtual");
+		assert.match(rotation?.name ?? "", /rotate|account/i);
+		const failure = {
+			role: "assistant" as const,
+			provider: account.id, model: "example", api: "openai-completions" as const,
+			stopReason: "error" as const, timestamp: Date.now(), errorMessage: "HTTP 429",
+			content: [{ type: "text" as const, text: "already returned" }],
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+		};
+		assert.equal(runtime.shouldRetryVirtualFailure(rotation!, failure), false);
+		await runtime.removeAccountAlias(account.id);
+		assert.equal(runtime.getModel("account-profiles", "antigravity-manager"), undefined);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
