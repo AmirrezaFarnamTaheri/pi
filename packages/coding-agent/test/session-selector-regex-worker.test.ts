@@ -87,6 +87,35 @@ describe("isolated session regex search", () => {
 		}
 	});
 
+
+	it("streams many messages without accumulating the full transcript in the worker", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-stream-"));
+		try {
+			const path = join(directory, "many.jsonl");
+			const lines = Array.from({ length: 1_000 }, (_, id) =>
+				JSON.stringify({ type: "message", message: { role: "user", content: "prefix " + "x".repeat(1_000) + (id === 999 ? " final-marker" : "") } }),
+			);
+			writeFileSync(path, lines.join("\n") + "\n");
+			const item = { ...session("many", "x".repeat(100_000)), path };
+			const result = await filterSessionsByRegexInWorker([item], "final-marker", "recent");
+			expect(result.map((entry) => entry.id)).toEqual(["many"]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a single oversized JSONL entry rather than allocating it without a bound", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-too-large-"));
+		try {
+			const path = join(directory, "oversized.jsonl");
+			writeFileSync(path, JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(1_200_000) } }) + "\n");
+			const item = { ...session("oversized", "x".repeat(100_000)), path };
+			await expect(filterSessionsByRegexInWorker([item], "not-present", "recent")).rejects.toThrow(/line.*too large/i);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves recent order across worker batches", async () => {
 		const items = Array.from({ length: 51 }, (_, index) =>
 			session(`s${index}`, index % 3 === 0 ? "match" : "miss"),
