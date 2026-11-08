@@ -37,6 +37,9 @@ jobs:
       - name: Check
         run: npm run check
 
+      - name: Ensure build and checks did not modify tracked files
+        run: git diff --exit-code && git diff --cached --exit-code
+
   # Tests are split across parallel jobs so the slowest suites do not run back to back.
   test:
     name: test (${{ matrix.name }})
