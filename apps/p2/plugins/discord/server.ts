@@ -28,7 +28,8 @@ import { Catalog, SessionLocks, SessionMoves } from "../sessions/contract.ts";
 import { StatusStore } from "../status/contract.ts";
 import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema } from "./contract.ts";
 import { FIRST_BOT, Fleet } from "./fleet.ts";
-import { Relay, type RelayState, type SessionPort } from "./relay.ts";
+import { commandOf, Relay, type RelayState, type SessionPort } from "./relay.ts";
+import { DiscordScheduler } from "./scheduler.ts";
 
 const State = defineState("p2.discord-bindings", {
 	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema) }),
@@ -113,14 +114,29 @@ export default defineFacet((host) => {
 		});
 		self.onLive(async (ctx) => {
 			live = ctx;
-			// One event at a time, in the order the bots received them: a catch-up and a live mention never race.
-			for (;;) {
-				const received = await fleet.value.next(signalOf(ctx));
-				if (!received) return;
-				const { bot, event } = received;
-				await (event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot)).catch(
-					(error: unknown) => console.error("p2 discord:", errorText(error)),
-				);
+			const scheduler = new DiscordScheduler(
+				(bot) => fleet.value.requestCatchUp(bot),
+				(error) => console.error("p2 discord:", errorText(error)),
+			);
+			try {
+				// The scheduler preserves each channel's delivery order but does not let
+				// a slow channel block another channel, or a stop/status command.
+				for (;;) {
+					const received = await fleet.value.next(signalOf(ctx));
+					if (!received) return;
+					const { bot, event } = received;
+					const id = fleet.value.connected(bot)?.botId;
+					scheduler.enqueue({
+						bot,
+						key: event.kind === "message" ? `${bot}:channel:${event.message.channelId}` : `${bot}:catch-up`,
+						priority: event.kind === "message" && event.message.mentionsBot &&
+							id !== undefined && commandOf(event.message.text, id) !== undefined,
+						run: () => event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot),
+					});
+				}
+			} finally {
+				scheduler.stop();
+				live = undefined;
 			}
 		});
 		self.onLive(async (ctx) => {
