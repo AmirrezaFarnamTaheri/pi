@@ -5,7 +5,7 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = String.raw\`
+const REGEX_WORKER_CODE = String.raw`
 "use strict";
 const { parentPort } = require("node:worker_threads");
 const { createReadStream } = require("node:fs");
@@ -22,7 +22,7 @@ async function matchHistoryFile(path, regex) {
   let overlap = "";
   let contentStarted = false;
   // End-anchored patterns must run only at EOF, not at a temporary chunk end.
-  const endAnchored = /(^|[^\\\\])\\$$/.test(regex.source);
+  const endAnchored = regex.source.endsWith("$") && regex.source.at(-2) !== "\\";
   const append = (text) => {
     if (!text) return false;
     for (let start = 0; start < text.length; start += MATCH_CHUNK_CHARS) {
@@ -56,7 +56,7 @@ async function matchHistoryFile(path, regex) {
   for await (const chunk of createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 })) {
     let start = 0;
     while (start < chunk.length) {
-      const newline = chunk.indexOf("\\n", start);
+      const newline = chunk.indexOf("\n", start);
       const fragment = newline === -1 ? chunk.slice(start) : chunk.slice(start, newline);
       if (line.length + fragment.length > MAX_LINE_CHARS)
         throw new Error("Session history line too large for bounded regex search");
@@ -87,7 +87,7 @@ parentPort.on("message", async ({ pattern, sessions }) => {
     parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
 });
-\`;
+`;
 
 const SEARCH_BUDGET_MS = 500;
 const BATCH_SIZE = 16;
