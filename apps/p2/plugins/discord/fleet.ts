@@ -240,7 +240,7 @@ export class Fleet {
 	}
 
 	async #save(): Promise<void> {
-		const snapshot = `${JSON.stringify(this.#file, null, "\\t")}\\n`;
+		const snapshot = `${JSON.stringify(this.#file, null, "\t")}\n`;
 		const persist = async () => {
 			// Each attempt has its own temp file; the queue also prevents stale snapshots from winning.
 			const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
