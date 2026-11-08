@@ -19,6 +19,10 @@ export type Received = { bot: string; event: BotEvent };
 
 const MAX_QUEUED = 2_048;
 const MAX_URGENT = 256;
+const MAX_STOPS = 128;
+const MAX_EARLY_CANDIDATE_MENTIONS = 128;
+const MAX_DEDUPLICATED_MESSAGES = 8_192;
+const MAX_REJECTION_NOTICES = 8;
 type BotFactory = (onEvent: (event: BotEvent) => void) => Bot;
 
 export class Fleet {
@@ -28,16 +32,23 @@ export class Fleet {
 	readonly #listeners = new Set<() => void>();
 	readonly #queue: Received[] = [];
 	readonly #urgent: Received[] = [];
+	readonly #stops: Received[] = [];
 	readonly #missed = new Set<string>();
 	readonly #waiters = new Set<() => void>();
+	readonly #candidateMentions = new WeakMap<Bot, { pending: BotEvent[]; dropped: BotEvent[] }>();
+	readonly #beforeSave?: () => Promise<void>;
+	readonly #seenMessages = new Set<string>();
+	#activeNotices = 0;
+	#controlRejectionHandler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>;
 	readonly #makeBot: BotFactory;
 	#mutation: Promise<void> = Promise.resolve();
 	#saveTail: Promise<void> = Promise.resolve();
 
-	private constructor(path: string, file: BotsFile, makeBot: BotFactory) {
+	private constructor(path: string, file: BotsFile, makeBot: BotFactory, beforeSave?: () => Promise<void>) {
 		this.#path = path;
 		this.#file = file;
 		this.#makeBot = makeBot;
+		this.#beforeSave = beforeSave;
 	}
 
 	/** Serialize administrative changes through network calls and disk commits. */
@@ -48,10 +59,10 @@ export class Fleet {
 	}
 
 	/** The fleet of `dataDir`'s discord.json, each bot connecting in the background. */
-	static async open(dataDir: string, makeBot: BotFactory = (onEvent) => new Bot(onEvent)): Promise<Fleet> {
+	static async open(dataDir: string, makeBot: BotFactory = (onEvent) => new Bot(onEvent), beforeSave?: () => Promise<void>): Promise<Fleet> {
 		const path = join(dataDir, "discord.json");
 		const { file, migrated } = parseBots(await optionalText(path));
-		const fleet = new Fleet(path, file, makeBot);
+		const fleet = new Fleet(path, file, makeBot, beforeSave);
 		if (migrated) await fleet.#save();
 		for (const [id, { token }] of Object.entries(file.bots)) void fleet.#start(id).connect(token);
 		return fleet;
@@ -96,9 +107,15 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`${status.user} is added already`);
 			}
+			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: Date.now(), applicationId: status.applicationId } } };
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
 			this.#adopt(id, bot);
-			this.#file.bots[id] = { token, addedAt: Date.now(), applicationId: status.applicationId };
-			await this.#save();
 			this.#changed();
 			return id;
 		});
@@ -124,10 +141,17 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`This token is for ${status.user}, another bot: add it as a new bot`);
 			}
-			await current.close();
+			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: old.addedAt, applicationId: identity } } };
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
 			this.#adopt(id, bot);
-			this.#file.bots[id] = { token, addedAt: old.addedAt, applicationId: identity };
-			await this.#save();
+			await current.close().catch((error: unknown) =>
+				console.error("p2 discord: old bot disconnect failed after token replacement:", error));
 			this.#changed();
 		});
 	}
@@ -135,10 +159,15 @@ export class Fleet {
 	/** Disconnects and forgets bot `id`. */
 	async remove(id: string): Promise<void> {
 		return this.#mutate(async () => {
-			await this.#bots.get(id)?.close();
+			if (!this.#file.bots[id]) return;
+			const next: BotsFile = { bots: { ...this.#file.bots } };
+			delete next.bots[id];
+			await this.#save(next);
+			this.#file = next;
+			const removed = this.#bots.get(id);
 			this.#bots.delete(id);
-			delete this.#file.bots[id];
-			await this.#save();
+			await removed?.close().catch((error: unknown) =>
+				console.error("p2 discord: removed bot disconnect failed:", error));
 			this.#changed();
 		});
 	}
@@ -146,8 +175,8 @@ export class Fleet {
 	/** The next received event, or undefined when `signal` aborts. */
 	async next(signal: AbortSignal): Promise<Received | undefined> {
 		while (!signal.aborted) {
-			// Stop/status/compact bypass slow history delivery, including when the normal queue is saturated.
-			const received = this.#urgent.shift() ?? this.#queue.shift();
+			// Emergency stop has its own ingress capacity, unaffected by status floods.
+			const received = this.#stops.shift() ?? this.#urgent.shift() ?? this.#queue.shift();
 			if (received) return received;
 			const bot = this.#missed.values().next().value;
 			if (bot !== undefined) {
@@ -174,17 +203,50 @@ export class Fleet {
 		this.#bots.clear();
 	}
 
-	/** A bot `id` that is not one of the fleet's yet (a token being tried); it delivers messages once adopted. */
+	/** A candidate may receive commands while its token is being durably persisted. */
 	#candidate(id: string): Bot {
+		const pending: BotEvent[] = [];
+		const dropped: BotEvent[] = [];
 		const bot: Bot = this.#makeBot((event) => {
-			if (this.#bots.get(id) === bot) this.#push({ bot: id, event });
+			if (this.#bots.get(id) === bot) {
+				this.#push({ bot: id, event });
+			} else if (event.kind === "message" && event.message.mentionsBot) {
+				const isStop = (item: BotEvent): boolean =>
+					item.kind === "message" && !!bot.client?.user?.id &&
+					commandOf(item.message.text, bot.client.user.id) === "stop";
+				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) {
+					// Reserve candidate space for stop. Drop an older non-stop
+					// first; never silently discard a stop under a status flood.
+					const index = pending.findIndex((item) => !isStop(item));
+					const displaced = index < 0 ? (isStop(event) ? pending.shift() : event)
+						: pending.splice(index, 1)[0];
+					if (displaced && dropped.length < MAX_EARLY_CANDIDATE_MENTIONS) dropped.push(displaced);
+					if (displaced === event) return;
+				}
+				pending.push(event);
+			}
 		});
+		this.#candidateMentions.set(bot, { pending, dropped });
 		return bot;
 	}
 
 	/** Makes `bot` the fleet's bot `id`; one connected already (a new token) catches up at once. */
 	#adopt(id: string, bot: Bot): void {
 		this.#bots.set(id, bot);
+		// Replay commands received between candidate connection and persistence.
+		// Duplicate old/new gateway events are deduplicated by their Discord IDs.
+		const { pending: early, dropped } = this.#candidateMentions.get(bot) ?? { pending: [], dropped: [] };
+		this.#candidateMentions.delete(bot);
+		const discordBotId = bot.client?.user?.id;
+		if (discordBotId) {
+			for (const event of early) {
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
+					this.#push({ bot: id, event });
+			}
+			for (const event of dropped)
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
+					this.notifyControlRejected(id, event.message);
+		}
 		bot.subscribe(() => {
 			const saved = this.#file.bots[id];
 			if (saved && bot.status.state === "connected") {
@@ -203,6 +265,26 @@ export class Fleet {
 		if (bot.client?.isReady()) this.#push({ bot: id, event: { kind: "ready" } });
 	}
 
+	/**
+	 * The store owns authorization against bindings, thread membership and wake
+	 * policy; Fleet must never reply to an arbitrary mentioned command by itself.
+	 */
+	setControlRejectionHandler(
+		handler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>,
+	): void {
+		this.#controlRejectionHandler = handler;
+	}
+
+	/** Shared bounded notice path for ingress and scheduler rejection. */
+	notifyControlRejected(bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]): void {
+		const handler = this.#controlRejectionHandler;
+		if (!handler || this.#activeNotices >= MAX_REJECTION_NOTICES) return;
+		this.#activeNotices++;
+		void Promise.resolve().then(() => handler(bot, message)).catch((error: unknown) =>
+			console.error("p2 discord: could not notify rejected command:", error),
+		).finally(() => { this.#activeNotices--; });
+	}
+
 	/** A dropped non-command message is recovered by a history catch-up, not silently forgotten. */
 	requestCatchUp(bot: string): void {
 		this.#missed.add(bot);
@@ -211,13 +293,30 @@ export class Fleet {
 
 	#push(received: Received): void {
 		const event = received.event;
+		if (event.kind === "message") {
+			const key = `${received.bot}:${event.message.channelId}:${event.message.id}`;
+			if (this.#seenMessages.has(key)) return;
+			this.#seenMessages.add(key);
+			if (this.#seenMessages.size > MAX_DEDUPLICATED_MESSAGES)
+				this.#seenMessages.delete(this.#seenMessages.values().next().value!);
+		}
 		const botId = this.#bots.get(received.bot)?.client?.user?.id;
-		const urgent = event.kind === "message" && event.message.mentionsBot &&
-			botId !== undefined && commandOf(event.message.text, botId) !== undefined;
-		if (urgent) {
+		const command = event.kind === "message" && event.message.mentionsBot && botId !== undefined
+			? commandOf(event.message.text, botId) : undefined;
+		const urgent = command !== undefined;
+		if (command === "stop") {
+			if (this.#stops.length >= MAX_STOPS) {
+				const rejected = this.#stops.shift();
+				if (rejected?.event.kind === "message")
+					this.notifyControlRejected(rejected.bot, rejected.event.message);
+			}
+			this.#stops.push(received);
+		} else if (urgent) {
 			if (this.#urgent.length === MAX_URGENT) {
-				console.error("p2 discord: control queue saturated; dropping oldest command");
-				this.#urgent.shift();
+				console.error("p2 discord: control queue saturated; rejecting oldest command");
+				const dropped = this.#urgent.shift();
+				if (dropped?.event.kind === "message")
+					this.notifyControlRejected(dropped.bot, dropped.event.message);
 			}
 			this.#urgent.push(received);
 		} else if (this.#queue.length >= MAX_QUEUED) {
@@ -239,9 +338,10 @@ export class Fleet {
 		return bot;
 	}
 
-	async #save(): Promise<void> {
-		const snapshot = `${JSON.stringify(this.#file, null, "\t")}\n`;
+	async #save(file: BotsFile = this.#file): Promise<void> {
+		const snapshot = `${JSON.stringify(file, null, "\t")}\n`;
 		const persist = async () => {
+			await this.#beforeSave?.();
 			// Each attempt has its own temp file; the queue also prevents stale snapshots from winning.
 			const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
 			try {

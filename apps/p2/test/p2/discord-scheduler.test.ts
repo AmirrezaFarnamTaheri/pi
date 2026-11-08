@@ -58,6 +58,78 @@ describe("discord event scheduler", () => {
 		assert.equal(order.at(-1), "same-channel-after");
 	});
 
+
+	it("notifies the sender instead of silently dropping a saturated control command", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const rejected: string[] = [];
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		assert.equal(scheduler.enqueue({ bot: "b", key: "control-one", priority: true, run: () => gate }), true);
+		assert.equal(scheduler.enqueue({ bot: "b", key: "control-two", priority: true, run: async () => {} }), true);
+		assert.equal(scheduler.enqueue({
+			bot: "b", key: "control-three", priority: true, run: async () => {},
+			onRejected: async () => { rejected.push("control-three"); },
+		}), false);
+		await tick();
+		assert.deepEqual(rejected, ["control-three"]);
+		release();
+		await scheduler.idle();
+	});
+
+
+	it("defers rejected catch-up triggers until capacity returns rather than spinning", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const missed: string[] = [];
+		const scheduler = new DiscordScheduler((bot) => missed.push(bot), () => {}, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "same", priority: false, run: () => gate });
+		scheduler.enqueue({ bot: "b", key: "same", priority: false, run: async () => {} });
+		assert.equal(scheduler.enqueue({ bot: "b", key: "catchup", priority: false, catchUp: true, run: async () => {} }), false);
+		assert.deepEqual(missed, [], "no immediate retry while queue remains saturated");
+		release();
+		await scheduler.idle();
+		assert.deepEqual(missed, ["b"], "one deferred retry is requested when capacity returns");
+	});
+
+	it("bounds asynchronous rejection notices even under sustained command overload", async () => {
+		let unblock!: () => void;
+		const gate = new Promise<void>((resolve) => { unblock = resolve; });
+		let notices = 0;
+		let freeNotices!: () => void;
+		const noticeGate = new Promise<void>((resolve) => { freeNotices = resolve; });
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: () => gate });
+		scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+		for (let i = 0; i < 100; i++) scheduler.enqueue({
+			bot: "b", key: "different", priority: true, run: async () => {},
+			onRejected: async () => { notices++; await noticeGate; },
+		});
+		await tick();
+		assert(notices <= 8, "rejection notices must use a bounded async pool");
+		freeNotices();
+		unblock();
+		await scheduler.idle();
+	});
+
+
+	it("runs stop in a reserved lane even when other priority commands are saturated", async () => {
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => { release = resolve; });
+		const seen: string[] = [];
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		scheduler.enqueue({ bot: "b", key: "c1", priority: true, run: () => blocked });
+		scheduler.enqueue({ bot: "b", key: "c1", priority: true, run: async () => { seen.push("status"); } });
+		assert.equal(scheduler.enqueue({
+			bot: "b", key: "c1", priority: true, stop: true,
+			run: async () => { seen.push("stop"); },
+		}), true);
+		await tick();
+		assert.deepEqual(seen, ["stop"], "stop is not held by the saturated regular control lane");
+		release();
+		await scheduler.idle();
+		assert.deepEqual(seen, ["stop", "status"]);
+	});
+
 	it("bounds pending deliveries and requests a catch-up instead of storing unbounded events", async () => {
 		const missed: string[] = [];
 		let release!: () => void;
@@ -72,4 +144,52 @@ describe("discord event scheduler", () => {
 		release();
 		await scheduler.idle();
 	});
+});
+
+it("idle waits for an outstanding asynchronous rejected-command notice", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+  scheduler.enqueue({ bot: "b", key: "queued", priority: true, run: async () => {} });
+  scheduler.enqueue({ bot: "b", key: "reject", priority: true, run: async () => {},
+    onRejected: () => gate });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  let idle = false;
+  void scheduler.idle().then(() => { idle = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(idle, false);
+  release();
+  await scheduler.idle();
+  assert.equal(idle, true);
+});
+
+it("reuses rejected-control notice slots after both successful and failed notices", async () => {
+  let releaseWork!: () => void;
+  const blockedWork = new Promise<void>((resolve) => { releaseWork = resolve; });
+  const errors: string[] = [];
+  const scheduler = new DiscordScheduler(() => {}, (error) => errors.push(String(error)), 1, 1, 1, 1);
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: () => blockedWork });
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+
+  let finished = 0;
+  for (let index = 0; index < 8; index++) {
+    scheduler.enqueue({ bot: "b", key: `reject-${index}`, priority: true,
+      run: async () => {},
+      onRejected: async () => { finished++; if (index % 2 === 0) throw new Error("notice failure"); },
+    });
+  }
+  await tick();
+  await tick();
+  assert.equal(finished, 8, "the first batch filled then returned all eight notice slots");
+
+  let after = 0;
+  scheduler.enqueue({ bot: "b", key: "again", priority: true,
+    run: async () => {}, onRejected: async () => { after++; },
+  });
+  await tick();
+  assert.equal(after, 1, "a later rejection can use a released notice slot");
+  assert.equal(errors.filter((message) => message.includes("notice failure")).length, 4);
+  releaseWork();
+  await scheduler.idle();
 });

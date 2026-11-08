@@ -13,6 +13,7 @@ import type { ConversationView } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT, type SessionLock } from "@p2/app/v1";
 import { Chat, ChatCosts } from "../../plugins/chat/contract.ts";
 import type { Binding } from "../../plugins/discord/contract.ts";
+import { resumeLinkRepairs, type LinkRepairState } from "../../plugins/discord/link-recovery.ts";
 import { DISCORD_BATCH, Discord, DiscordIngress, DiscordV2 } from "../../plugins/discord/contract.ts";
 import {
 	batchOf,
@@ -58,6 +59,7 @@ class FakeDiscord implements DiscordPort {
 	readonly posted: { channel: string; replyTo: string | undefined; text: string; files?: string[] }[] = [];
 	/** Bytes attached to posts, by file name. */
 	readonly uploaded = new Map<string, Uint8Array>();
+	readonly acceptedNonces = new Set<string>();
 	/** The server's per-message upload limit. */
 	limit = 10 * 1024 * 1024;
 	readonly typed: string[] = [];
@@ -75,21 +77,34 @@ class FakeDiscord implements DiscordPort {
 		return found;
 	}
 	/** History requests, as Discord gets them. */
-	readonly requests: { channel: string; after: string }[] = [];
+	readonly requests: { channel: string; after?: string; before?: string }[] = [];
 	/** Typing and history reads in order, as `typing:<channel>` and `messages:<channel>`. */
 	readonly events: string[] = [];
-	async messages(channelId: string, query: { after: string; limit: number }): Promise<DiscordMessage[]> {
-		this.requests.push({ channel: channelId, after: query.after });
+	async messages(
+		channelId: string,
+		query: { after?: string; before?: string; limit: number },
+	): Promise<DiscordMessage[]> {
+		this.requests.push({ channel: channelId, ...(query.after ? { after: query.after } : {}), ...(query.before ? { before: query.before } : {}) });
 		this.events.push(`messages:${channelId}`);
 		const all = this.history.get(channelId) ?? [];
-		return all.filter((entry) => BigInt(entry.id) > BigInt(query.after)).slice(0, Math.min(query.limit, 100));
+		const matching = all.filter((entry) => query.after !== undefined
+			? BigInt(entry.id) > BigInt(query.after)
+			: query.before !== undefined && BigInt(entry.id) < BigInt(query.before));
+		return query.before === undefined
+			? matching.slice(0, Math.min(query.limit, 100))
+			: matching.slice(-Math.min(query.limit, 100));
 	}
 	async reply(
 		channel: string,
 		replyTo: string | undefined,
 		text: string,
 		files: readonly { name: string; data: Uint8Array }[] = [],
+		nonce?: string,
 	): Promise<void> {
+		if (nonce) {
+			if (this.acceptedNonces.has(nonce)) return;
+			this.acceptedNonces.add(nonce);
+		}
 		assert(text.length <= 2000);
 		assert(text || files.length, "never an empty message");
 		assert(files.length <= 10 && files.reduce((sum, file) => sum + file.data.length, 0) <= this.limit);
@@ -175,7 +190,7 @@ function binding(patch: Partial<Binding> = {}): Binding {
 	};
 }
 
-function setup(initial: Binding = binding()) {
+function setup(initial: Binding = binding(), onCatchUpPending?: (bot: string) => void) {
 	const discord = new FakeDiscord();
 	discord.add({ id: "c1", name: "general", guildId: "g1", guildName: "Guild", lastMessageId: null });
 	discord.add({
@@ -197,11 +212,97 @@ function setup(initial: Binding = binding()) {
 			update(draft);
 			state = draft;
 		},
-	});
+	}, onCatchUpPending);
 	return { discord, sessions, relay, offline, state: () => state };
 }
 
 describe("discord relay", () => {
+
+
+	it("revokes ingress, drains submitted delivery, cancels worker turns and only then unlocks during recovery", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const order: string[] = [];
+		let unblock!: () => void;
+		const deliveryGate = new Promise<void>((resolve) => { unblock = resolve; });
+		let entered!: () => void;
+		const started = new Promise<void>((resolve) => { entered = resolve; });
+		const originalDeliver = sessions.deliver.bind(sessions);
+		sessions.deliver = async (session, input) => {
+			order.push("delivery-started");
+			entered();
+			await deliveryGate;
+			order.push("delivery-finished");
+			return originalDeliver(session, input);
+		};
+		const triggered = relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> important`)));
+		await started;
+		let repairs: LinkRepairState["repairs"] = {
+			s1: { session: "s1", kind: "unlink", lock: null,
+				expectedWriteId: "locked", writeId: "unlocked" },
+		};
+		const store = {
+			value: (): LinkRepairState => ({ ...state(), repairs }),
+			change: async (edit: (draft: LinkRepairState) => void) => {
+				const draft = structuredClone({ ...state(), repairs });
+				edit(draft);
+				Object.assign(state(), { bindings: draft.bindings, pending: draft.pending });
+				repairs = draft.repairs;
+			},
+		};
+		const recovery = resumeLinkRepairs(store, async () => {
+			order.push("unlocked"); return true;
+		}, {
+			readLock: async () => ({ lock: null, writeId: "locked" }),
+			beforeUnlock: async (session) => {
+				order.push("drain-start");
+				await relay.waitForSession(session);
+				order.push("drain-finished");
+			},
+			notifyUnlinked: async () => {
+				order.push("turns-cancelled");
+			},
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(state().bindings.c1, undefined, "unlink revokes ingress immediately");
+		assert.equal(order.includes("unlocked"), false, "active admission must retain the lock");
+		unblock();
+		await Promise.all([triggered, recovery]);
+		assert.deepEqual(order, [
+			"delivery-started", "drain-start", "delivery-finished", "drain-finished",
+			"turns-cancelled", "unlocked",
+		]);
+		assert.equal(state().bindings.c1, undefined);
+	});
+	it("drains an in-flight session delivery before an unlink may release its lock", async () => {
+		const { discord, sessions, relay } = setup();
+		sessions.slow = 75;
+		const trigger = discord.say("c1", message(`<@${BOT}> send`));
+		const work = relay.onMessage("bot-a", trigger);
+		let drained = false;
+		const drain = relay.waitForSession("s1").then(() => { drained = true; });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.equal(drained, false, "drain does not release lock while the worker is active");
+		await work;
+		await drain;
+		assert.equal(drained, true);
+	});
+
+	it("authorizes overflow notices only for the bound bot and permitted channel/thread members", async () => {
+		const { discord, relay, state } = setup();
+		const allowed = message(`<@${BOT}> stop`);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", allowed), true);
+		assert.equal(await relay.mayNotifyControlRejected("bot-b", allowed), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", message("no command")), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", message(`<@${BOT}> stop`, {
+			author: { id: "stranger", name: "stranger", bot: false },
+		})), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "unlinked" }), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "t1" }), true);
+		delete state().bindings.c1;
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", allowed), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "t1" }), false);
+	});
+
 	it("delivers the messages since the cursor when someone allowed mentions Pi; others are ignored", async () => {
 		const { discord, sessions, relay, state } = setup();
 		discord.say("c1", message("before the bot"));
@@ -622,6 +723,112 @@ describe("discord relay", () => {
 		assert.equal(lines.at(-1), "Ada: @Pi what happened?");
 	});
 
+
+
+	it("reaches later threads instead of repeatedly rescanning the first four idle places", async () => {
+		const continued: string[] = [];
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
+		const row = state().bindings.c1!;
+		for (let index = 2; index <= 6; index++) {
+			const id = `t${index}`;
+			discord.add({
+				id, name: id, guildId: "g1", guildName: "Guild",
+				thread: { parentId: "c1", createdAt: 1_000, createdId: "1" }, lastMessageId: null,
+			});
+			row.threads[id] = { conversation: index, name: id, cursor: "1" };
+		}
+		const newest = discord.say("t6", message(`<@${BOT}> find this later thread`));
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 0);
+		assert(continued.length > 0);
+		// Deleting an earlier place must not cause the next one to be skipped.
+		delete state().bindings.c1!.threads.t2;
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1, "continuation must advance to the next place");
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${newest.id}`);
+	});
+
+	it("bounds each disconnected catch-up scan and persists its resumable progress", async () => {
+		const continued: string[] = [];
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
+		for (let index = 0; index < 450; index++) discord.say("c1", message(`chatter ${index}`));
+		const trigger = discord.say("c1", message(`<@${BOT}> latest question`));
+		await relay.catchUp("bot-a");
+		assert(discord.requests.length <= 4, "the catch-up scan must not exhaust arbitrary history in one task");
+		assert.equal(sessions.delivered.length, 0, "the trigger is beyond this scan slice");
+		assert.equal(continued.length, 1, "a bounded continuation must be requested");
+		assert(state().bindings.c1?.catchUpScan, "the scan checkpoint must survive reconnects");
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1);
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${trigger.id}`);
+		assert.equal(state().bindings.c1?.cursor, trigger.id);
+	});
+
+
+	it("bounds extremely long delivery history while retaining the latest prompt context", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		for (let index = 0; index < 5_000; index++) discord.say("c1", message(`line ${index}`));
+		const trigger = discord.say("c1", message(`<@${BOT}> summarize the latest`));
+		await relay.onMessage("bot-a", trigger);
+		const input = sessions.delivered[0];
+		assert(input);
+		assert(discord.requests.length <= 40, "one delivery has a bounded number of Discord API reads");
+		assert.match(input.text.split("\n")[0]!, /truncated/i);
+		assert.match(input.text, /line 4999/);
+		assert.match(input.text, /summarize the latest/);
+		assert.doesNotMatch(input.text, /line 0\n/);
+	});
+
+
+	it("keeps older human messages when latest history pages contain only bot posts", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		for (let index = 0; index < 3_350; index++) discord.say("c1", message(`human ${index}`));
+		for (let index = 0; index < 270; index++) {
+			discord.say("c1", message(`bot output ${index}`, {
+				author: { id: "other-bot", name: "Other bot", bot: true },
+			}));
+		}
+		await relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> summarize`)));
+		const prompt = sessions.delivered[0]?.text ?? "";
+		assert.match(prompt, /human 3349/, "truncated history must seek eligible people, not only recent bot posts");
+		assert.doesNotMatch(prompt, /Other bot: bot output/);
+	});
+
+
+
+	it("preserves context behind 1600 bot posts instead of delivering just the mention", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		discord.say("c1", message("human before the bot flood"));
+		for (let index = 0; index < 1600; index++)
+			discord.say("c1", message(`bot ${index}`, { author: { id: "bot", name: "Bot", bot: true } }));
+		await relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> tell me what happened`)));
+		assert.match(sessions.delivered[0]?.text ?? "", /human before the bot flood/);
+	});
+
+	it("does not advance the cursor after an incomplete bounded reverse-history scan", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
+		discord.say("c1", message("human further back"));
+		for (let index = 0; index < 3500; index++)
+			discord.say("c1", message(`bot ${index}`, { author: { id: "bot", name: "Bot", bot: true } }));
+		const trigger = discord.say("c1", message(`<@${BOT}> summarize`));
+		await assert.rejects(relay.onMessage("bot-a", trigger), /incomplete|budget|history/i);
+		assert.equal(sessions.delivered.length, 0);
+		assert.notEqual(state().bindings.c1?.cursor, trigger.id);
+	});
+	it("does not checkpoint past a missed mention when its session temporarily refuses delivery", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
+		const missed = discord.say("c1", message(`<@${BOT}> retry after recovery`));
+		sessions.refusal = "temporarily unavailable";
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 0);
+		assert.notEqual(state().bindings.c1?.catchUpScan, missed.id);
+		sessions.refusal = undefined;
+		relay.retryDeferredCatchUps(Date.now() + 30_000);
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1);
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${missed.id}`);
+	});
+
 	it("catches up after downtime: one batch per link and thread, every message from the cursor to the newest allowed mention", async () => {
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
 		// Delivered before p2 went down: the cursor is this message.
@@ -702,6 +909,30 @@ describe("discord relay", () => {
 		assert.deepEqual(chunkText("short"), ["short"]);
 		assert.deepEqual(chunkText(`${"a".repeat(8)}\n${"b".repeat(8)}`, 10), ["a".repeat(8), "b".repeat(8)]);
 		assert.deepEqual(chunkText("x".repeat(25), 10), ["x".repeat(10), "x".repeat(10), "x".repeat(5)]);
+	});
+
+
+	it("does not duplicate Discord reply chunks when the API accepted a post but the HTTP result was lost", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const trigger = discord.say("c1", message(`<@${BOT}> answer`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "Delivered once.", files: [] });
+		const realReply = discord.reply.bind(discord);
+		let first = true;
+		discord.reply = async (...args) => {
+			await realReply(...args);
+			if (first) {
+				first = false;
+				throw new Error("connection lost after Discord accepted the message");
+			}
+		};
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1);
+		assert.equal(state().pending[trigger.id]?.nextPost ?? 0, 0);
+		state().pending[trigger.id]!.retryAt = 0;
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1, "repeating the nonce must not create another post");
+		assert.deepEqual(state().pending, {});
 	});
 
 	it("retries a transient Discord error without reposting completed chunks", async () => {

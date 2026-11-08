@@ -9,15 +9,26 @@ export type ScheduledDiscordEvent = {
 	bot: string;
 	key: string;
 	priority: boolean;
+	/** Dedicated emergency execution lane for /stop, separate from status/compact. */
+	stop?: boolean;
+	/** A reconnect scan; defer it under pressure rather than immediately requeueing it. */
+	catchUp?: boolean;
+	/** Called when a control event cannot be accepted; must not throw synchronously. */
+	onRejected?(): Promise<void>;
 	run(): Promise<void>;
 };
 
 export class DiscordScheduler {
 	readonly #normal: ScheduledDiscordEvent[] = [];
 	readonly #priority: ScheduledDiscordEvent[] = [];
+	readonly #stopQueue: ScheduledDiscordEvent[] = [];
 	readonly #normalActive = new Set<string>();
 	readonly #priorityActive = new Set<string>();
+	readonly #stopActive = new Set<string>();
 	readonly #idle = new Set<() => void>();
+	readonly #deferredCatchUps = new Set<string>();
+	#rejectionNotices = 0;
+	readonly #maxRejectionNotices = 8;
 	readonly #overflow: (bot: string) => void;
 	readonly #error: (error: unknown) => void;
 	readonly #maxNormal: number;
@@ -47,11 +58,22 @@ export class DiscordScheduler {
 
 	enqueue(event: ScheduledDiscordEvent): boolean {
 		if (this.#stopped) return false;
-		const queue = event.priority ? this.#priority : this.#normal;
-		const limit = event.priority ? this.#maxPendingPriority : this.#maxPending;
+		const queue = event.stop ? this.#stopQueue : event.priority ? this.#priority : this.#normal;
+		const limit = event.stop ? 128 : event.priority ? this.#maxPendingPriority : this.#maxPending;
 		if (queue.length >= limit) {
-			if (event.priority) this.#error(new Error("Discord control command backlog saturated"));
-			else this.#overflow(event.bot);
+			if (event.priority) {
+				try { this.#error(new Error("Discord control command backlog saturated")); } catch { /* Continue to rejection notice. */ }
+				if (event.onRejected && this.#rejectionNotices < this.#maxRejectionNotices) {
+					this.#rejectionNotices++;
+					void Promise.resolve().then(() => event.onRejected?.()).catch((error: unknown) => {
+						try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
+					}).finally(() => { this.#rejectionNotices--; this.#notifyIdle(); });
+				}
+			} else if (event.catchUp) {
+				// A ready event rejected while full must not request another ready event
+				// synchronously: that turns one backlog into a tight infinite retry loop.
+				this.#deferredCatchUps.add(event.bot);
+			} else this.#overflow(event.bot);
 			return false;
 		}
 		queue.push(event);
@@ -64,6 +86,8 @@ export class DiscordScheduler {
 		this.#stopped = true;
 		this.#normal.length = 0;
 		this.#priority.length = 0;
+		this.#stopQueue.length = 0;
+		this.#deferredCatchUps.clear();
 		this.#notifyIdle();
 	}
 
@@ -74,8 +98,8 @@ export class DiscordScheduler {
 	}
 
 	#isIdle(): boolean {
-		return this.#normal.length === 0 && this.#priority.length === 0 &&
-			this.#normalActive.size === 0 && this.#priorityActive.size === 0;
+		return this.#normal.length === 0 && this.#priority.length === 0 && this.#stopQueue.length === 0 &&
+			this.#normalActive.size === 0 && this.#priorityActive.size === 0 && this.#stopActive.size === 0 && this.#rejectionNotices === 0;
 	}
 
 	#notifyIdle(): void {
@@ -105,8 +129,18 @@ export class DiscordScheduler {
 
 	#drain(): void {
 		if (!this.#stopped) {
+			this.#start(this.#stopQueue, this.#stopActive, 4);
 			this.#start(this.#priority, this.#priorityActive, this.#maxPriority);
 			this.#start(this.#normal, this.#normalActive, this.#maxNormal);
+			if (this.#normal.length < this.#maxPending) {
+				// Drain at most one deferred bot per capacity change; coalescing by bot
+				// prevents sustained saturation from producing an unbounded retry storm.
+				const bot = this.#deferredCatchUps.values().next().value;
+				if (bot !== undefined) {
+					this.#deferredCatchUps.delete(bot);
+					try { this.#overflow(bot); } catch (error) { this.#error(error); }
+				}
+			}
 		}
 		this.#notifyIdle();
 	}

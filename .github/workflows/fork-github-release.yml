@@ -20,11 +20,30 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Checkout release source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source commit passed the complete CI matrix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release SHA must be on the fork's main history"
+            exit 1
+          fi
+          # GitHub paginates workflow runs; never mistake a later-page success for absence.
+          gh api --paginate --jq '.workflow_runs[]' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            | jq -s '{workflow_runs: .}' \
+            | node scripts/verify-fork-release-ci.mjs "$GITHUB_SHA"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -36,8 +55,8 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Hydrate pinned model data
-        run: npm run hydrate:model-data
+      - name: Hydrate immutable, SHA-256-verified model data
+        run: npm run hydrate:fork-model-data
 
       - name: Create deterministic source and cross-platform binaries
         shell: bash
@@ -47,6 +66,9 @@ jobs:
           version="$(printf '%s' "$tag" | sed 's/^v//')"
           mkdir -p release-assets
           ./scripts/create-source-archive.sh --version "$version" --ref HEAD --out "release-assets/pi-$version-source.tar.gz"
+          ./scripts/create-source-archive.sh --version "$version" --ref HEAD --out "release-assets/pi-$version-source-check.tar.gz"
+          cmp "release-assets/pi-$version-source.tar.gz" "release-assets/pi-$version-source-check.tar.gz"
+          rm "release-assets/pi-$version-source-check.tar.gz"
           build_root="$(mktemp -d)"
           trap 'rm -rf "$build_root"' EXIT
           tar -xzf "release-assets/pi-$version-source.tar.gz" -C "$build_root"
@@ -57,14 +79,31 @@ jobs:
           node scripts/generate-coding-agent-install-lock.mjs --check
           cp packages/coding-agent/install-lock/package.json release-assets/pi-coding-agent-install-package.json
           cp packages/coding-agent/install-lock/package-lock.json release-assets/pi-coding-agent-install-package-lock.json
+          cp nix/model-catalog.json release-assets/MODEL_CATALOG_PIN.json
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          node scripts/create-fork-sbom.mjs package-lock.json release-assets/SBOM.binary.cdx.json packages/coding-agent
+          node scripts/create-fork-sbom.mjs packages/coding-agent/install-lock/package-lock.json release-assets/SBOM.installer.cdx.json ""
+          node -e '
+            const fs = require("node:fs");
+            const catalog = JSON.parse(fs.readFileSync("nix/model-catalog.json", "utf8"));
+            const manifest = {
+              sourceCommit: process.env.GITHUB_SHA,
+              sourceTimestamp: Number(process.env.SOURCE_DATE_EPOCH),
+              modelCatalogRevision: catalog.revision,
+              releaseTag: process.env.GITHUB_REF_NAME.slice("release/fork-".length),
+              modelDataPolicy: "immutable-sha256-pin",
+              releaseChannel: "github-fork-only"
+            };
+            fs.writeFileSync("release-assets/BUILD_MANIFEST.json", JSON.stringify(manifest, null, 2) + String.fromCharCode(10));
+          '
           (
             cd release-assets
-            sha256sum pi-*.tar.gz pi-*.zip pi-coding-agent-install-*.json > SHA256SUMS
+            sha256sum pi-*.tar.gz pi-*.zip pi-coding-agent-install-*.json MODEL_CATALOG_PIN.json SBOM.*.cdx.json BUILD_MANIFEST.json > SHA256SUMS
           )
           cat > release-assets/RELEASE_NOTES.md <<EOF
           Fork-only binary release of Pi $tag (source commit $GITHUB_SHA).
 
-          Six platform archives, the reproducible source archive, installer lockfiles and SHA256SUMS are attached.
+          Six platform archives, the reproducible source archive, installer lockfiles, artifact-scoped CycloneDX SBOMs, immutable model-catalog pin, build manifest and SHA256SUMS are attached.
           See the commit history and the fork changelog for included fixes.
 
           This release is published on the fork only. It does not publish the upstream @earendil-works npm packages.
@@ -169,8 +208,8 @@ jobs:
             echo "::error::Tag already exists: $tag"
             exit 1
           fi
-          assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/SHA256SUMS)
-          test "${#assets[@]}" -eq 10
+          assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/MODEL_CATALOG_PIN.json release-assets/SBOM.*.cdx.json release-assets/BUILD_MANIFEST.json release-assets/SHA256SUMS)
+          test "${#assets[@]}" -eq 14
           gh release create "$tag" \
             --target "$GITHUB_SHA" --prerelease \
             --title "Pi fork $tag" \

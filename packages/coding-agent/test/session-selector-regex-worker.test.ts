@@ -87,6 +87,115 @@ describe("isolated session regex search", () => {
 		}
 	});
 
+	it("streams many messages without accumulating the full transcript in the worker", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-stream-"));
+		try {
+			const path = join(directory, "many.jsonl");
+			const lines = Array.from({ length: 1_000 }, (_, id) =>
+				JSON.stringify({ type: "message", message: { role: "user", content: "prefix " + "x".repeat(1_000) + (id === 999 ? " final-marker" : "") } }),
+			);
+			writeFileSync(path, lines.join("\n") + "\n");
+			const item = { ...session("many", "x".repeat(100_000)), path };
+			const result = await filterSessionsByRegexInWorker([item], "final-marker", "recent");
+			expect(result.map((entry) => entry.id)).toEqual(["many"]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves matches in other sessions and reports an incomplete oversized history", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-too-large-"));
+		try {
+			const hugePath = join(directory, "oversized.jsonl");
+			const validPath = join(directory, "valid.jsonl");
+			writeFileSync(hugePath, JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(1_200_000) } }) + "\n");
+			writeFileSync(validPath, JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }) + "\n");
+			const huge = { ...session("oversized", "x".repeat(100_000)), path: hugePath };
+			const valid = { ...session("valid", "x".repeat(100_000)), path: validPath };
+			const failures: string[][] = [];
+			const result = await filterSessionsByRegexInWorker([huge, valid], "needle", "recent", undefined, (ids) => failures.push(ids));
+			expect(result.map((entry) => entry.id)).toEqual(["valid"]);
+			expect(failures).toEqual([["oversized"]]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves beginning and end regex anchors across streamed JSONL chunks", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-anchors-"));
+		try {
+			const path = join(directory, "anchored.jsonl");
+			writeFileSync(path, [
+				JSON.stringify({ type: "message", message: { role: "user", content: "start-" + "x".repeat(150_000) } }),
+				JSON.stringify({ type: "message", message: { role: "assistant", content: "final" } }),
+			].join("\n") + "\n");
+			const item = { ...session("anchored", "x".repeat(100_000)), path };
+			const begin = await filterSessionsByRegexInWorker([item], "^final", "recent");
+			expect(begin).toEqual([]);
+			const end = await filterSessionsByRegexInWorker([item], "final$", "recent");
+			expect(end.map((entry) => entry.id)).toEqual(["anchored"]);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("uses full-transcript regex semantics for long history, anchors, lookaheads, and empty text blocks", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-exact-"));
+		try {
+			const path = join(directory, "full.jsonl");
+			const first = "BEGIN" + "q".repeat(170_000) + "END";
+			writeFileSync(path, [
+				JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }, { type: "text", text: "world" }] } }),
+				JSON.stringify({ type: "message", message: { role: "assistant", content: [
+					{ type: "text", text: "a" }, { type: "text", text: "" }, { type: "text", text: "b" },
+				] } }),
+				JSON.stringify({ type: "message", message: { role: "user", content: first } }),
+				JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }),
+			].join("\n") + "\n");
+			const item = { ...session("full", "x".repeat(100_000)), path };
+			for (const [pattern, present] of [
+				["^hello world", true], ["a {2}b", true], ["BEGIN[\\s\\S]*END", true],
+				["^absent|needle", true], ["(?:needle$)", true], ["foo(?!bar)", false],
+				["x{20000}$", false], ["^needle", false], ["^missing|absent", false],
+			] as const) {
+				const result = await filterSessionsByRegexInWorker([item], pattern, "recent");
+				expect(result.length, pattern).toBe(present ? 1 : 0);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("bounds retained full-transcript text independent of total message count", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "pi-regex-memory-limit-"));
+		try {
+			const path = join(directory, "large.jsonl");
+			writeFileSync(path, Array.from({ length: 1_000 }, (_, index) =>
+				JSON.stringify({ type: "message", message: { role: "user",
+					content: `line ${index} ` + "x".repeat(100) } }),
+			).join("\n") + "\n");
+			const fixture = { ...session("large", "x".repeat(100_000)), path };
+			const incomplete: string[][] = [];
+			const result = await filterSessionsByRegexInWorker(
+				[fixture], "no-match", "recent", undefined,
+				(ids) => incomplete.push(ids),
+				{ maxSessionTextChars: 16_384 },
+			);
+			expect(result).toEqual([]);
+			expect(incomplete).toEqual([["large"]]);
+			// The production cap is 16 MiB; the test uses a much smaller injected
+			// cap to deterministically prove we stop retaining text past the limit.
+			await expect(
+					filterSessionsByRegexInWorker(
+						[fixture], "x", "recent", undefined, undefined,
+						{ maxSessionTextChars: 32 * 1024 * 1024 },
+					),
+				).rejects.toThrow(/cap/i);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves recent order across worker batches", async () => {
 		const items = Array.from({ length: 51 }, (_, index) =>
 			session(`s${index}`, index % 3 === 0 ? "match" : "miss"),
