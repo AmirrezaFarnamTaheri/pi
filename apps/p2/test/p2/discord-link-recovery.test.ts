@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
+import type { SessionLock } from "@p2/app/v1";
 import { resumeLinkRepairs } from "../../plugins/discord/link-recovery.ts";
 
 const fakeState = (initial: object) => {
@@ -22,7 +23,7 @@ it("restores the previous lock only when the interrupted link CAS still owns it"
   const { store } = fakeState({ bindings: {}, pending: {}, repairs: {
     s1: { session: "s1", kind: "link", lock: prior, proposedLock: proposed, expectedWriteId: "old", writeId: "link" },
   } });
-  let current = { lock: proposed, writeId: "link" };
+  let current: { lock: SessionLock | null; writeId: string } = { lock: proposed, writeId: "link" };
   await resumeLinkRepairs(store, async (_, lock, expected, id) => {
     assert.equal(expected, current.writeId);
     current = { lock: lock!, writeId: id! };
@@ -132,7 +133,7 @@ it("restores prior lock only if the interrupted link's write identity is still c
     s1: { session: "s1", kind: "link", lock: prior, proposedLock: restrictive,
       expectedWriteId: "original", writeId: "link-attempt" },
   } });
-  let current = { lock: restrictive, writeId: "link-attempt" };
+  let current: { lock: SessionLock | null; writeId: string } = { lock: restrictive, writeId: "link-attempt" };
   await resumeLinkRepairs(store, async (_, lock, expected, newWriteId) => {
     if (expected !== current.writeId) return false;
     assert.ok(newWriteId);
