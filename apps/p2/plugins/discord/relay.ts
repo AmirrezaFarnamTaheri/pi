@@ -454,9 +454,17 @@ export class Relay {
 					after = page.at(-1)!.id;
 					more = page.length === PAGE;
 				} while (more && remaining > 0);
+				let refused = false;
 				if (newest) {
 					const thread = place.thread ? await port.channel(place.id) : undefined;
 					await this.deliver(binding.channelId, newest, thread);
+					const updated = this.#state.value().bindings[binding.channelId];
+					const cursor = place.thread ? updated?.threads[place.id]?.cursor : updated?.cursor;
+					if (updated?.session === binding.session && (cursor === undefined || cursor === null || BigInt(cursor) < BigInt(newest.id))) {
+						// A refused/failed worker RPC must not consume its trigger.
+						after = (BigInt(newest.id) - 1n).toString();
+						refused = true;
+					}
 				}
 				if (scanned) await this.#state.change((draft) => {
 					const current = draft.bindings[binding.channelId];
@@ -467,7 +475,7 @@ export class Relay {
 						delete target.catchUpScan;
 					else target.catchUpScan = after;
 				});
-				if (more) {
+				if (more && !refused) {
 					// Continue the same place with the durable scan cursor, not from its start.
 					needsContinuation = true;
 					break;
