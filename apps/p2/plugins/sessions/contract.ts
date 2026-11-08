@@ -401,6 +401,11 @@ export const SessionLocks = local("p2.session-locks", {
 	members: {
 		locks: record(SessionLockSchema),
 		set: method(obj({ session: str(), lock: LockOrNone })),
+		/** Atomic optimistic write; prevents stale Discord repair from undoing newer owner policy. */
+		compareAndSet: method(
+			obj({ session: str(), previous: LockOrNone, lock: LockOrNone }),
+			obj({ applied: bool() }),
+		),
 	},
 });
 
