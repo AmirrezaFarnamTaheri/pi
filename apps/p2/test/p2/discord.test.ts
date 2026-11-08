@@ -704,6 +704,21 @@ describe("discord relay", () => {
 		assert.doesNotMatch(input.text, /line 0\n/);
 	});
 
+
+	it("keeps older human messages when latest history pages contain only bot posts", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		for (let index = 0; index < 3_350; index++) discord.say("c1", message(`human ${index}`));
+		for (let index = 0; index < 270; index++) {
+			discord.say("c1", message(`bot output ${index}`, {
+				author: { id: "other-bot", name: "Other bot", bot: true },
+			}));
+		}
+		await relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> summarize`)));
+		const prompt = sessions.delivered[0]?.text ?? "";
+		assert.match(prompt, /human 3349/, "truncated history must seek eligible people, not only recent bot posts");
+		assert.doesNotMatch(prompt, /Other bot: bot output/);
+	});
+
 	it("catches up after downtime: one batch per link and thread, every message from the cursor to the newest allowed mention", async () => {
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
 		// Delivered before p2 went down: the cursor is this message.
