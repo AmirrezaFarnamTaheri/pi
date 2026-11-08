@@ -21,13 +21,16 @@ async function matchHistoryFile(path, regex) {
   let line = "";
   let overlap = "";
   let contentStarted = false;
-  // End-anchored patterns must run only at EOF, not at a temporary chunk end.
+  let scannedChars = 0;
+  // Anchors belong to the entire transcript, never the temporary rolling window.
+  const startAnchored = regex.source.startsWith("^");
   const endAnchored = regex.source.endsWith("$") && regex.source.at(-2) !== "\\";
   const append = (text) => {
     if (!text) return false;
     for (let start = 0; start < text.length; start += MATCH_CHUNK_CHARS) {
       const candidate = overlap + text.slice(start, start + MATCH_CHUNK_CHARS);
-      if (!endAnchored && regex.test(candidate)) return true;
+      if (!endAnchored && (!startAnchored || scannedChars === 0) && regex.test(candidate)) return true;
+      scannedChars += text.slice(start, start + MATCH_CHUNK_CHARS).length;
       overlap = candidate.slice(-MATCH_OVERLAP_CHARS);
     }
     return false;
@@ -68,7 +71,9 @@ async function matchHistoryFile(path, regex) {
     }
   }
   if (line && processLine(line)) return true;
-  return endAnchored ? regex.test(overlap) : false;
+  return endAnchored && (!startAnchored || scannedChars <= MATCH_OVERLAP_CHARS)
+    ? regex.test(overlap)
+    : false;
 }
 
 parentPort.on("message", async ({ pattern, sessions }) => {
