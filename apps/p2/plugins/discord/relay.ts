@@ -468,6 +468,8 @@ export class Relay {
 		this.#catchUpVisited.set(bot, visited);
 		const active = new Set(places.map((place) => place.key));
 		for (const key of visited) if (!active.has(key)) visited.delete(key);
+		for (const [key, retry] of this.#catchUpRetries)
+			if (retry.bot === bot && !active.has(key)) this.#catchUpRetries.delete(key);
 		let remaining = CATCH_UP_PAGES;
 		let needsContinuation = false;
 		for (const place of places) {
