@@ -88,6 +88,12 @@ describe("EventStream opt-in result-only retention", () => {
 		expect(replay).toEqual([]);
 	});
 
+	it("rejects unsupported retention modes instead of silently replaying all events", () => {
+		expect(() => new EventStream<number, number>((event) => event === 1, (event) => event, {
+			retention: "unknown" as "all",
+		})).toThrow(RangeError);
+	});
+
 	it("still propagates producer failure to both result and iteration", async () => {
 		const stream = new EventStream<number, number>(
 			(event) => event === 2,
