@@ -145,6 +145,11 @@ export default defineFacet((host) => {
 		}, (bot) => fleet.value.requestCatchUp(bot));
 		self.onLive(async (ctx) => {
 			live = ctx;
+			fleet.value.setControlRejectionHandler(async (bot, message) => {
+				if (!await relay.mayNotifyControlRejected(bot, message)) return;
+				await fleet.value.connected(bot)?.reply(message.channelId, message.id,
+					"Pi control backlog is full; your command was not executed. Please retry.");
+			});
 			// Repair interrupted link operations before consuming events or enabling new links.
 			while (Object.keys(state.value.repairs).length) {
 				try {
@@ -173,14 +178,14 @@ export default defineFacet((host) => {
 						priority: event.kind === "message" && event.message.mentionsBot &&
 							id !== undefined && commandOf(event.message.text, id) !== undefined,
 						onRejected: event.kind === "message" ? async () => {
-							await fleet.value.connected(bot)?.reply(event.message.channelId, event.message.id,
-								"Pi control backlog is full; your command was not executed. Please retry.");
+							fleet.value.notifyControlRejected(bot, event.message);
 						} : undefined,
 						run: () => event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot),
 					});
 				}
 			} finally {
 				scheduler.stop();
+				fleet.value.setControlRejectionHandler(undefined);
 				live = undefined;
 			}
 		});
