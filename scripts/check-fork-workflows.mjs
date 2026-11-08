@@ -53,6 +53,14 @@ export function auditForkWorkflows(root = resolve(fileURLToPath(new URL("..", im
     if (/gh pr merge|git push origin main|git push --force/.test(body)) {
       violations.push("Upstream sync must not auto-merge or force-push main");
     }
+    const prepare = body.split(/^  verify:/m)[0];
+    if (/npm (ci|run|test)|bun run|node scripts\//.test(prepare)) {
+      violations.push("Upstream code must not execute in the sync job with write permissions");
+    }
+    if (!body.includes("  verify:") || !body.includes("      contents: read") ||
+        !body.includes("persist-credentials: false")) {
+      violations.push("Upstream verification must run in a separate read-only job");
+    }
   }
   return violations;
 }
