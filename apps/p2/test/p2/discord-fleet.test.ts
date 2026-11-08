@@ -59,6 +59,7 @@ describe("Discord fleet persistence and identity isolation", () => {
 			assert.equal(persisted.bots[second].applicationId, "app-two");
 			created[0]!.status = { state: "error", error: "offline" };
 			created[0]!.client = undefined;
+			await assert.rejects(fleet.add("app-one:duplicate"), /added already/i);
 			await assert.rejects(fleet.setToken(first, "another-application:key"), /another bot/i);
 			await fleet.setToken(first, "app-one:refreshed");
 			const updated = JSON.parse(await readFile(path, "utf8"));
