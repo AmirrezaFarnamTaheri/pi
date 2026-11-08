@@ -1,5 +1,7 @@
 /** Durable, retryable compensation/roll-forward for Discord-to-session link mutations. */
 import type { SessionLock } from "@p2/app/v1";
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Binding, Pending, Wake } from "./contract.ts";
 
 export type LinkRepair = {
@@ -9,6 +11,10 @@ export type LinkRepair = {
   lock: SessionLock | null;
   /** Lock expected before applying a link or update repair; used for atomic fencing. */
   expectedLock?: SessionLock | null;
+  /** Identity of the previously committed owner lock write, not its potentially reused value. */
+  expectedWriteId?: string | null;
+  /** Unique identity assigned to this repair's intended lock write, persisted before CAS. */
+  writeId?: string;
   /** Lock installed by an interrupted link, if any. Never revert unrelated lock writes. */
   proposedLock?: SessionLock | null;
   /** Desired wake policy on update. */
@@ -39,47 +45,76 @@ export function removeSessionBinding(draft: LinkRepairState, session: string): v
  */
 export async function resumeLinkRepairs(
   state: RepairStore,
-  setLock: (session: string, lock: SessionLock | null, expected?: SessionLock | null) => Promise<boolean | void>,
+  setLock: (session: string, lock: SessionLock | null, expectedWriteId?: string | null, writeId?: string) => Promise<boolean | void>,
   options: {
+    readLock?: (session: string) => Promise<{ lock: SessionLock | null; writeId: string | null }>;
     beforeUnlock?: (session: string) => Promise<void>;
+    /** Must cancel or await *submitted turns*, not merely their admission RPCs. */
     notifyUnlinked?: (session: string) => Promise<void>;
   } = {},
 ): Promise<void> {
   for (const [session, repair] of Object.entries(state.value().repairs)) {
     if (repair.session !== session) throw new Error(`Discord repair session mismatch: ${session}`);
+    const conflict = async (): Promise<never> => {
+      // Retire a superseded intent; leaving it indefinitely would keep relay
+      // startup blocked. The newer owner policy is left untouched.
+      await state.change((draft) => { delete draft.repairs[session]; });
+      throw new Error(`Discord ${repair.kind} conflict: session ${session} lock changed; retry with the current policy`);
+    };
+    const current = async () => {
+      if (!options.readLock) throw new Error("Identity-fenced Discord recovery requires current lock state");
+      return options.readLock(session);
+    };
     switch (repair.kind) {
       case "link": {
-        // A fully committed binding is authoritative; do not weaken its live lock.
+        // A committed binding wins; failed link compensation may only undo
+        // the write that *this* link installed, never an intervening owner edit.
         const isLinked = Object.values(state.value().bindings).some((binding) => binding.session === session);
-        // Never restore an old, potentially broader lock without a compare-and-set.
-        // A new owner lock policy supersedes the unfinished link operation.
-        if (!isLinked && repair.proposedLock !== undefined)
-          await setLock(session, repair.lock, repair.proposedLock);
+        if (!isLinked && repair.writeId) {
+          const observed = await current();
+          if (observed.writeId === repair.writeId && isDeepStrictEqual(observed.lock, repair.proposedLock)) {
+            const applied = await setLock(session, repair.lock, repair.writeId, randomUUID());
+            if (applied === false) throw new Error("Link compensation lost a lock race; retry");
+          }
+        }
+        // Legacy link intents had no write identity. Fail closed, leaving the
+        // sandbox lock untouched instead of potentially restoring a broader lock.
         break;
       }
-      case "unlink":
-        // Drop relay access *before* removing the sandbox/tool lock.
+      case "unlink": {
+        // Revoke ingress first, then drain admitted RPCs and cancel/await all
+        // submitted turns *before* lifting the sandbox/tool policy.
         await state.change((draft) => removeSessionBinding(draft, session));
         await options.beforeUnlock?.(session);
-        await setLock(session, null, repair.expectedLock);
-        // Notification must succeed before the intent is deleted. On crash/restart it
-        // is retried; archived/deleted sessions can be safely skipped by the caller.
         await options.notifyUnlinked?.(session);
+        if (!repair.writeId) break; // Legacy unlink: leave restrictive lock for manual owner action.
+        const observed = await current();
+        if (observed.writeId === repair.writeId) break; // Previous unlink CAS succeeded before crash.
+        if (observed.writeId !== (repair.expectedWriteId ?? null)) await conflict();
+        if (await setLock(session, null, repair.expectedWriteId ?? null, repair.writeId) === false) await conflict();
         break;
-      case "update":
+      }
+      case "update": {
         if (!repair.wake) throw new Error(`Discord repair missing wake policy: ${session}`);
-        if (!Object.values(state.value().bindings).some((binding) => binding.session === session)) {
-          throw new Error(`Discord repair cannot update unlinked session ${session}`);
+        if (!Object.values(state.value().bindings).some((binding) => binding.session === session))
+          await conflict();
+        if (!repair.writeId) await conflict(); // Legacy un-fenced intent cannot safely widen wake permissions.
+        const observed = await current();
+        if (observed.writeId === repair.writeId) {
+          // CAS already committed in the previous attempt. Finish the wake
+          // change rather than treating our own write as a conflicting owner.
+          if (!isDeepStrictEqual(observed.lock, repair.lock)) await conflict();
+        } else {
+          if (observed.writeId !== (repair.expectedWriteId ?? null)) await conflict();
+          if (await setLock(session, repair.lock, repair.expectedWriteId ?? null, repair.writeId) === false)
+            await conflict();
         }
-        const applied = await setLock(session, repair.lock, repair.expectedLock);
-        // A later owner lock update supersedes this stale wake-policy change as well.
-        if (applied === false) break;
         await state.change((draft) => {
-          for (const binding of Object.values(draft.bindings)) {
+          for (const binding of Object.values(draft.bindings))
             if (binding.session === session) binding.wake = repair.wake!;
-          }
         });
         break;
+      }
       default:
         throw new Error(`Unknown Discord repair kind: ${String((repair as { kind: unknown }).kind)}`);
     }
