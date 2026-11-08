@@ -100,3 +100,19 @@ test("quality metrics use an external grader and avoid division by zero", () => 
 	assert.equal(allFailed.costPerSuccessUsd, null);
 	assert.equal(allFailed.tokensPerSuccess, null);
 });
+
+test("counts UTF-8 bytes in runtimes without the Node Buffer global", () => {
+	const monitor = new AgentPerformanceMonitor();
+	const savedBuffer = globalThis.Buffer;
+	try {
+		(globalThis as { Buffer?: typeof Buffer }).Buffer = undefined;
+		monitor.record({ type: "agent_start" });
+		monitor.record({ type: "message_end", message: {
+			role: "toolResult", toolCallId: "unicode", toolName: "read",
+			content: [{ type: "text", text: "αβ😀" }], isError: false, timestamp: 0,
+		} });
+		assert.equal(monitor.report().toolResultBytes, 8);
+	} finally {
+		globalThis.Buffer = savedBuffer;
+	}
+});
