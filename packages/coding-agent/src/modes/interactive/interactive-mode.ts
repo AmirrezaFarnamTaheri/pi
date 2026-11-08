@@ -6149,20 +6149,29 @@ export class InteractiveMode {
 			return;
 		}
 		const virtual = runtime.getModel("account-profiles", sourceProviderId);
-		if (!virtual) { this.showError("Add another account for this provider to enable rotation."); return; }
+		if (!virtual) {
+			this.showError("Add another account for this provider to enable rotation.");
+			return;
+		}
 		// A routed request includes existing transcript messages and tool outputs.
 		// Explicitly obtain user consent before exposing that context to another account.
 		const confirm = "Enable rotation and share this conversation across accounts";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				"Confirm account rotation", ["Cancel", confirm],
+				"Confirm account rotation",
+				["Cancel", confirm],
 				(option) => {
 					done();
 					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual, persist);
 				},
 				() => done(),
 				{
-					description: `The full transcript and tool output may be shared with ${connected.join(", ")}. ${persist ? "The default is remembered, but each new session needs separate sharing consent." : "This selection is for this session only."} Only proceed if authorized.`,
+					description:
+						`The full transcript and tool output may be shared with ${connected.join(", ")}. ` +
+						(persist
+							? "The default is remembered, but each new session needs separate sharing consent."
+							: "This selection is for this session only.") +
+						" Only proceed if authorized.",
 				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
@@ -6174,7 +6183,9 @@ export class InteractiveMode {
 			await this.session.setModel(virtual, { persist, accountRotationConsent: true });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Rotation enabled for ${sourceProviderId} in this session${persist ? "; future sessions require confirmation" : ""}. Tool continuations stay on the same identity.`);
+			this.showStatus(
+				`Rotation enabled for ${sourceProviderId} in this session${persist ? "; future sessions require confirmation" : ""}. Tool continuations stay on the same identity.`,
+			);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
 		}
