@@ -45,3 +45,16 @@ test("fork root scripts cannot publish into upstream-controlled package namespac
     assert.match(pkg.scripts[script], /reject-upstream-release\.mjs/, script + " must fail closed");
   }
 });
+
+test("fork release uses hash-pinned catalog and requires a successful CI run for the exact source commit", () => {
+  const root = join(import.meta.dirname, "..");
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["hydrate:fork-model-data"], "node scripts/hydrate-fork-model-data.mjs");
+  const release = readFileSync(join(root, ".github/workflows/fork-github-release.yml"), "utf8");
+  assert.doesNotMatch(release, /npm run hydrate:model-data/);
+  assert.match(release, /npm run hydrate:fork-model-data/);
+  assert.match(release, /actions\/workflows\/ci\.yml\/runs/);
+  assert.match(release, /GITHUB_SHA/);
+  assert.match(release, /git merge-base --is-ancestor/);
+  assert.match(release, /sha256sum -c/);
+});
