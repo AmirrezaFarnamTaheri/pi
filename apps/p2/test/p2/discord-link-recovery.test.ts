@@ -18,7 +18,7 @@ const fakeState = (initial: object) => {
 
 it("restores prior session lock after interrupted link and clears its repair", async () => {
   const prior = { mcp: [], projectMcp: false, instructions: false, capabilities: [] };
-  const { store, locks } = fakeState({ bindings: {}, pending: {}, repairs: { s1: { session: "s1", kind: "link", lock: prior } } });
+  const { store, locks } = fakeState({ bindings: {}, pending: {}, repairs: { s1: { session: "s1", kind: "link", lock: prior, proposedLock: { mcp: ["proposed"], projectMcp: false, instructions: false, capabilities: [] } } } });
   locks.set("s1", { mcp: ["unexpected"] });
   await resumeLinkRepairs(store, async (session, lock) => { locks.set(session, lock); });
   assert.deepEqual(locks.get("s1"), prior);
@@ -62,4 +62,23 @@ it("keeps a committed link and does not overwrite its live lock during recovery"
   await resumeLinkRepairs(store, async () => { writes++; });
   assert.equal(writes, 0);
   assert.deepEqual(store.value().repairs, {});
+});
+
+it("does not restore a stale lock when another owner modified it after an interrupted link", async () => {
+  const previous = { mcp: ["wide"], projectMcp: true, instructions: true, capabilities: ["tools"] };
+  const proposed = { mcp: [], projectMcp: false, instructions: false, capabilities: [] };
+  const current = { mcp: [], projectMcp: false, instructions: false, capabilities: ["narrow"] };
+  const { store } = fakeState({
+    bindings: {}, pending: {},
+    repairs: { s1: { session: "s1", kind: "link", lock: previous, proposedLock: proposed } },
+  });
+  let applied = 0;
+  await resumeLinkRepairs(store, async (_session, _prior, expected) => {
+    assert.deepEqual(expected, proposed);
+    applied++;
+    return false; // SessionLocks.compareAndSet rejected a newer lock.
+  });
+  assert.equal(applied, 1);
+  assert.deepEqual(store.value().repairs, {});
+  assert.deepEqual(current.capabilities, ["narrow"]);
 });
