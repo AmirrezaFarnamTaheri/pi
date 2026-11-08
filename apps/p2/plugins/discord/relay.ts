@@ -122,6 +122,8 @@ export class Relay {
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
 	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
+	/** Next channel/thread index per bot while catch-up is split across jobs. */
+	readonly #catchUpOffsets = new Map<string, number>();
 	/** Submission work pinned to its session until it has finished, including worker RPC. */
 	readonly #inFlight = new Map<string, Set<Promise<unknown>>>();
 
@@ -408,73 +410,79 @@ export class Relay {
 	 */
 	async catchUp(bot: string): Promise<void> {
 		const port = this.#port(bot);
-		let remaining = CATCH_UP_PAGES;
-		let continuation = false;
-		links: for (const binding of Object.values(this.#state.value().bindings)) {
-			if (binding.botId !== bot) continue;
-			const places: { id: string; cursor: string | null; scan?: string; thread: boolean }[] = [
-				{ id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan, thread: false },
+		const places = Object.values(this.#state.value().bindings)
+			.filter((binding) => binding.botId === bot)
+			.flatMap((binding) => [
+				{ binding, id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan, thread: false },
 				...Object.entries(binding.threads).map(([id, known]) => ({
-					id, cursor: known.cursor, scan: known.catchUpScan, thread: true,
+					binding, id, cursor: known.cursor, scan: known.catchUpScan, thread: true,
 				})),
-			];
-			for (const place of places) {
-				if (remaining === 0) {
-					continuation = true;
-					break links;
-				}
-				try {
-					// Scanning has its own persisted checkpoint; delivery still starts at the last
-					// delivered cursor so chatter before a later mention is not lost.
-					let after = place.scan && (place.cursor === null || BigInt(place.scan) > BigInt(place.cursor))
-						? place.scan : place.cursor ?? "0";
-					let newest: DiscordMessage | undefined;
-					let more = false;
-					let scanned = false;
-					do {
-						const page = await port.messages(place.id, { after, limit: PAGE });
-						remaining--;
-						if (!page.length) {
-							more = false;
-							break;
-						}
-						scanned = true;
-						for (const message of page)
-							if (
-								!message.author.bot &&
-								message.mentionsBot &&
-								mayWake(binding.wake, message.author.id, message.roles) &&
-								!this.#isCommand(binding, message, port.botId)
-							)
-								newest = message;
-						after = page.at(-1)!.id;
-						more = page.length === PAGE;
-					} while (more && remaining > 0);
-					if (newest) {
-						const thread = place.thread ? await port.channel(place.id) : undefined;
-						await this.deliver(binding.channelId, newest, thread);
+			]);
+		let remaining = CATCH_UP_PAGES;
+		let next = Math.min(this.#catchUpOffsets.get(bot) ?? 0, places.length);
+		let needsContinuation = false;
+		for (; next < places.length; next++) {
+			const place = places[next]!;
+			const binding = place.binding;
+			if (remaining === 0) {
+				needsContinuation = true;
+				break;
+			}
+			try {
+				// Scan progress is separate from delivery's cursor; a later mention still
+				// includes all required context since the last successful delivery.
+				let after = place.scan && (place.cursor === null || BigInt(place.scan) > BigInt(place.cursor))
+					? place.scan : place.cursor ?? "0";
+				let newest: DiscordMessage | undefined;
+				let more = false;
+				let scanned = false;
+				do {
+					const page = await port.messages(place.id, { after, limit: PAGE });
+					remaining--;
+					if (!page.length) {
+						more = false;
+						break;
 					}
-					if (scanned) await this.#state.change((draft) => {
-						const current = draft.bindings[binding.channelId];
-						if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
-						const target = place.thread ? current.threads[place.id] : current;
-						if (!target) return;
-						if (target.cursor !== null && BigInt(after) <= BigInt(target.cursor))
-							delete target.catchUpScan;
-						else target.catchUpScan = after;
-					});
-					if (more) continuation = true;
-					if (remaining === 0) {
-						continuation = true;
-						break links;
-					}
-				} catch (error) {
-					// A channel or thread that went away (or a session that cannot take it) skips only itself.
-					console.error("p2 discord: catching up failed:", error instanceof Error ? error.message : error);
+					scanned = true;
+					for (const message of page)
+						if (
+							!message.author.bot &&
+							message.mentionsBot &&
+							mayWake(binding.wake, message.author.id, message.roles) &&
+							!this.#isCommand(binding, message, port.botId)
+						) newest = message;
+					after = page.at(-1)!.id;
+					more = page.length === PAGE;
+				} while (more && remaining > 0);
+				if (newest) {
+					const thread = place.thread ? await port.channel(place.id) : undefined;
+					await this.deliver(binding.channelId, newest, thread);
 				}
+				if (scanned) await this.#state.change((draft) => {
+					const current = draft.bindings[binding.channelId];
+					if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
+					const target = place.thread ? current.threads[place.id] : current;
+					if (!target) return;
+					if (target.cursor !== null && BigInt(after) <= BigInt(target.cursor))
+						delete target.catchUpScan;
+					else target.catchUpScan = after;
+				});
+				if (more) {
+					// Continue the same place with the durable scan cursor, not from its start.
+					needsContinuation = true;
+					break;
+				}
+			} catch (error) {
+				console.error("p2 discord: catching up failed:", error instanceof Error ? error.message : error);
 			}
 		}
-		if (continuation) this.#resumeCatchUp?.(bot);
+		if (next < places.length) needsContinuation = true;
+		if (needsContinuation) {
+			this.#catchUpOffsets.set(bot, next);
+			this.#resumeCatchUp?.(bot);
+		} else {
+			this.#catchUpOffsets.delete(bot);
+		}
 	}
 
 	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
