@@ -58,6 +58,7 @@ class FakeDiscord implements DiscordPort {
 	readonly posted: { channel: string; replyTo: string | undefined; text: string; files?: string[] }[] = [];
 	/** Bytes attached to posts, by file name. */
 	readonly uploaded = new Map<string, Uint8Array>();
+	readonly acceptedNonces = new Set<string>();
 	/** The server's per-message upload limit. */
 	limit = 10 * 1024 * 1024;
 	readonly typed: string[] = [];
@@ -89,7 +90,12 @@ class FakeDiscord implements DiscordPort {
 		replyTo: string | undefined,
 		text: string,
 		files: readonly { name: string; data: Uint8Array }[] = [],
+		nonce?: string,
 	): Promise<void> {
+		if (nonce) {
+			if (this.acceptedNonces.has(nonce)) return;
+			this.acceptedNonces.add(nonce);
+		}
 		assert(text.length <= 2000);
 		assert(text || files.length, "never an empty message");
 		assert(files.length <= 10 && files.reduce((sum, file) => sum + file.data.length, 0) <= this.limit);
@@ -702,6 +708,30 @@ describe("discord relay", () => {
 		assert.deepEqual(chunkText("short"), ["short"]);
 		assert.deepEqual(chunkText(`${"a".repeat(8)}\n${"b".repeat(8)}`, 10), ["a".repeat(8), "b".repeat(8)]);
 		assert.deepEqual(chunkText("x".repeat(25), 10), ["x".repeat(10), "x".repeat(10), "x".repeat(5)]);
+	});
+
+
+	it("does not duplicate Discord reply chunks when the API accepted a post but the HTTP result was lost", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const trigger = discord.say("c1", message(`<@${BOT}> answer`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "Delivered once.", files: [] });
+		const realReply = discord.reply.bind(discord);
+		let first = true;
+		discord.reply = async (...args) => {
+			await realReply(...args);
+			if (first) {
+				first = false;
+				throw new Error("connection lost after Discord accepted the message");
+			}
+		};
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1);
+		assert.equal(state().pending[trigger.id]?.nextPost ?? 0, 0);
+		state().pending[trigger.id]!.retryAt = 0;
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1, "repeating the nonce must not create another post");
+		assert.deepEqual(state().pending, {});
 	});
 
 	it("retries a transient Discord error without reposting completed chunks", async () => {
