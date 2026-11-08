@@ -58,6 +58,24 @@ describe("discord event scheduler", () => {
 		assert.equal(order.at(-1), "same-channel-after");
 	});
 
+
+	it("notifies the sender instead of silently dropping a saturated control command", async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const rejected: string[] = [];
+		const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
+		assert.equal(scheduler.enqueue({ bot: "b", key: "control-one", priority: true, run: () => gate }), true);
+		assert.equal(scheduler.enqueue({ bot: "b", key: "control-two", priority: true, run: async () => {} }), true);
+		assert.equal(scheduler.enqueue({
+			bot: "b", key: "control-three", priority: true, run: async () => {},
+			onRejected: async () => { rejected.push("control-three"); },
+		}), false);
+		await tick();
+		assert.deepEqual(rejected, ["control-three"]);
+		release();
+		await scheduler.idle();
+	});
+
 	it("bounds pending deliveries and requests a catch-up instead of storing unbounded events", async () => {
 		const missed: string[] = [];
 		let release!: () => void;
