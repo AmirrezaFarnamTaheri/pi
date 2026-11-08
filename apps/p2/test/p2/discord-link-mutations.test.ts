@@ -7,19 +7,24 @@ describe("serialized Discord owner link mutations", () => {
 		const queue = new LinkMutationQueue();
 		const linked = new Map<string, string>();
 		let release!: () => void;
-		const slowDiscordRequest = new Promise<void>((resolve) => { release = resolve; });
-		let waiting: () => void = () => {};
-		const started = new Promise<void>((resolve) => { waiting = resolve; });
-		const link = (session: string, channel: string) => queue.run(async () => {
-			if ([...linked.values()].includes(session)) throw new Error("Session linked already");
-			waiting();
-			await slowDiscordRequest;
-			linked.set(channel, session);
+		const slowDiscordRequest = new Promise<void>((resolve) => {
+			release = resolve;
 		});
+		let waiting: () => void = () => {};
+		const started = new Promise<void>((resolve) => {
+			waiting = resolve;
+		});
+		const link = (session: string, channel: string) =>
+			queue.run(async () => {
+				if ([...linked.values()].includes(session)) throw new Error("Session linked already");
+				waiting();
+				await slowDiscordRequest;
+				linked.set(channel, session);
+			});
 		const first = link("s1", "c1");
 		const second = link("s1", "c2");
 		await started;
-		assert.equal(linked.size, 0, "both requests initially see an empty state");
+		assert.equal(linked.size, 0, "the first link awaits network before committing");
 		release();
 		await first;
 		await assert.rejects(second, /linked already/i);
@@ -29,8 +34,15 @@ describe("serialized Discord owner link mutations", () => {
 	it("continues processing later link updates after a prior operation fails", async () => {
 		const queue = new LinkMutationQueue();
 		const operations: string[] = [];
-		await assert.rejects(queue.run(async () => { throw new Error("offline"); }), /offline/);
-		await queue.run(async () => { operations.push("accepted"); });
+		await assert.rejects(
+			queue.run(async () => {
+				throw new Error("offline");
+			}),
+			/offline/,
+		);
+		await queue.run(async () => {
+			operations.push("accepted");
+		});
 		assert.deepEqual(operations, ["accepted"]);
 	});
 });
