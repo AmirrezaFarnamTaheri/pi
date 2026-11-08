@@ -94,3 +94,23 @@ test("restores an account whose extension source provider is registered after ru
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("does not reuse an original provider's ambient API key in an added account", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-isolated-account-"));
+	const oldKey = process.env.ANTIGRAVITY_MANAGER_API_KEY;
+	process.env.ANTIGRAVITY_MANAGER_API_KEY = "original-account-only";
+	try {
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(), modelsPath: null,
+			accountProfilesPath: join(directory, "profiles.json"),
+			allowModelNetwork: false, refreshOnCreate: false,
+		});
+		const profile = runtime.addAccountAlias("antigravity-manager", "Separate login");
+		assert.equal(await runtime.getAuth(profile.id), undefined);
+		assert.equal((await runtime.getAuth("antigravity-manager"))?.auth.apiKey, "original-account-only");
+	} finally {
+		if (oldKey === undefined) delete process.env.ANTIGRAVITY_MANAGER_API_KEY;
+		else process.env.ANTIGRAVITY_MANAGER_API_KEY = oldKey;
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
