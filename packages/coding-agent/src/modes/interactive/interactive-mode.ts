@@ -5991,11 +5991,9 @@ export class InteractiveMode {
 				(provider) => provider.id === profile.id,
 			);
 			if (!aliasOption) throw new Error("New account was not registered for login");
-			await this.startProviderLogin(aliasOption, () => {
-				// A cancelled login has not committed a credential; remove its unused identity.
-				this.session.modelRuntime.removeAccountAlias(profile.id);
-				onBack?.();
-			});
+			// Keep the identity after cancellation: a late OAuth completion may already
+			// have saved its credential, and deleting it would orphan that secret.
+			await this.startProviderLogin(aliasOption, onBack);
 		} catch (error) {
 			this.showError(`Could not add account: ${error instanceof Error ? error.message : String(error)}`);
 		}
