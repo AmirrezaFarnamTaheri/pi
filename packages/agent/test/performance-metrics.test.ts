@@ -32,6 +32,10 @@ test("records provider token/cost counters without double-counting reasoning", (
 	assert.equal(result.timeToFirstTextMs, 24);
 	assert.equal(result.requestCount, 1);
 	assert.equal(result.turnCount, 1);
+	assert.equal(result.turns.length, 1);
+	assert.equal(result.turns[0]!.durationMs, 75);
+	assert.equal(result.turns[0]!.tokens.total, 470);
+	assert.equal(result.turns[0]!.costUsd, 0.052);
 	assert.equal(result.toolCalls, 1);
 	assert.equal(result.toolErrors, 0);
 	assert.equal(result.toolExecutionMs, 30);
