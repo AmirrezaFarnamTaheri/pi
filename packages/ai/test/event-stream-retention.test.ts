@@ -65,6 +65,24 @@ describe("EventStream opt-in result-only retention", () => {
 		expect(await stream.result()).toBe(4);
 	});
 
+	it("discards queued progress after an early consumer exit in result-only mode", async () => {
+		const stream = new EventStream<number, number>((event) => event === 99, (event) => event, {
+			retention: "result-only",
+		});
+		const iterator = stream[Symbol.asyncIterator]();
+		const pending = iterator.next();
+		stream.push(1);
+		expect(await pending).toEqual({ value: 1, done: false });
+		stream.push(2);
+		stream.push(3);
+		await iterator.return?.();
+		stream.push(99);
+		expect(await stream.result()).toBe(99);
+		const late: number[] = [];
+		for await (const item of stream) late.push(item);
+		expect(late).toEqual([]);
+	});
+
 	it("allows assistant response callers to opt out without losing the final response", async () => {
 		const stream = createAssistantMessageEventStream({ retention: "result-only" });
 		const message = {
