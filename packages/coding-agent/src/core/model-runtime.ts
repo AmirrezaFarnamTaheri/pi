@@ -70,6 +70,7 @@ import {
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { RotationPool, classifyCredentialFailure } from "../extensions/account-rotation-policy.ts";
 import { createStoredAccountAlias } from "./account-aliases.ts";
 import { addAccountProfile, loadAccountProfiles, removeAccountProfile, type AccountProfile } from "./account-profiles.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -280,6 +281,7 @@ export class ModelRuntime implements Models {
 		} finally {
 			if (timeout) clearTimeout(timeout);
 		}
+		runtime.configureAutomaticAccountRotation();
 		return runtime;
 	}
 
@@ -578,6 +580,7 @@ export class ModelRuntime implements Models {
 			const provider = createStoredAccountAlias(source, profile.id, profile.label);
 			this.accountProfiles.set(profile.id, profile);
 			this.registerNativeProvider(provider);
+			this.configureAutomaticAccountRotation(sourceProviderId);
 			return profile;
 		} catch (error) {
 			this.accountProfiles.delete(profile.id);
@@ -593,11 +596,93 @@ export class ModelRuntime implements Models {
 		// Fail closed: a failed logout must never leave an orphaned stored credential.
 		await this.logout(id);
 		removeAccountProfile(path, id);
+		const sourceProviderId = this.accountProfiles.get(id)!.sourceProviderId;
 		this.accountProfiles.delete(id);
 		this.nativeExtensionProviders.delete(id);
+		this.configureAutomaticAccountRotation(sourceProviderId);
 		this.recomposeProvider(id);
 		this.updateModelSnapshot();
 		this.scheduleExtensionRefresh();
+	}
+
+	/** Build an opt-in virtual model per source, not a silent global credential switch. */
+	private configureAutomaticAccountRotation(sourceFilter?: string): void {
+		const sources = new Set(
+			[...this.accountProfiles.values()].map((profile) => profile.sourceProviderId),
+		);
+		const candidates = sourceFilter ? [sourceFilter] : [...sources];
+		for (const sourceId of candidates) {
+			const aliases = [...this.accountProfiles.values()]
+				.filter((profile) => profile.sourceProviderId === sourceId)
+				.map((profile) => profile.id);
+			const memberIds = [sourceId, ...aliases];
+			if (aliases.length === 0) {
+				if (this.virtualModels.get("account-profiles")?.has(sourceId)) {
+					this.unregisterVirtualModel("account-profiles", sourceId);
+				}
+				continue;
+			}
+			const pools = new Map<string, RotationPool>();
+			const memberSet = new Set(memberIds);
+			this.registerVirtualModel<{ active?: { provider: string; model: string } }>({
+				provider: "account-profiles",
+				id: sourceId,
+				name: `Rotate ${this.getProvider(sourceId)?.name ?? sourceId} (${memberIds.length} accounts)`,
+				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+				shouldRetry: (message) =>
+					message.stopReason === "error" && memberSet.has(message.provider) &&
+					classifyCredentialFailure(message.errorMessage ?? "") !== undefined &&
+					message.content.every((block) => block.type !== "toolCall" &&
+						(block.type !== "text" || block.text.length === 0) &&
+						(block.type !== "thinking" || block.thinking.length === 0)),
+				route: (request) => {
+					if (request.signal?.aborted) throw new Error("Account rotation cancelled");
+					const previous = request.previous?.model;
+					const failed = request.failed?.model;
+					const state = request.state?.active;
+					const retained = request.reason === "retry" ? failed : request.reason === "continuation" ? previous : undefined;
+					const preferredId = retained && memberSet.has(retained.provider)
+						? retained.id
+						: state && memberSet.has(state.provider) ? state.model
+						: previous && memberSet.has(previous.provider) ? previous.id : undefined;
+					const primaryModelId = preferredId && memberIds.some((id) => !!this.getPhysicalModel(id, preferredId))
+						? preferredId
+						: memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
+					if (!primaryModelId) throw new Error("No physical models found for these accounts");
+					let pool = pools.get(primaryModelId);
+					if (!pool) {
+						pool = new RotationPool(memberIds.map((provider) => ({ provider, model: primaryModelId })));
+						pools.set(primaryModelId, pool);
+					}
+					for (const provider of memberIds) {
+						pool.setAvailable({ provider, model: primaryModelId },
+							!!this.getPhysicalModel(provider, primaryModelId) && this.hasConfiguredAuth(provider));
+					}
+					const toTarget = (model: Model<Api> | undefined) =>
+						model && memberSet.has(model.provider) && model.id === primaryModelId
+							? { provider: model.provider, model: model.id } : undefined;
+					const previousTarget = toTarget(previous);
+					if (previousTarget && request.reason !== "retry") pool.markSuccess(previousTarget);
+					const failedTarget = toTarget(failed);
+					const failedMessage = request.failed?.message;
+					const result = pool.choose({
+						reason: request.reason,
+						previous: previousTarget,
+						active: state && state.model === primaryModelId && memberSet.has(state.provider) ? state : undefined,
+						...(failedTarget && failedMessage ? { failed: {
+							target: failedTarget,
+							errorMessage: failedMessage.errorMessage ?? "",
+							hasOutput: failedMessage.content.some((block) => block.type === "toolCall" ||
+								(block.type === "text" && block.text.length > 0) ||
+								(block.type === "thinking" && block.thinking.length > 0)),
+						} } : {}),
+					});
+					const model = this.getPhysicalModel(result.target.provider, result.target.model);
+					if (!model) throw new Error("Selected account model is no longer available");
+					return { model, thinkingLevel: request.thinkingLevel, state: { active: result.target } };
+				},
+			});
+		}
 	}
 
 	getRegisteredNativeProvider(providerId: string): Provider | undefined {
