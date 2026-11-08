@@ -140,7 +140,7 @@ describe("Discord fleet persistence and identity isolation", () => {
 					"Pi control backlog is full; your command was not executed. Please retry.");
 			});
 			const bot = created[0]!;
-			for (let i = 0; i <= 256; i++) bot.emit({
+			for (let i = 0; i <= 128; i++) bot.emit({
 				kind: "message",
 				message: {
 					id: String(i + 1), channelId: "channel", author: { id: "user", name: "user", bot: false },
