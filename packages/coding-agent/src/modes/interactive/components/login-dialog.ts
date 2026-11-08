@@ -218,11 +218,13 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 */
 	showManualInput(prompt: string): Promise<string> {
 		this.clearDeviceCodeAction();
-		this.secretPrompt = false;
-		this.input.setMask(false);
+		// OAuth callback URLs and one-time codes are credentials too.
+		this.secretPrompt = true;
+		this.input.setMask(true);
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
+		this.contentContainer.addChild(new TruncatedText(theme.fg("muted", "● One-time authorization response is hidden"), 1, 0));
 		this.contentContainer.addChild(this.input);
 		this.contentContainer.addChild(new Text(`(${keyHint("tui.select.cancel", "to cancel")})`, 1, 0));
 		this.tui.requestRender();
