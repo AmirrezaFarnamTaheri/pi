@@ -53,6 +53,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private extractResult: (event: T) => R;
 
 	constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R, options: EventStreamOptions = {}) {
+		if (options.retention !== undefined && options.retention !== "all" && options.retention !== "result-only") {
+			throw new RangeError("Unsupported event stream retention mode");
+		}
 		this.retainUnconsumedEvents = options.retention !== "result-only";
 		this.isComplete = isComplete;
 		this.extractResult = extractResult;
