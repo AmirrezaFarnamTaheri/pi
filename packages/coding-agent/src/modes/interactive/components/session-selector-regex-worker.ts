@@ -112,10 +112,14 @@ export async function filterSessionsByRegexInWorker(
 ): Promise<SessionInfo[]> {
 	if (!pattern || pattern.length > MAX_PATTERN_LENGTH) throw new Error("Invalid regex search length");
 	if (signal?.aborted) throw new Error("Regex search cancelled");
-	if (options?.maxSessionTextChars !== undefined &&
+	if (
+		options?.maxSessionTextChars !== undefined &&
 		(!Number.isSafeInteger(options.maxSessionTextChars) ||
-			options.maxSessionTextChars <= 0 || options.maxSessionTextChars > MAX_REGEX_TEXT_CHARS))
+			options.maxSessionTextChars <= 0 ||
+			options.maxSessionTextChars > MAX_REGEX_TEXT_CHARS)
+	) {
 		throw new Error("Invalid regex session text cap");
+	}
 
 	if (sessions.length === 0) return [];
 
@@ -189,7 +193,10 @@ export async function filterSessionsByRegexInWorker(
 			}
 		}
 		if (sortMode !== "recent") {
-			matched.sort((left, right) => left.score - right.score || right.session.modified.getTime() - left.session.modified.getTime());
+			matched.sort(
+				(left, right) =>
+					left.score - right.score || right.session.modified.getTime() - left.session.modified.getTime(),
+			);
 		}
 		if (incomplete.length) onIncomplete?.(incomplete);
 		return matched.map(({ session }) => session);
