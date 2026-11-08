@@ -20,6 +20,7 @@ export async function executeBoundedInOrder<T>(
 	const results = new Array<T>(entries.length);
 	let nextIndex = 0;
 	let failed = false;
+	let firstFailure: unknown;
 	const worker = async () => {
 		while (!failed) {
 			const index = nextIndex++;
@@ -28,6 +29,7 @@ export async function executeBoundedInOrder<T>(
 			try {
 				results[index] = typeof entry === "function" ? await (entry as () => Promise<T>)() : (entry as T);
 			} catch (error) {
+				if (!failed) firstFailure = error;
 				failed = true;
 				throw error;
 			}
@@ -35,8 +37,8 @@ export async function executeBoundedInOrder<T>(
 	};
 	// A failed worker stops new jobs, but all already-running tools must settle
 	// before the agent loop can report the batch finished.
-	const outcomes = await Promise.allSettled(Array.from({ length: Math.min(limit, entries.length) }, worker));
-	const failure = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
-	if (failure) throw failure.reason;
+	await Promise.allSettled(Array.from({ length: Math.min(limit, entries.length) }, worker));
+	// Promise.allSettled orders results by worker, not by failure time.
+	if (failed) throw firstFailure;
 	return results;
 }
