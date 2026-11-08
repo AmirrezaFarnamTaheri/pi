@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -18,7 +18,7 @@ function fromLauncher(home: string): (path: string, readonly: boolean) => string
 	assert(start >= 0 && end > start, "launcher hostPath source must be present");
 	return runInNewContext(`${source.slice(start, end)}\nhostPath`, {
 		homedir: () => home,
-		isAbsolute, join, resolve, existsSync, mkdirSync, realpathSync,
+		isAbsolute, basename, dirname, join, resolve, existsSync, mkdirSync, realpathSync,
 	}) as (path: string, readonly: boolean) => string;
 }
 
@@ -33,6 +33,8 @@ describe("sandbox protected writable host mounts", () => {
 			assert.throws(() => hostPath(join(home, ".pi"), false), /writable folder/i);
 			assert.throws(() => hostPath(join(base, "alias"), false), /writable folder/i);
 			assert.throws(() => hostPath(join(base, "alias", "secrets"), false), /writable folder/i);
+			assert.throws(() => hostPath(join(base, "alias", "new-child"), false), /writable folder/i);
+			assert.equal(existsSync(join(home, ".pi", "new-child")), false, "a rejected mount creates nothing protected");
 			assert.throws(() => hostPath(home, false), /writable folder/i);
 			assert.equal(hostPath(join(base, "alias", "secrets"), true), realpathSync(join(home, ".pi", "secrets")));
 			assert.equal(hostPath(join(base, "safe-mount"), false), join(base, "safe-mount"));
