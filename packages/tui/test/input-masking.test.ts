@@ -26,10 +26,10 @@ test("secret-to-plain transition clears the value rather than revealing it", () 
 test("secret text cannot return from undo or from the kill ring after a mode change", () => {
 	const input = new Input({ mask: true });
 	input.handleInput("credential-1234");
-	input.handleInput("\\x17"); // Ctrl+W, remove the secret
+	input.handleInput("\x17"); // Ctrl+W, remove the secret
 	input.setMask(false);
-	input.handleInput("\\x19"); // Ctrl+Y must not yank the removed secret
-	input.handleInput("\\x1f"); // Ctrl+_, undo must not restore it
+	input.handleInput("\x19"); // Ctrl+Y must not yank the removed secret
+	input.handleInput("\x1f"); // Ctrl+_, undo must not restore it
 	assert.equal(input.getValue(), "");
 	assert.ok(!input.render(80).join("\n").includes("credential-1234"));
 });
@@ -41,7 +41,7 @@ test("clearing secret input discards hidden history before normal prompts", () =
 	input.handleInput("another-secret");
 	input.clearSensitiveValue();
 	input.setMask(false);
-	input.handleInput("\\x1f");
-	input.handleInput("\\x19");
+	input.handleInput("\x1f");
+	input.handleInput("\x19");
 	assert.equal(input.getValue(), "");
 });
