@@ -66,6 +66,40 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 	});
 
+	test("reuses unchanged Markdown transforms during streaming but refreshes after stream completion", () => {
+		initTheme("dark");
+		const transformed: Array<{ text: string; streaming: boolean }> = [];
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+			(text, { isStreaming }) => {
+				transformed.push({ text, streaming: isStreaming });
+				return text;
+			},
+		]);
+		const make = (tail: string) => createAssistantMessage([
+			{ type: "text" as const, text: "**unchanged**" },
+			{ type: "text" as const, text: tail },
+		]);
+		component.updateContent(make("first"), true);
+		component.render(80);
+		expect(transformed).toEqual([
+			{ text: "**unchanged**", streaming: true },
+			{ text: "first", streaming: true },
+		]);
+		component.updateContent(make("second"), true);
+		component.render(80);
+		expect(transformed).toEqual([
+			{ text: "**unchanged**", streaming: true },
+			{ text: "first", streaming: true },
+			{ text: "second", streaming: true },
+		]);
+		component.updateContent(make("second"), false);
+		component.render(80);
+		expect(transformed.slice(-2)).toEqual([
+			{ text: "**unchanged**", streaming: false },
+			{ text: "second", streaming: false },
+		]);
+	});
+
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {
 		initTheme("dark");
 
