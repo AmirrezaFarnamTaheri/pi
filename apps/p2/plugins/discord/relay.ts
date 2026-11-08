@@ -626,9 +626,14 @@ async function* history(
 	channel: string,
 	cursor: string | null,
 	until?: string,
+	onLimit?: () => void,
 ): AsyncGenerator<DiscordMessage> {
 	let after = cursor ?? "0";
-	for (;;) {
+	for (let pages = 0; ; pages++) {
+		if (pages >= DELIVERY_HISTORY_PAGES) {
+			onLimit?.();
+			return;
+		}
 		const page = await port.messages(channel, { after, limit: PAGE });
 		for (const message of page) {
 			if (until !== undefined && BigInt(message.id) > BigInt(until)) return;
@@ -638,6 +643,31 @@ async function* history(
 		if (page.length < PAGE || !last) return;
 		after = last.id;
 	}
+}
+
+/** Get at most the latest BATCH_CAP messages at/before a marker, without traversing a long backlog. */
+async function recentHistory(
+	port: DiscordPort,
+	channel: string,
+	cursor: string | null,
+	until: string,
+	includeUntil: boolean,
+): Promise<DiscordMessage[]> {
+	let before = includeUntil ? (BigInt(until) + 1n).toString() : until;
+	const recent: DiscordMessage[] = [];
+	for (let pages = 0; pages < Math.ceil(BATCH_CAP / PAGE) + 1; pages++) {
+		const page = await port.messages(channel, { before, limit: PAGE });
+		if (!page.length) break;
+		const inRange = page.filter((message) =>
+			(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
+			BigInt(message.id) <= BigInt(until),
+		);
+		recent.unshift(...inRange);
+		if (recent.length >= BATCH_CAP || page.length < PAGE ||
+			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))) break;
+		before = page[0]!.id;
+	}
+	return recent.slice(-BATCH_CAP);
 }
 
 /**
