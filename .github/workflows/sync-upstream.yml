@@ -16,17 +16,13 @@ jobs:
   propose:
     if: ${{ github.repository == 'AmirrezaFarnamTaheri/pi' }}
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
     steps:
       - name: Checkout fork history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Setup Node.js for integration verification
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
-          cache: npm
 
       - name: Fetch upstream and prepare a reviewable merge
         id: merge
@@ -62,14 +58,7 @@ jobs:
             echo "::error::Upstream merge conflicts. No commits were pushed; resolve without discarding fork code."
             exit 1
           fi
-          # GITHUB_TOKEN-authored PRs do not trigger ordinary CI workflows.
-          # Validate this merge explicitly before uploading the proposed branch.
-          npm ci --ignore-scripts
-          npm run build
-          npm run check
-          npm run test:scripts
-          npm run test --workspace packages/coding-agent
-
+          # Never execute merged upstream code in this write-enabled job.
           git push origin HEAD:refs/heads/sync/upstream-main
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "Upstream changes proposed on sync/upstream-main; do not merge without CI and review." >> "$GITHUB_STEP_SUMMARY"
@@ -87,3 +76,30 @@ jobs:
           gh pr create --base main --head sync/upstream-main \
             --title "chore(sync): review incoming upstream main changes" \
             --body "Automated upstream merge proposal. Review the full diff, resolve fork-specific changes, and run CI. **This workflow never auto-merges into main.**"
+
+  verify:
+    needs: propose
+    if: needs.propose.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed upstream merge without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: sync/upstream-main
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Verify upstream changes against fork tests
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+          npm run test:scripts
+          npm run test --workspace packages/coding-agent
