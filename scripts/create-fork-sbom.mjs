@@ -39,12 +39,10 @@ function dependencyClosure(packages, rootPath) {
     for (;;) {
       const candidate = `${prefix ? prefix + "/" : ""}node_modules/${name}`;
       if (Object.hasOwn(packages, candidate)) return candidate;
-      const marker = prefix.lastIndexOf("/node_modules/");
-      if (marker >= 0) {
-        prefix = prefix.slice(0, marker);
-      } else if (prefix.startsWith("node_modules/") || prefix) {
-        prefix = "";
-      } else break;
+      const slash = prefix.lastIndexOf("/");
+      if (slash >= 0) prefix = prefix.slice(0, slash);
+      else if (prefix) prefix = "";
+      else break;
     }
     return undefined;
   };
