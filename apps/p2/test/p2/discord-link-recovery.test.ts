@@ -178,3 +178,23 @@ it("reports a conflicting owner lock update instead of claiming wake policy succ
   assert.deepEqual(store.value().bindings.c1.wake, wideWake);
   assert.deepEqual(store.value().repairs, {});
 });
+
+it("does not unlock until worker has canceled queued and running Discord turns", async () => {
+  const { store } = fakeState({ bindings: { c1: { session: "s1" } }, pending: {},
+    repairs: { s1: { session: "s1", kind: "unlink", lock: null,
+      expectedWriteId: "locked", writeId: "unlocked" } } });
+  let release!: () => void;
+  const cancellation = new Promise<void>((resolve) => { release = resolve; });
+  let locked = true;
+  const running = resumeLinkRepairs(store, async () => {
+    locked = false; return true;
+  }, {
+    readLock: async () => ({ lock: null, writeId: "locked" }),
+    notifyUnlinked: async () => cancellation,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(locked, true, "running turn is still protected");
+  release();
+  await running;
+  assert.equal(locked, false);
+});
