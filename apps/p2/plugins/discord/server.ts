@@ -39,16 +39,19 @@ const LinkRepairSchema = obj({
 	session: str(),
 	lock: union([SessionLockSchema, nul()]),
 	expectedLock: opt(union([SessionLockSchema, nul()])),
+	expectedWriteId: opt(union([str(), nul()])),
+	writeId: opt(str()),
 	proposedLock: opt(union([SessionLockSchema, nul()])),
 	wake: opt(WakeSchema),
 });
 
 const State = defineState("p2.discord-bindings", {
 	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema), repairs: record(LinkRepairSchema) }),
-	// 3: persisted intent journal for interruption-safe lock/link operations.
-	version: 3,
+	// 4: write-identity-fenced durable link repair journal.
+	version: 4,
 	initial: () => ({ bindings: {}, pending: {}, repairs: {} }),
 	migrate: (old, from) => {
+		if (from === 3) return old as never; // Legacy repairs are handled fail-closed by the reconciler.
 		if (from === 2) return { ...(old as Record<string, unknown>), repairs: {} } as never;
 		if (from !== 1) throw new Error(`Unknown p2.discord-bindings version ${from}`);
 		const value = old as { bindings: Record<string, object>; pending: Record<string, object> };
@@ -118,14 +121,16 @@ export default defineFacet((host) => {
 		const reconcile = (ctx: Ctx): Promise<void> => resumeLinkRepairs({
 			value: () => state.value as unknown as LinkRepairState,
 			change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
-		}, async (session, lock, expected) => {
-			if (expected !== undefined) {
-				const { applied } = await locks.compareAndSet({ session, previous: expected, lock }, ctx);
-				return applied;
-			}
-			await locks.set({ session, lock }, ctx);
-			return true;
+		}, async (session, lock, expectedWriteId, writeId) => {
+			if (expectedWriteId === undefined || !writeId)
+				throw new Error("Discord recovery requires a durable lock write ID");
+			const { applied } = await locks.compareAndSet({ session, expectedWriteId, lock, writeId }, ctx);
+			return applied;
 		}, {
+			readLock: async (session) => ({
+				lock: locks.locks.value[session] ?? null,
+				writeId: locks.writeIds.value[session] ?? null,
+			}),
 			beforeUnlock: (session) => relay.waitForSession(session),
 			notifyUnlinked: async (session) => {
 				const row = catalog.sessions.value.find((entry) => entry.id === session);
@@ -260,7 +265,10 @@ export default defineFacet((host) => {
 			// A single persisted commit first revokes Discord ingress and records the
 			// lock-release intent. A restart can safely retry a failed lock write.
 			await state.change((draft) => {
-				draft.repairs[session] = { kind: "unlink", session, lock: null, expectedLock: locks.locks.value[session] ?? null };
+				draft.repairs[session] = {
+					kind: "unlink", session, lock: null,
+					expectedWriteId: locks.writeIds.value[session] ?? null, writeId: randomUUID(),
+				};
 				removeSessionBinding(draft as unknown as LinkRepairState, session);
 			}, ctx);
 			await reconcile(ctx);
@@ -304,8 +312,11 @@ export default defineFacet((host) => {
 				// Durable compensation is recorded before relocation or lock changes.
 				// Relocation may remain in the safer sandbox if a later step fails.
 				const priorLock = locks.locks.value[session] ?? null;
+				const expectedWriteId = locks.writeIds.value[session] ?? null;
+				const writeId = randomUUID();
 				await state.change((draft) => {
-					draft.repairs[session] = { kind: "link", session, lock: priorLock, proposedLock: lock };
+					draft.repairs[session] = { kind: "link", session, lock: priorLock, proposedLock: lock,
+						expectedWriteId, writeId };
 				}, ctx);
 				try {
 					// As the owner's Relocate: the session works in the sandbox from now on.
@@ -314,7 +325,8 @@ export default defineFacet((host) => {
 						const { refused } = await moves.relocate({ id: session, cwd, env: sandbox }, ctx);
 						if (refused) throw new Error(`The session could not move into ${sandbox}: ${refused}`);
 					}
-					await locks.set({ session, lock }, ctx);
+					const { applied } = await locks.compareAndSet({ session, lock, expectedWriteId, writeId }, ctx);
+					if (!applied) throw new Error("Session lock changed during Discord linking; retry with the current policy");
 					await state.change((draft) => {
 						if (Object.values(draft.bindings).some((binding) => binding.session === session))
 							throw new Error("This session is linked already: unlink it first");
@@ -359,7 +371,8 @@ export default defineFacet((host) => {
 				// Record the owner's desired policy before changing the session's lock.
 				// A crash after either write resumes the same update on startup.
 				await state.change((draft) => {
-					draft.repairs[session] = { kind: "update", session, lock, expectedLock: locks.locks.value[session] ?? null, wake };
+					draft.repairs[session] = { kind: "update", session, lock, wake,
+						expectedWriteId: locks.writeIds.value[session] ?? null, writeId: randomUUID() };
 				}, ctx);
 				await reconcile(ctx);
 				return null;
