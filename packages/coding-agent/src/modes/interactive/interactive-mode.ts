@@ -5306,7 +5306,7 @@ export class InteractiveMode {
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
 			if (model.provider === "account-profiles") {
-				await this.enableAccountRotation(model.id);
+				await this.enableAccountRotation(model.id, false);
 				return;
 			}
 			try {
@@ -5454,7 +5454,7 @@ export class InteractiveMode {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
 				if (model.provider === "account-profiles") {
 					done();
-					await this.enableAccountRotation(model.id);
+					await this.enableAccountRotation(model.id, persist);
 					return;
 				}
 				try {
@@ -6138,7 +6138,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async enableAccountRotation(sourceProviderId: string): Promise<void> {
+	private async enableAccountRotation(sourceProviderId: string, persist = false): Promise<void> {
 		const runtime = this.session.modelRuntime;
 		const members = [sourceProviderId, ...runtime.getAccountProfiles()
 			.filter((profile) => profile.sourceProviderId === sourceProviderId)
@@ -6158,23 +6158,23 @@ export class InteractiveMode {
 				"Confirm account rotation", ["Cancel", confirm],
 				(option) => {
 					done();
-					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual);
+					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual, persist);
 				},
 				() => done(),
 				{
-					description: `The existing transcript (including tool output) may be sent through any of these accounts: ${connected.join(", ")}. Only enable this if cross-account sharing is authorized.`,
+					description: `The full transcript and tool output may be shared with ${connected.join(", ")}. ${persist ? "The default is remembered, but each new session needs separate sharing consent." : "This selection is for this session only."} Only proceed if authorized.`,
 				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private async activateAccountRotation(sourceProviderId: string, virtual: Model<any>): Promise<void> {
+	private async activateAccountRotation(sourceProviderId: string, virtual: Model<any>, persist: boolean): Promise<void> {
 		try {
-			await this.session.setModel(virtual, { persist: true, accountRotationConsent: true });
+			await this.session.setModel(virtual, { persist, accountRotationConsent: true });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Rotation enabled for ${sourceProviderId}. Each new user turn selects a healthy account; tool continuations stay on the same identity.`);
+			this.showStatus(`Rotation enabled for ${sourceProviderId} in this session${persist ? "; future sessions require confirmation" : ""}. Tool continuations stay on the same identity.`);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
 		}
