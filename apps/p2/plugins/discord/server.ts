@@ -168,6 +168,7 @@ export default defineFacet((host) => {
 					const id = fleet.value.connected(bot)?.botId;
 					scheduler.enqueue({
 						bot,
+						catchUp: event.kind === "ready",
 						key: event.kind === "message" ? `${bot}:channel:${event.message.channelId}` : `${bot}:catch-up`,
 						priority: event.kind === "message" && event.message.mentionsBot &&
 							id !== undefined && commandOf(event.message.text, id) !== undefined,
