@@ -330,9 +330,9 @@ export class Relay {
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
 			window = new BatchWindow(BATCH_CAP);
 			if (before !== undefined)
-				for (const message of await recentHistory(port, channelId, binding.cursor, before, true))
+				for (const message of await recentHistory(port, channelId, binding.cursor, before, true, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
 					if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
-			for (const message of await recentHistory(port, where, cursor, trigger.id, false))
+			for (const message of await recentHistory(port, where, cursor, trigger.id, false, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
@@ -696,15 +696,18 @@ async function recentHistory(
 	cursor: string | null,
 	until: string,
 	includeUntil: boolean,
+	eligible: (message: DiscordMessage) => boolean,
 ): Promise<DiscordMessage[]> {
 	let before = includeUntil ? (BigInt(until) + 1n).toString() : until;
 	const recent: DiscordMessage[] = [];
-	for (let pages = 0; pages < Math.ceil(BATCH_CAP / PAGE) + 1; pages++) {
+	// A burst of bot/system posts must not crowd out the human context.
+	// Still bound total remote requests regardless of channel size.
+	for (let pages = 0; pages < 16; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
 		if (!page.length) break;
 		const inRange = page.filter((message) =>
 			(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
-			BigInt(message.id) <= BigInt(until),
+			BigInt(message.id) <= BigInt(until) && eligible(message),
 		);
 		recent.unshift(...inRange);
 		if (recent.length >= BATCH_CAP || page.length < PAGE ||
