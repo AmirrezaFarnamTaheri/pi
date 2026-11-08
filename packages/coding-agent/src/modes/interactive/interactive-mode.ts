@@ -5941,6 +5941,19 @@ export class InteractiveMode {
 			this.showLoginAuthTypeSelector();
 			return;
 		}
+		if (providerRef.startsWith("add ")) {
+			const search = providerRef.slice(4).trim();
+			const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
+			const providerOptions = findMatchingProviders(
+				this.getLoginProviderOptions().filter((provider) => !aliases.has(provider.id)), search,
+			);
+			if (providerOptions.length === 1) {
+				await this.startAdditionalAccountLogin(providerOptions[0]!);
+			} else {
+				this.showLoginProviderSelector(undefined, search, true);
+			}
+			return;
+		}
 
 		const providerOptions = findMatchingProviders(this.getLoginProviderOptions(), providerRef);
 		if (providerOptions.length === 1) {
@@ -5970,11 +5983,37 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Add a separate provider identity rather than replacing the current account's credentials. */
+	private async startAdditionalAccountLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+		try {
+			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id);
+			const aliasOption = this.getLoginProviderOptions(providerOption.authType).find(
+				(provider) => provider.id === profile.id,
+			);
+			if (!aliasOption) throw new Error("New account was not registered for login");
+			await this.startProviderLogin(aliasOption, () => {
+				// A cancelled login has not committed a credential; remove its unused identity.
+				this.session.modelRuntime.removeAccountAlias(profile.id);
+				onBack?.();
+			});
+		} catch (error) {
+			this.showError(`Could not add account: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
 		// The top-level selector offers Radius directly, as its last option.
 		const radiusOption = providerOptions
 			? undefined
 			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
+		const antigravityOption = providerOptions
+			? undefined
+			: this.getLoginProviderOptions("api_key").find((provider) => provider.id === "antigravity-manager");
+		const antigravityLabel = antigravityOption
+			? `Connect Antigravity Manager gateway${formatAuthSelectorProviderStatus(antigravityOption)}`
+			: undefined;
+		const addOAuthLabel = "Add another account · keep existing sign-ins";
+		const addApiKeyLabel = "Add another API key · keep existing keys";
 		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
 		const radiusLabel = radiusOption ? `${radiusText}${formatAuthSelectorProviderStatus(radiusOption)}` : undefined;
 		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
@@ -5991,6 +6030,10 @@ export class InteractiveMode {
 		}
 		if (availableAuthTypes.has("api_key")) {
 			options.push(apiKeyLabel);
+		}
+		if (!providerOptions) {
+			options.push(addOAuthLabel, addApiKeyLabel);
+			if (antigravityLabel) options.push(antigravityLabel);
 		}
 		if (radiusLabel) options.push(radiusLabel);
 
@@ -6009,12 +6052,20 @@ export class InteractiveMode {
 
 		const title = providerOptions?.[0]
 			? `Select authentication method for ${providerOptions[0].name}:`
-			: "Select authentication method:";
+			: `Accounts · ${this.session.modelRuntime.getAccountProfiles().length} additional profiles · choose action:`;
 		this.showSelector((done) => {
 			const onSelect = (option: string) => {
 				done();
 				if (radiusOption && option === radiusLabel) {
 					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
+					return;
+				}
+				if (antigravityOption && option === antigravityLabel) {
+					void this.startProviderLogin(antigravityOption, () => this.showLoginAuthTypeSelector());
+					return;
+				}
+				if (option === addOAuthLabel || option === addApiKeyLabel) {
+					this.showLoginProviderSelector(option === addOAuthLabel ? "oauth" : "api_key", undefined, true);
 					return;
 				}
 				const authType = option === subscriptionLabel ? "oauth" : "api_key";
@@ -6046,8 +6097,9 @@ export class InteractiveMode {
 		});
 	}
 
-	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
-		const providerOptions = this.getLoginProviderOptions(authType);
+	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string, addAccount = false): void {
+		const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
+		const providerOptions = this.getLoginProviderOptions(authType).filter((provider) => !addAccount || !aliases.has(provider.id));
 		if (providerOptions.length === 0) {
 			const message =
 				authType === "oauth"
@@ -6073,9 +6125,15 @@ export class InteractiveMode {
 						return;
 					}
 
-					await this.startProviderLogin(providerOption, () =>
-						this.showLoginProviderSelector(authType, initialSearchInput),
-					);
+					if (addAccount) {
+						await this.startAdditionalAccountLogin(providerOption, () =>
+							this.showLoginProviderSelector(authType, initialSearchInput, true),
+						);
+					} else {
+						await this.startProviderLogin(providerOption, () =>
+							this.showLoginProviderSelector(authType, initialSearchInput),
+						);
+					}
 				},
 				() => {
 					done();
