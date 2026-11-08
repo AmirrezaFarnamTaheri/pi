@@ -146,7 +146,7 @@ describe("discord event scheduler", () => {
 	});
 });
 
-test("idle waits for an outstanding asynchronous rejected-command notice", async () => {
+it("idle waits for an outstanding asynchronous rejected-command notice", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const scheduler = new DiscordScheduler(() => {}, () => {}, 1, 1, 1, 1);
