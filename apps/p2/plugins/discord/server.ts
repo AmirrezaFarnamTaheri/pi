@@ -281,14 +281,21 @@ export default defineFacet((host) => {
 				if (!row || row.archivedAt !== null) throw new Error("No such session");
 				const channel = await connected(bot).channel(channelId);
 				if (channel.thread || channel.guildId !== guild) throw new Error("Pick a channel of the server");
-				// As the owner's Relocate: the session works in the sandbox from now on, and cannot leave it.
-				if (row.env !== sandbox) {
-					const cwd = config.mounts?.[0]?.guest ?? "/root";
-					const { refused } = await moves.relocate({ id: session, cwd, env: sandbox }, ctx);
-					if (refused) throw new Error(`The session could not move into ${sandbox}: ${refused}`);
-				}
-				await locks.set({ session, lock }, ctx);
+				// Durable compensation is recorded before relocation or lock changes.
+				// Relocation may remain in the safer sandbox if a later step fails.
+				const priorLock = locks.locks.value[session] ?? null;
 				await state.change((draft) => {
+					draft.repairs[session] = { kind: "link", session, lock: priorLock };
+				}, ctx);
+				try {
+					// As the owner's Relocate: the session works in the sandbox from now on.
+					if (row.env !== sandbox) {
+						const cwd = config.mounts?.[0]?.guest ?? "/root";
+						const { refused } = await moves.relocate({ id: session, cwd, env: sandbox }, ctx);
+						if (refused) throw new Error(`The session could not move into ${sandbox}: ${refused}`);
+					}
+					await locks.set({ session, lock }, ctx);
+					await state.change((draft) => {
 					if (Object.values(draft.bindings).some((binding) => binding.session === session))
 						throw new Error("This session is linked already: unlink it first");
 					if (draft.bindings[channelId]) throw new Error("This channel is linked to another session");
@@ -306,7 +313,20 @@ export default defineFacet((host) => {
 						createdAt: Date.now(),
 						generation: randomUUID(),
 					};
-				}, ctx);
+					delete draft.repairs[session];
+					}, ctx);
+				} catch (error) {
+					// If the binding was already atomically committed, never roll back its lock.
+					if (!Object.values(state.value.bindings).some((binding) => binding.session === session)) {
+						try {
+							await reconcile(ctx);
+						} catch (repairError) {
+							console.error("p2 discord: link compensation pending:", errorText(repairError));
+							throw new Error("Discord link failed and lock repair is pending; retry after recovery", { cause: error });
+						}
+					}
+					throw error;
+				}
 				return null;
 			}),
 			unlink: ({ session }, ctx) => linkExclusive(ctx, async () => {
