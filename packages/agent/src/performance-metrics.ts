@@ -142,7 +142,7 @@ export class AgentPerformanceMonitor {
 					this.addUsage(message.usage);
 				} else if (message.role === "toolResult") {
 					this.toolResultBytes += message.content.reduce(
-						(sum, part) => sum + (part.type === "text" ? Buffer.byteLength(part.text, "utf8") : 0),
+						(sum, part) => sum + (part.type === "text" ? new TextEncoder().encode(part.text).byteLength : 0),
 						0,
 					);
 					if (message.usage) {
