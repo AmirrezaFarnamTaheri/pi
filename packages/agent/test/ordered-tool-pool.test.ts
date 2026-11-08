@@ -63,3 +63,21 @@ test("does not settle a rejected batch before other in-flight calls finish", asy
 	assert.equal(otherSettled, true);
 	assert.equal(queuedStarted, false);
 });
+
+test("reports the first observed failure, not the first worker in Promise.allSettled order", async () => {
+	const lateFailure = new Error("worker zero failed later");
+	const earlyFailure = new Error("worker one failed first");
+	let extraStarted = false;
+	await assert.rejects(
+		() => executeBoundedInOrder([
+			async () => {
+				await new Promise<void>((resolve) => setTimeout(resolve, 25));
+				throw lateFailure;
+			},
+			async () => { throw earlyFailure; },
+			async () => { extraStarted = true; return 3; },
+		], 2),
+		(error: unknown) => error === earlyFailure,
+	);
+	assert.equal(extraStarted, false);
+});
