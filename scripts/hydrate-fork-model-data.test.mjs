@@ -55,7 +55,7 @@ describe("fork model-data hydration entry point", () => {
       const providers = join(root, "packages", "ai", "src", "providers");
       mkdirSync(providers, { recursive: true });
       writeFileSync(join(root, "packages", "ai", "src", "models.generated.ts"),
-        'import { FIXTURE_CLASSIFIER_MODELS, FIXTURE_IMAGE_MODELS, FIXTURE_MODELS } from "./providers/fixture.models.ts";\\n');
+        'import { FIXTURE_CLASSIFIER_MODELS, FIXTURE_IMAGE_MODELS, FIXTURE_MODELS } from "./providers/fixture.models.ts";\n');
       const model = {
         type: "chat", id: "fixture-model", provider: "fixture", api: "openai-responses",
         name: "Fixture", baseUrl: "https://example.invalid", input: ["text"],
