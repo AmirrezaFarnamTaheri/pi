@@ -146,6 +146,7 @@ export class Bot implements DiscordPort {
 		messageId: string | undefined,
 		text: string,
 		files: readonly { name: string; data: Uint8Array }[] = [],
+		nonce?: string,
 	): Promise<void> {
 		const channel = await this.#text(channelId);
 		if (!("send" in channel)) throw new Error("The channel takes no messages");
@@ -157,6 +158,7 @@ export class Bot implements DiscordPort {
 				: {}),
 			...(messageId ? { reply: { messageReference: messageId, failIfNotExists: false } } : {}),
 			allowedMentions: { parse: [] },
+			...(nonce === undefined ? {} : { nonce, enforceNonce: true }),
 		});
 	}
 
