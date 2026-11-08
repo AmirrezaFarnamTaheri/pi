@@ -585,7 +585,7 @@ export class ModelRuntime implements Models {
 			throw new Error("Select the original provider rather than an account alias");
 		}
 		const source = this.models.getProvider(sourceProviderId);
-		if (!source || (!source.auth.oauth && !source.auth.apiKey)) {
+		if (!source || (!source.auth.oauth && !source.auth.apiKey?.login)) {
 			throw new Error(`Provider ${sourceProviderId} does not support login`);
 		}
 		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
