@@ -31,6 +31,7 @@ function webLink(text: string, url: string): string {
 export class LoginDialogComponent extends Container implements Focusable {
 	private contentContainer: Container;
 	private input: Input;
+	private secretPrompt = false;
 	private tui: TUI;
 	/** The shown sign-in URL, which `app.message.copy` copies. */
 	private authUrl?: AuthUrlComponent;
@@ -80,8 +81,11 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input.onSubmit = () => {
 			if (this.inputResolver) {
 				const value = this.input.getValue();
-				this.replaceInputWithSubmittedText(value);
+				this.input.setValue("");
+				this.replaceInputWithSubmittedText(this.secretPrompt ? "[secret submitted]" : value);
 				this.inputResolver(value);
+				this.secretPrompt = false;
+				this.input.setMask(false);
 				this.inputResolver = undefined;
 				this.inputRejecter = undefined;
 			}
@@ -209,6 +213,8 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 */
 	showManualInput(prompt: string): Promise<string> {
 		this.clearDeviceCodeAction();
+		this.secretPrompt = false;
+		this.input.setMask(false);
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
@@ -226,8 +232,10 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Called by onPrompt callback - show prompt and wait for input
 	 * Note: Does NOT clear content, appends to existing (preserves URL from showAuth)
 	 */
-	showPrompt(message: string, placeholder?: string): Promise<string> {
+	showPrompt(message: string, placeholder?: string, secret = false): Promise<string> {
 		this.clearDeviceCodeAction();
+		this.secretPrompt = secret;
+		this.input.setMask(secret);
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		if (placeholder) {
