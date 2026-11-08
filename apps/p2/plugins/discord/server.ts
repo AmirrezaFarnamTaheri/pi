@@ -140,7 +140,7 @@ export default defineFacet((host) => {
 			// The state's drafts are the same JSON as the relay's plain records.
 			value: () => state.value as RelayState,
 			change: (update) => state.change((draft) => update(draft as RelayState), during()),
-		});
+		}, (bot) => fleet.value.requestCatchUp(bot));
 		self.onLive(async (ctx) => {
 			live = ctx;
 			// Repair interrupted link operations before consuming events or enabling new links.
