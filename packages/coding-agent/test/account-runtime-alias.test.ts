@@ -68,3 +68,29 @@ test("offers opt-in automatic rotation only when an independent account exists",
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("restores an account whose extension source provider is registered after runtime initialization", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-late-provider-"));
+	try {
+		const profilesPath = join(directory, "account-profiles.json");
+		const { addAccountProfile } = await import("../src/core/account-profiles.ts");
+		const profile = addAccountProfile(profilesPath, "late-test-provider", [], "Delayed sign-in");
+		const runtime = await ModelRuntime.create({
+			credentials: AuthStorage.inMemory(), modelsPath: null, accountProfilesPath: profilesPath,
+			allowModelNetwork: false, refreshOnCreate: false,
+		});
+		assert.equal(runtime.getProvider(profile.id), undefined);
+		assert.equal(runtime.getAccountProfiles().length, 1);
+		runtime.registerNativeProvider({
+			id: "late-test-provider",
+			name: "Late test provider",
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {}, source: "test" }) } },
+			getModels: () => [],
+			stream: () => { throw new Error("unused"); },
+			streamSimple: () => { throw new Error("unused"); },
+		});
+		assert.equal(runtime.getProvider(profile.id)?.name, "Delayed sign-in");
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
