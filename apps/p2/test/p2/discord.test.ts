@@ -703,6 +703,79 @@ describe("discord relay", () => {
 		assert.deepEqual(chunkText(`${"a".repeat(8)}\n${"b".repeat(8)}`, 10), ["a".repeat(8), "b".repeat(8)]);
 		assert.deepEqual(chunkText("x".repeat(25), 10), ["x".repeat(10), "x".repeat(10), "x".repeat(5)]);
 	});
+
+	it("retries a transient Discord error without reposting completed chunks", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const trigger = discord.say("c1", message(`<@${BOT}> retry`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "x".repeat(4001), files: [] });
+		const realReply = discord.reply.bind(discord);
+		let attempts = 0;
+		discord.reply = async (...args) => {
+			if (++attempts === 2) throw Object.assign(new Error("HTTP 429"), { status: 429 });
+			await realReply(...args);
+		};
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1);
+		assert.equal(state().pending[trigger.id]?.nextPost, 1);
+		assert((state().pending[trigger.id]?.retryAt ?? 0) > Date.now());
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1);
+		discord.reply = realReply;
+		state().pending[trigger.id]!.retryAt = 0;
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 3);
+		assert.deepEqual(state().pending, {});
+	});
+
+	it("does not post answers to a relinked channel with a different generation", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ generation: "old" }));
+		const trigger = discord.say("c1", message(`<@${BOT}> confidential`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "secret", files: [] });
+		state().bindings.c1!.generation = "new";
+		await relay.checkPending();
+		assert.deepEqual(discord.posted, []);
+		assert.deepEqual(state().pending, {});
+	});
+
+	it("never uploads an attachment when its read ends before the declared size", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const trigger = discord.say("c1", message(`<@${BOT}> file`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.bytes.set("short", new Uint8Array(2));
+		sessions.turns.set(1, { state: "answered", text: "attached", files: [{ id: "short", name: "short.bin", size: 8 }] });
+		await relay.checkPending();
+		assert.equal(discord.uploaded.has("short.bin"), false);
+		assert.equal(discord.posted.length, 0);
+		assert.equal(state().pending[trigger.id]?.retryCount, 1);
+	});
+
+	it("drops a pending response only when Discord says the channel is permanently gone", async () => {
+		const { discord, sessions, relay, state } = setup();
+		const trigger = discord.say("c1", message(`<@${BOT}> gone`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "answer", files: [] });
+		discord.reply = async () => { throw Object.assign(new Error("Unknown Channel"), { code: 10003 }); };
+		await relay.checkPending();
+		assert.deepEqual(state().pending, {});
+	});
+
+	it("rechecks link validity between individual messages of a long reply", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ generation: "old" }));
+		const trigger = discord.say("c1", message(`<@${BOT}> multi`));
+		await relay.onMessage("bot-a", trigger);
+		sessions.turns.set(1, { state: "answered", text: "x".repeat(4001), files: [] });
+		const reply = discord.reply.bind(discord);
+		discord.reply = async (...args) => {
+			await reply(...args);
+			delete state().bindings.c1;
+			delete state().pending[trigger.id];
+		};
+		await relay.checkPending();
+		assert.equal(discord.posted.length, 1);
+	});
+
 });
 
 const texts = (view: ConversationView | null | undefined): string[] =>
