@@ -39,6 +39,23 @@ describe("recovering from temporary Bash output failures", () => {
 		expect(createSpool).toHaveBeenCalledTimes(1);
 	});
 
+	it("destroys the temporary stream after a synchronous write failure", async () => {
+		const stream = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback();
+			},
+		});
+		vi.spyOn(stream, "write").mockImplementation(() => {
+			throw Object.assign(new Error("Write denied"), { code: "EACCES" });
+		});
+		createSpool.mockReturnValue({ path: "C:\\temp\\rejected.log", stream: stream as WriteStream });
+		const result = await execution();
+		expect(result.exitCode).toBe(0);
+		expect(result.fullOutputPath).toBeUndefined();
+		expect(result.truncated).toBe(true);
+		expect(stream.destroyed).toBe(true);
+	});
+
 	it("does not crash or report an invalid path when a stream emits ENOSPC", async () => {
 		const stream = new Writable({
 			write(_chunk, _encoding, callback) {
