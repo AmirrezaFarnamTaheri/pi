@@ -1181,6 +1181,7 @@ export class ModelRuntime implements Models {
 		if (registrations.length === 0) return;
 		const staged = new Map<string, ProviderConfigInput>();
 		for (const { providerId, config } of registrations) {
+			if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
 			validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
 			const previous = staged.get(providerId) ?? this.extensionProviders.get(providerId);
 			const effective: ProviderConfigInput = { ...previous };
@@ -1190,7 +1191,6 @@ export class ModelRuntime implements Models {
 			staged.set(providerId, effective);
 		}
 		for (const [providerId, config] of staged) {
-			if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
 			this.nativeExtensionProviders.delete(providerId);
 			this.extensionProviders.set(providerId, config);
 			this.recomposeProvider(providerId);
