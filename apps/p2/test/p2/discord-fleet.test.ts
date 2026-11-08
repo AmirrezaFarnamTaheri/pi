@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -65,6 +65,31 @@ describe("Discord fleet persistence and identity isolation", () => {
 			const updated = JSON.parse(await readFile(path, "utf8"));
 			assert.equal(updated.bots[first].token, "app-one:refreshed");
 			assert.equal(updated.bots[second].token, "app-two:key");
+			await fleet.close();
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+
+	it("keeps failed add, replace and removal operations consistent with persisted state", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-discord-disk-failure-"));
+		try {
+			const fleet = await Fleet.open(dir, (onEvent) => new FakeBot(onEvent) as unknown as Bot);
+			const id = await fleet.add("app-one:original");
+			const persistedPath = join(dir, "discord.json");
+			const backupPath = join(dir, "discord.backup.json");
+			await rename(persistedPath, backupPath);
+			await mkdir(persistedPath);
+			await assert.rejects(fleet.add("app-two:key"));
+			assert.deepEqual(fleet.views().map((view) => view.id), [id], "failed add is not adopted");
+			await assert.rejects(fleet.setToken(id, "app-one:replacement"));
+			assert.equal(fleet.connected(id)?.status.state, "connected", "old bot remains connected");
+			await assert.rejects(fleet.remove(id));
+			assert.deepEqual(fleet.views().map((view) => view.id), [id], "failed removal keeps the bot");
+			await rm(persistedPath, { recursive: true });
+			await rename(backupPath, persistedPath);
+			assert.equal(JSON.parse(await readFile(persistedPath, "utf8")).bots[id].token, "app-one:original");
 			await fleet.close();
 		} finally {
 			await rm(dir, { recursive: true, force: true });
