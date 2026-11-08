@@ -768,19 +768,22 @@ async function recentHistory(
 	const recent: DiscordMessage[] = [];
 	// A burst of bot/system posts must not crowd out the human context.
 	// Still bound total remote requests regardless of channel size.
-	for (let pages = 0; pages < 16; pages++) {
+	for (let pages = 0; pages < 32; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
-		if (!page.length) break;
+		if (!page.length) return recent.slice(-BATCH_CAP);
 		const inRange = page.filter((message) =>
 			(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
 			BigInt(message.id) <= BigInt(until) && eligible(message),
 		);
 		recent.unshift(...inRange);
 		if (recent.length >= BATCH_CAP || page.length < PAGE ||
-			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))) break;
+			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor)))
+			return recent.slice(-BATCH_CAP);
 		before = page[0]!.id;
 	}
-	return recent.slice(-BATCH_CAP);
+	// Do not quietly checkpoint a trigger if earlier eligible context was
+	// hidden by a long burst of bot/system posts beyond the request budget.
+	throw new Error("Discord history incomplete: eligible message context exceeds the bounded reverse scan");
 }
 
 /**
