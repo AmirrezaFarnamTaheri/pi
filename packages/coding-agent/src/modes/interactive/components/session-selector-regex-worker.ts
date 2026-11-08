@@ -5,12 +5,13 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = "\"use strict\";\nconst { parentPort } = require(\"node:worker_threads\");\nconst { createReadStream } = require(\"node:fs\");\n\n// JavaScript regex has unbounded lookaround, anchors, and backtracking.\n// Arbitrary patterns cannot be matched correctly with rolling windows.\n// Assemble one transcript up to a hard cap in a disposable worker; report\n// oversized or unreadable histories instead of returning false positives.\nconst MAX_LINE_CHARS = 512 * 1024;\nconst MAX_TEXT_CHARS = 16 * 1024 * 1024;\n\nasync function matchHistoryFile(path, regex) {\n  const chunks = [];\n  let length = 0;\n  let line = \"\";\n  const addText = (text) => {\n    const extra = text.length + (chunks.length ? 1 : 0);\n    if (length + extra > MAX_TEXT_CHARS) throw new Error(\"session text exceeds regex memory cap\");\n    if (chunks.length) length += 1;\n    chunks.push(text);\n    length += text.length;\n  };\n  const processLine = (raw) => {\n    let entry;\n    try { entry = JSON.parse(raw); } catch { return; }\n    if (entry?.type !== \"message\") return;\n    const message = entry.message;\n    if (!message || (message.role !== \"user\" && message.role !== \"assistant\")) return;\n    const content = message.content;\n    const text = typeof content === \"string\" ? content\n      : Array.isArray(content)\n        ? content.filter((part) => part?.type === \"text\").map((part) => part.text).join(\" \")\n        : \"\";\n    if (text) addText(text);\n  };\n  for await (const chunk of createReadStream(path, { encoding: \"utf8\", highWaterMark: 64 * 1024 })) {\n    let from = 0;\n    for (;;) {\n      const at = chunk.indexOf(\"\\n\", from);\n      const fragment = at < 0 ? chunk.slice(from) : chunk.slice(from, at);\n      if (line.length + fragment.length > MAX_LINE_CHARS)\n        throw new Error(\"session history line too large for regex search\");\n      line += fragment;\n      if (at < 0) break;\n      processLine(line);\n      line = \"\";\n      from = at + 1;\n    }\n  }\n  if (line) processLine(line);\n  return regex.test(chunks.join(\" \"));\n}\n\nparentPort.on(\"message\", async ({ pattern, sessions }) => {\n  try {\n    const regex = new RegExp(pattern, \"i\");\n    const scores = [];\n    const incomplete = [];\n    for (const { name, id, text, path, cwd } of sessions) {\n      if (name && regex.test(name)) { scores.push(0); continue; }\n      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }\n      try {\n        scores.push(text === undefined\n          ? (await matchHistoryFile(path, regex) ? 1 : -1)\n          : (regex.test(text) ? 1 : -1));\n      } catch {\n        incomplete.push(id);\n        scores.push(-1);\n      }\n    }\n    parentPort.postMessage({ scores, incomplete });\n  } catch (error) {\n    parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });\n  }\n});\n";
+const REGEX_WORKER_CODE = "\"use strict\";\nconst { parentPort } = require(\"node:worker_threads\");\nconst { createReadStream } = require(\"node:fs\");\n\n// JavaScript regex has unbounded lookaround, anchors, and backtracking.\n// Arbitrary patterns cannot be matched correctly with rolling windows.\n// Assemble one transcript up to a hard cap in a disposable worker; report\n// oversized or unreadable histories instead of returning false positives.\nconst MAX_LINE_CHARS = 512 * 1024;\nconst MAX_TEXT_CHARS = 16 * 1024 * 1024;\n\nasync function matchHistoryFile(path, regex, maxTextChars) {\n  const chunks = [];\n  let length = 0;\n  let line = \"\";\n  const addText = (text) => {\n    const extra = text.length + (chunks.length ? 1 : 0);\n    if (length + extra > maxTextChars) throw new Error(\"session text exceeds regex memory cap\");\n    if (chunks.length) length += 1;\n    chunks.push(text);\n    length += text.length;\n  };\n  const processLine = (raw) => {\n    let entry;\n    try { entry = JSON.parse(raw); } catch { return; }\n    if (entry?.type !== \"message\") return;\n    const message = entry.message;\n    if (!message || (message.role !== \"user\" && message.role !== \"assistant\")) return;\n    const content = message.content;\n    const text = typeof content === \"string\" ? content\n      : Array.isArray(content)\n        ? content.filter((part) => part?.type === \"text\").map((part) => part.text).join(\" \")\n        : \"\";\n    if (text) addText(text);\n  };\n  for await (const chunk of createReadStream(path, { encoding: \"utf8\", highWaterMark: 64 * 1024 })) {\n    let from = 0;\n    for (;;) {\n      const at = chunk.indexOf(\"\\n\", from);\n      const fragment = at < 0 ? chunk.slice(from) : chunk.slice(from, at);\n      if (line.length + fragment.length > MAX_LINE_CHARS)\n        throw new Error(\"session history line too large for regex search\");\n      line += fragment;\n      if (at < 0) break;\n      processLine(line);\n      line = \"\";\n      from = at + 1;\n    }\n  }\n  if (line) processLine(line);\n  return regex.test(chunks.join(\" \"));\n}\n\nparentPort.on(\"message\", async ({ pattern, sessions }) => {\n  try {\n    const regex = new RegExp(pattern, \"i\");\n    const scores = [];\n    const incomplete = [];\n    for (const { name, id, text, path, cwd } of sessions) {\n      if (name && regex.test(name)) { scores.push(0); continue; }\n      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }\n      try {\n        scores.push(text === undefined\n          ? (await matchHistoryFile(path, regex, Math.min(MAX_TEXT_CHARS, maxTextChars ?? MAX_TEXT_CHARS)) ? 1 : -1)\n          : (regex.test(text) ? 1 : -1));\n      } catch {\n        incomplete.push(id);\n        scores.push(-1);\n      }\n    }\n    parentPort.postMessage({ scores, incomplete });\n  } catch (error) {\n    parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });\n  }\n});\n";
 
 const SEARCH_BUDGET_MS = 500;
 const BATCH_SIZE = 16;
 const MAX_PATTERN_LENGTH = 2048;
 const INLINE_TEXT_LIMIT = 64 * 1024;
+const MAX_REGEX_TEXT_CHARS = 16 * 1024 * 1024;
 type SearchResponse = { scores?: number[]; incomplete?: string[]; error?: string };
 
 /**
@@ -26,9 +27,15 @@ export async function filterSessionsByRegexInWorker(
 	sortMode: SortMode,
 	signal?: AbortSignal,
 	onIncomplete?: (sessionIds: string[]) => void,
+	options?: { maxSessionTextChars?: number },
 ): Promise<SessionInfo[]> {
 	if (!pattern || pattern.length > MAX_PATTERN_LENGTH) throw new Error("Invalid regex search length");
 	if (signal?.aborted) throw new Error("Regex search cancelled");
+	if (options?.maxSessionTextChars !== undefined &&
+		(!Number.isSafeInteger(options.maxSessionTextChars) ||
+			options.maxSessionTextChars <= 0 || options.maxSessionTextChars > MAX_REGEX_TEXT_CHARS))
+		throw new Error("Invalid regex session text cap");
+
 	if (sessions.length === 0) return [];
 
 	const worker = new Worker(REGEX_WORKER_CODE, { eval: true });
@@ -78,6 +85,7 @@ export async function filterSessionsByRegexInWorker(
 				try {
 					worker.postMessage({
 						pattern,
+						maxTextChars: options?.maxSessionTextChars ?? MAX_REGEX_TEXT_CHARS,
 						sessions: batch.map((session) => ({
 							name: session.name,
 							id: session.id,
