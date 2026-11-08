@@ -128,6 +128,10 @@ describe("Discord fleet persistence and identity isolation", () => {
 				return bot as unknown as Bot;
 			});
 			await fleet.add("app-one:key");
+			fleet.setControlRejectionHandler(async (id, message) => {
+				await fleet.connected(id)?.reply(message.channelId, message.id,
+					"Pi control backlog is full; your command was not executed. Please retry.");
+			});
 			const bot = created[0]!;
 			for (let i = 0; i <= 256; i++) bot.emit({
 				kind: "message",
