@@ -87,7 +87,6 @@ describe("isolated session regex search", () => {
 		}
 	});
 
-
 	it("streams many messages without accumulating the full transcript in the worker", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-regex-stream-"));
 		try {
@@ -167,7 +166,6 @@ describe("isolated session regex search", () => {
 		}
 	});
 
-
 	it("bounds retained full-transcript text independent of total message count", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-regex-memory-limit-"));
 		try {
@@ -178,14 +176,21 @@ describe("isolated session regex search", () => {
 			).join("\n") + "\n");
 			const fixture = { ...session("large", "x".repeat(100_000)), path };
 			const incomplete: string[][] = [];
-			const result = await filterSessionsByRegexInWorker([fixture], "no-match", "recent",
-				undefined, (ids) => incomplete.push(ids), { maxSessionTextChars: 16_384 });
+			const result = await filterSessionsByRegexInWorker(
+				[fixture], "no-match", "recent", undefined,
+				(ids) => incomplete.push(ids),
+				{ maxSessionTextChars: 16_384 },
+			);
 			expect(result).toEqual([]);
 			expect(incomplete).toEqual([["large"]]);
 			// The production cap is 16 MiB; the test uses a much smaller injected
 			// cap to deterministically prove we stop retaining text past the limit.
-			await expect(filterSessionsByRegexInWorker([fixture], "x", "recent",
-					undefined, undefined, { maxSessionTextChars: 32 * 1024 * 1024 })).rejects.toThrow(/cap/i);
+			await expect(
+					filterSessionsByRegexInWorker(
+						[fixture], "x", "recent", undefined, undefined,
+						{ maxSessionTextChars: 32 * 1024 * 1024 },
+					),
+				).rejects.toThrow(/cap/i);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
