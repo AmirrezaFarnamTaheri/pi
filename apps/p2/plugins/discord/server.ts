@@ -128,6 +128,10 @@ export default defineFacet((host) => {
 						key: event.kind === "message" ? `${bot}:channel:${event.message.channelId}` : `${bot}:catch-up`,
 						priority: event.kind === "message" && event.message.mentionsBot &&
 							id !== undefined && commandOf(event.message.text, id) !== undefined,
+						onRejected: event.kind === "message" ? async () => {
+							await fleet.value.connected(bot)?.reply(event.message.channelId, event.message.id,
+								"Pi control backlog is full; your command was not executed. Please retry.");
+						} : undefined,
 						run: () => event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot),
 					});
 				}
