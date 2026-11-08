@@ -1,6 +1,7 @@
 // Session locks (server): every locked session's picked resources, persisted, and the remote view the owner sets them
 // through and each session's worker follows its own lock with.
 import { obj } from "@earendil-works/pi-schema";
+import { isDeepStrictEqual } from "node:util";
 import {
 	defineState,
 	deriveTyped,
@@ -32,6 +33,17 @@ export function serveLocks(host: FacetHost): void {
 					else draft.locks[session] = lock;
 				}, ctx);
 				return null;
+			},
+			compareAndSet: async ({ session, previous, lock }, ctx) => {
+				let applied = false;
+				await state.change((draft) => {
+					const current = draft.locks[session] ?? null;
+					if (!isDeepStrictEqual(current, previous)) return;
+					applied = true;
+					if (lock === null) delete draft.locks[session];
+					else draft.locks[session] = lock;
+				}, ctx);
+				return { applied };
 			},
 		};
 	});
