@@ -9,6 +9,8 @@ export type ScheduledDiscordEvent = {
 	bot: string;
 	key: string;
 	priority: boolean;
+	/** Dedicated emergency execution lane for /stop, separate from status/compact. */
+	stop?: boolean;
 	/** A reconnect scan; defer it under pressure rather than immediately requeueing it. */
 	catchUp?: boolean;
 	/** Called when a control event cannot be accepted; must not throw synchronously. */
@@ -19,8 +21,10 @@ export type ScheduledDiscordEvent = {
 export class DiscordScheduler {
 	readonly #normal: ScheduledDiscordEvent[] = [];
 	readonly #priority: ScheduledDiscordEvent[] = [];
+	readonly #stopQueue: ScheduledDiscordEvent[] = [];
 	readonly #normalActive = new Set<string>();
 	readonly #priorityActive = new Set<string>();
+	readonly #stopActive = new Set<string>();
 	readonly #idle = new Set<() => void>();
 	readonly #deferredCatchUps = new Set<string>();
 	#rejectionNotices = 0;
@@ -54,8 +58,8 @@ export class DiscordScheduler {
 
 	enqueue(event: ScheduledDiscordEvent): boolean {
 		if (this.#stopped) return false;
-		const queue = event.priority ? this.#priority : this.#normal;
-		const limit = event.priority ? this.#maxPendingPriority : this.#maxPending;
+		const queue = event.stop ? this.#stopQueue : event.priority ? this.#priority : this.#normal;
+		const limit = event.stop ? 128 : event.priority ? this.#maxPendingPriority : this.#maxPending;
 		if (queue.length >= limit) {
 			if (event.priority) {
 				try { this.#error(new Error("Discord control command backlog saturated")); } catch { /* Continue to rejection notice. */ }
@@ -82,6 +86,7 @@ export class DiscordScheduler {
 		this.#stopped = true;
 		this.#normal.length = 0;
 		this.#priority.length = 0;
+		this.#stopQueue.length = 0;
 		this.#deferredCatchUps.clear();
 		this.#notifyIdle();
 	}
@@ -93,8 +98,8 @@ export class DiscordScheduler {
 	}
 
 	#isIdle(): boolean {
-		return this.#normal.length === 0 && this.#priority.length === 0 &&
-			this.#normalActive.size === 0 && this.#priorityActive.size === 0;
+		return this.#normal.length === 0 && this.#priority.length === 0 && this.#stopQueue.length === 0 &&
+			this.#normalActive.size === 0 && this.#priorityActive.size === 0 && this.#stopActive.size === 0;
 	}
 
 	#notifyIdle(): void {
@@ -124,6 +129,7 @@ export class DiscordScheduler {
 
 	#drain(): void {
 		if (!this.#stopped) {
+			this.#start(this.#stopQueue, this.#stopActive, 4);
 			this.#start(this.#priority, this.#priorityActive, this.#maxPriority);
 			this.#start(this.#normal, this.#normalActive, this.#maxNormal);
 			if (this.#normal.length < this.#maxPending) {
