@@ -554,13 +554,27 @@ export class ModelRuntime implements Models {
 		if (!this.accountProfilesPath) return;
 		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
 			if (this.models.getProvider(profile.id)) throw new Error(`Account alias conflicts with provider: ${profile.id}`);
-			const source = this.models.getProvider(profile.sourceProviderId);
-			if (!source) throw new Error(`Account source provider is unavailable: ${profile.sourceProviderId}`);
-			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id, profile.label));
 			this.accountProfiles.set(profile.id, profile);
+		}
+		// Some providers are registered by extensions after ModelRuntime.create().
+		// Keep their profiles pending rather than preventing Pi from starting.
+		this.attachSavedAccountAliases();
+		this.updateModelSnapshot();
+	}
+
+	/** Attach profiles when their late-loaded extension providers become available. */
+	private attachSavedAccountAliases(sourceFilter?: string): void {
+		for (const profile of this.accountProfiles.values()) {
+			if (sourceFilter && profile.sourceProviderId !== sourceFilter) continue;
+			if (this.nativeExtensionProviders.has(profile.id)) continue;
+			if (this.builtins.has(profile.id) || this.extensionProviders.has(profile.id) || this.models.getProvider(profile.id)) {
+				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
+			}
+			const source = this.models.getProvider(profile.sourceProviderId);
+			if (!source) continue;
+			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id, profile.label));
 			this.recomposeProvider(profile.id);
 		}
-		this.updateModelSnapshot();
 	}
 
 	/** Create a new, uniquely named provider identity without replacing any existing login. */
@@ -578,8 +592,8 @@ export class ModelRuntime implements Models {
 		try {
 			if (this.models.getProvider(profile.id)) throw new Error("Account identity conflicts with an existing provider");
 			const provider = createStoredAccountAlias(source, profile.id, profile.label);
-			this.accountProfiles.set(profile.id, profile);
 			this.registerNativeProvider(provider);
+			this.accountProfiles.set(profile.id, profile);
 			this.configureAutomaticAccountRotation(sourceProviderId);
 			return profile;
 		} catch (error) {
@@ -594,7 +608,7 @@ export class ModelRuntime implements Models {
 		const path = this.accountProfilesPath;
 		if (!path || !this.accountProfiles.has(id)) return;
 		// Fail closed: a failed logout must never leave an orphaned stored credential.
-		await this.logout(id);
+		if (this.models.getProvider(id)) await this.logout(id);
 		removeAccountProfile(path, id);
 		const sourceProviderId = this.accountProfiles.get(id)!.sourceProviderId;
 		this.accountProfiles.delete(id);
@@ -1096,10 +1110,12 @@ export class ModelRuntime implements Models {
 	}
 
 	registerNativeProvider(provider: Provider): void {
+		if (this.accountProfiles.has(provider.id)) throw new Error("Cannot override a managed account identity");
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
 		this.recomposeProvider(provider.id);
+		this.attachSavedAccountAliases(provider.id);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
 			provider.id,
@@ -1133,6 +1149,7 @@ export class ModelRuntime implements Models {
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
+		if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
 		// Validate the incoming registration on its own, like the legacy registry:
 		// a broken re-registration must throw without touching the stored config.
 		validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
@@ -1146,6 +1163,7 @@ export class ModelRuntime implements Models {
 		}
 		this.extensionProviders.set(providerId, effective);
 		this.recomposeProvider(providerId);
+		this.attachSavedAccountAliases(providerId);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
 			providerId,
@@ -1172,10 +1190,12 @@ export class ModelRuntime implements Models {
 			staged.set(providerId, effective);
 		}
 		for (const [providerId, config] of staged) {
+			if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
 			this.nativeExtensionProviders.delete(providerId);
 			this.extensionProviders.set(providerId, config);
 			this.recomposeProvider(providerId);
 		}
+		this.attachSavedAccountAliases();
 		this.updateModelSnapshot();
 		const configuredProviders = new Set(this.snapshot.configuredProviders);
 		const auth = new Map(this.snapshot.auth);
