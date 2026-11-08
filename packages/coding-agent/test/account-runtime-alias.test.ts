@@ -26,6 +26,8 @@ test("account aliases persist and do not replace the source provider or each oth
 		assert.equal(runtime.getProvider(work.id)?.name, "Antigravity Work");
 		assert.equal(runtime.getProvider(personal.id)?.name, "Antigravity Personal");
 		assert.equal(runtime.getProvider("antigravity-manager"), primary);
+		assert.throws(() => runtime.unregisterProvider(work.id), /managed account/i);
+		assert.equal(runtime.getProvider(work.id)?.name, "Antigravity Work");
 		assert.deepEqual(runtime.getAccountProfiles(), [work, personal]);
 		assert.throws(() => runtime.addAccountAlias(work.id), /original provider/);
 		const restarted = await ModelRuntime.create(options);
