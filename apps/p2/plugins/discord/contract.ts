@@ -48,6 +48,8 @@ export const BindingSchema = obj({
 	cursor: union([str(), nul()]),
 	threads: record(ThreadBindingSchema),
 	createdAt: num(),
+	/** Distinguishes successive links of the same channel, including rapid unlink/relink. */
+	generation: opt(str()),
 });
 export type Binding = Static<typeof BindingSchema>;
 
@@ -61,6 +63,15 @@ export const PendingSchema = obj({
 	messageId: str(),
 	submissionId: num(),
 	since: num(),
+	/** Set at delivery to reject replies from a previous incarnation of a link. */
+	linkGeneration: opt(str()),
+	/** The first Discord message not yet confirmed posted; persisted across retries. */
+	nextPost: opt(int({ minimum: 0 })),
+	/** Number of consecutive transient failures and the earliest next attempt. */
+	retryCount: opt(int({ minimum: 0 })),
+	retryAt: opt(num()),
+	/** Keep attachment grouping stable across retried multi-part replies. */
+	uploadLimit: opt(num()),
 });
 export type Pending = Static<typeof PendingSchema>;
 
