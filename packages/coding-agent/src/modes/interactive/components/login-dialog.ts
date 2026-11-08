@@ -81,7 +81,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input.onSubmit = () => {
 			if (this.inputResolver) {
 				const value = this.input.getValue();
-				this.input.setValue("");
+				this.input.clearSensitiveValue();
 				this.replaceInputWithSubmittedText(this.secretPrompt ? "[secret submitted]" : value);
 				this.inputResolver(value);
 				this.secretPrompt = false;
@@ -118,6 +118,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 
 	private cancel(): void {
 		this.clearDeviceCodeAction();
+		this.input.clearSensitiveValue();
+		this.input.setMask(false);
+		this.secretPrompt = false;
 		this.abortController.abort();
 		if (this.inputRejecter) {
 			this.inputRejecter(new Error("Login cancelled"));
