@@ -29,12 +29,14 @@ test("sync proposal retries verification after a previous failure even when its 
   assert.ok(unchanged, "an unchanged proposal must be considered explicitly");
   assert.doesNotMatch(unchanged[1], /changed=false|exit 0/, "do not skip verification of existing proposed SHA");
   assert.match(workflow, /echo "proposed_sha=\$\(git rev-parse HEAD\)"/);
-  assert.match(workflow, /echo "changed=true"/);
+  const tail = workflow.slice(workflow.indexOf(unchanged[0]) + unchanged[0].length, workflow.indexOf("\n  verify:"));
+  assert.match(tail, /echo "changed=true"/, "unchanged sync proposals must still run verification");
+  assert.match(tail, /echo "proposed_sha=/);
 });
 
 test("root validation is read-only and formatting fixes are explicit", () => {
   const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
-  assert.doesNotMatch(pkg.scripts.check, /biome-check\.mjs --write/);
+  assert.doesNotMatch(pkg.scripts.check, /biome-check\.mjs --write|npm run format|npm run fix|biome format --write/);
   assert.match(pkg.scripts.check, /biome-check\.mjs/);
   assert.match(pkg.scripts.format, /biome-check\.mjs --write/);
 });
@@ -42,7 +44,7 @@ test("root validation is read-only and formatting fixes are explicit", () => {
 test("fork root scripts cannot publish into upstream-controlled package namespace", () => {
   const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
   for (const script of ["publish", "publish:dry", "release:patch", "release:minor", "release:major"]) {
-    assert.match(pkg.scripts[script], /reject-upstream-release\.mjs/, script + " must fail closed");
+    assert.equal(pkg.scripts[script], "node scripts/reject-upstream-release.mjs", script + " must fail closed");
   }
 });
 
