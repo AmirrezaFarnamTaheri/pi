@@ -45,6 +45,7 @@ jobs:
           if git fetch origin \
             refs/heads/sync/upstream-main:refs/remotes/origin/sync/upstream-main; then
             git switch -C sync/upstream-main refs/remotes/origin/sync/upstream-main
+            previous_head="$(git rev-parse HEAD)"
             if ! git merge --no-edit origin/main; then
               echo "::error::Existing sync branch conflicts with fork main; resolve manually."
               git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
@@ -52,6 +53,7 @@ jobs:
             fi
           else
             git switch -C sync/upstream-main origin/main
+            previous_head="$(git rev-parse HEAD)"
           fi
 
           if ! git merge --no-edit refs/remotes/upstream/main; then
@@ -59,6 +61,11 @@ jobs:
             git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
             echo "::error::Upstream merge conflicts. No commits were pushed; resolve without discarding fork code."
             exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" = "$previous_head" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No new upstream or fork commits to integrate." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           # Never execute merged upstream code in this write-enabled job.
           git push origin HEAD:refs/heads/sync/upstream-main
