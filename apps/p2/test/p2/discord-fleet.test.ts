@@ -188,6 +188,36 @@ describe("Discord fleet persistence and identity isolation", () => {
 		}
 	});
 
+
+	it("reserves stop ingress priority under a saturated status-command buffer", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-discord-emergency-"));
+		const created: FakeBot[] = [];
+		try {
+			const fleet = await Fleet.open(dir, (onEvent) => {
+				const bot = new FakeBot(onEvent);
+				created.push(bot);
+				return bot as unknown as Bot;
+			});
+			await fleet.add("app-one:key");
+			await fleet.next(new AbortController().signal);
+			const bot = created[0]!;
+			for (let i = 0; i < 256; i++) bot.emit({ kind: "message", message: {
+				id: String(i + 1), channelId: "channel", author: { id: "owner", name: "owner", bot: false },
+				roles: [], text: "<@999> status", mentionsBot: true, attachments: [],
+			} });
+			bot.emit({ kind: "message", message: {
+				id: "99999", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
+				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
+			} });
+			const received = await fleet.next(new AbortController().signal);
+			assert(received?.event.kind === "message");
+			assert.equal(received.event.message.text, "<@999> stop");
+			await fleet.close();
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("delivers stop control messages ahead of queued ordinary mentions", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-priority-"));
 		const created: FakeBot[] = [];
