@@ -3,7 +3,9 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # Run the full matrix on active fork hardening and upstream-integration branches,
+    # even when they are not yet pull requests against main.
+    branches: [main, "hardening/**", "sync/**"]
     # Release tags also run the full verification suite.
     tags: ['v*.*.*']
   pull_request:
