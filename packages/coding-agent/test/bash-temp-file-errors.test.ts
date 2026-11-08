@@ -2,6 +2,7 @@ import type { WriteStream } from "node:fs";
 import { Writable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
+import { bashExecutionToText } from "../src/core/messages.ts";
 import { createOutputFileStream } from "../src/utils/output-files.ts";
 
 vi.mock("../src/utils/output-files.ts", () => ({
@@ -34,6 +35,7 @@ describe("recovering from temporary Bash output failures", () => {
 		expect(result.truncated).toBe(true);
 		expect(result.output).toContain("last useful output");
 		expect(result.fullOutputPath).toBeUndefined();
+		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain("Full output unavailable");
 		expect(createSpool).toHaveBeenCalledTimes(1);
 	});
 
@@ -52,6 +54,7 @@ describe("recovering from temporary Bash output failures", () => {
 		expect(result.truncated).toBe(true);
 		expect(result.output).toContain("last useful output");
 		expect(result.fullOutputPath).toBeUndefined();
+		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain("Full output unavailable");
 		expect(createSpool).toHaveBeenCalledTimes(1);
 	});
 });
