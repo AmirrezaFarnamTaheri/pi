@@ -744,7 +744,11 @@ describe("discord relay", () => {
 		const trigger = discord.say("c1", message(`<@${BOT}> file`));
 		await relay.onMessage("bot-a", trigger);
 		sessions.bytes.set("short", new Uint8Array(2));
-		sessions.turns.set(1, { state: "answered", text: "attached", files: [{ id: "short", name: "short.bin", size: 8 }] });
+		sessions.turns.set(1, {
+			state: "answered",
+			text: "attached",
+			files: [{ id: "short", name: "short.bin", size: 8 }],
+		});
 		await relay.checkPending();
 		assert.equal(discord.uploaded.has("short.bin"), false);
 		assert.equal(discord.posted.length, 0);
@@ -756,7 +760,9 @@ describe("discord relay", () => {
 		const trigger = discord.say("c1", message(`<@${BOT}> gone`));
 		await relay.onMessage("bot-a", trigger);
 		sessions.turns.set(1, { state: "answered", text: "answer", files: [] });
-		discord.reply = async () => { throw Object.assign(new Error("Unknown Channel"), { code: 10003 }); };
+		discord.reply = async () => {
+			throw Object.assign(new Error("Unknown Channel"), { code: 10003 });
+		};
 		await relay.checkPending();
 		assert.deepEqual(state().pending, {});
 	});
@@ -775,7 +781,6 @@ describe("discord relay", () => {
 		await relay.checkPending();
 		assert.equal(discord.posted.length, 1);
 	});
-
 });
 
 const texts = (view: ConversationView | null | undefined): string[] =>
