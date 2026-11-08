@@ -1000,6 +1000,50 @@ export class ModelRuntime implements Models {
 		this.scheduleExtensionRefresh();
 	}
 
+	/**
+	 * Apply validated provider registrations with one final model snapshot.
+	 * Individual registerProvider calls keep their existing synchronous semantics.
+	 */
+	registerProviderBatch(registrations: readonly { providerId: string; config: ProviderConfigInput }[]): void {
+		if (registrations.length === 0) return;
+		const staged = new Map<string, ProviderConfigInput>();
+		for (const { providerId, config } of registrations) {
+			validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
+			const previous = staged.get(providerId) ?? this.extensionProviders.get(providerId);
+			const effective: ProviderConfigInput = { ...previous };
+			for (const [key, value] of Object.entries(config)) {
+				if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
+			}
+			staged.set(providerId, effective);
+		}
+		for (const [providerId, config] of staged) {
+			this.nativeExtensionProviders.delete(providerId);
+			this.extensionProviders.set(providerId, config);
+			this.recomposeProvider(providerId);
+		}
+		this.updateModelSnapshot();
+		const configuredProviders = new Set(this.snapshot.configuredProviders);
+		const auth = new Map(this.snapshot.auth);
+		for (const [providerId, config] of staged) {
+			const status = configuredRequestAuthStatus(this.config.getProvider(providerId), config);
+			if (!this.snapshot.storedProviders.has(providerId) && !status?.configured) continue;
+			configuredProviders.add(providerId);
+			if (!auth.get(providerId)) {
+				auth.set(providerId, {
+					type: config.oauth && !config.apiKey ? "oauth" : "api_key",
+					source: "configured provider",
+				});
+			}
+		}
+		this.snapshot = {
+			...this.snapshot,
+			configuredProviders,
+			auth,
+			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+		};
+		this.scheduleExtensionRefresh();
+	}
+
 	unregisterProvider(providerId: string): void {
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
