@@ -719,6 +719,20 @@ describe("discord relay", () => {
 		assert.doesNotMatch(prompt, /Other bot: bot output/);
 	});
 
+
+	it("does not checkpoint past a missed mention when its session temporarily refuses delivery", async () => {
+		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
+		const missed = discord.say("c1", message(`<@${BOT}> retry after recovery`));
+		sessions.refusal = "temporarily unavailable";
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 0);
+		assert.notEqual(state().bindings.c1?.catchUpScan, missed.id);
+		sessions.refusal = undefined;
+		await relay.catchUp("bot-a");
+		assert.equal(sessions.delivered.length, 1);
+		assert.equal(sessions.delivered[0]?.requestId, `discord:${missed.id}`);
+	});
+
 	it("catches up after downtime: one batch per link and thread, every message from the cursor to the newest allowed mention", async () => {
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
 		// Delivered before p2 went down: the cursor is this message.
