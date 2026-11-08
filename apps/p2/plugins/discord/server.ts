@@ -113,12 +113,24 @@ export default defineFacet((host) => {
 		// Owner link mutations may await remote Discord calls; serialize their entire
 		// transaction, including unlink, to preserve the one-session/one-channel invariant.
 		const linkMutations = new LinkMutationQueue();
-		const reconcile = (ctx: Ctx): Promise<void> => resumeLinkRepairs({
-			value: () => state.value as unknown as LinkRepairState,
-			change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
-		}, async (session, lock) => {
-			await locks.set({ session, lock }, ctx);
-		});
+		const reconcile = async (ctx: Ctx): Promise<void> => {
+			const unlinks = Object.values(state.value.repairs)
+				.filter((repair) => repair.kind === "unlink")
+				.map((repair) => repair.session);
+			await resumeLinkRepairs({
+				value: () => state.value as unknown as LinkRepairState,
+				change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
+			}, async (session, lock) => {
+				await locks.set({ session, lock }, ctx);
+			});
+			for (const session of unlinks) {
+				const row = catalog.sessions.value.find((entry) => entry.id === session);
+				if (row && row.archivedAt === null)
+					await ingress(session, (worker, scope) => worker.unlinked(scope)).catch((error: unknown) =>
+						console.error("p2 discord: telling the session it is unlinked failed:", errorText(error)),
+					);
+			}
+		};
 		const linkExclusive = <T>(ctx: Ctx, action: () => Promise<T>): Promise<T> => linkMutations.run(async () => {
 			// No new mutation can bypass an unfinished durable repair.
 			if (Object.keys(state.value.repairs).length) await reconcile(ctx);
@@ -238,12 +250,6 @@ export default defineFacet((host) => {
 				removeSessionBinding(draft as unknown as LinkRepairState, session);
 			}, ctx);
 			await reconcile(ctx);
-			// A session that is gone or archived has no worker to tell (and none to start).
-			const row = catalog.sessions.value.find((entry) => entry.id === session);
-			if (row && row.archivedAt === null)
-				await ingress(session, (worker, scope) => worker.unlinked(scope)).catch((error: unknown) =>
-					console.error("p2 discord: telling the session it is unlinked failed:", errorText(error)),
-				);
 		};
 		return {
 			bots: followNative(
@@ -296,24 +302,24 @@ export default defineFacet((host) => {
 					}
 					await locks.set({ session, lock }, ctx);
 					await state.change((draft) => {
-					if (Object.values(draft.bindings).some((binding) => binding.session === session))
-						throw new Error("This session is linked already: unlink it first");
-					if (draft.bindings[channelId]) throw new Error("This channel is linked to another session");
-					draft.bindings[channelId] = {
-						botId: bot,
-						channelId,
-						channelName: channel.name,
-						guildId: channel.guildId,
-						guildName: channel.guildName,
-						session,
-						wake,
-						// The first mention delivers what comes after linking.
-						cursor: channel.lastMessageId,
-						threads: {},
-						createdAt: Date.now(),
-						generation: randomUUID(),
-					};
-					delete draft.repairs[session];
+						if (Object.values(draft.bindings).some((binding) => binding.session === session))
+							throw new Error("This session is linked already: unlink it first");
+						if (draft.bindings[channelId]) throw new Error("This channel is linked to another session");
+						draft.bindings[channelId] = {
+							botId: bot,
+							channelId,
+							channelName: channel.name,
+							guildId: channel.guildId,
+							guildName: channel.guildName,
+							session,
+							wake,
+							// The first mention delivers what comes after linking.
+							cursor: channel.lastMessageId,
+							threads: {},
+							createdAt: Date.now(),
+							generation: randomUUID(),
+						};
+						delete draft.repairs[session];
 					}, ctx);
 				} catch (error) {
 					// If the binding was already atomically committed, never roll back its lock.
