@@ -32,8 +32,12 @@ class FakeBot {
 		for (const listener of this.#listeners) listener();
 		return this.status;
 	}
-	async close(): Promise<void> { this.client = undefined; }
-	emit(event: BotEvent): void { this.#onEvent(event); }
+	async close(): Promise<void> {
+		this.client = undefined;
+	}
+	emit(event: BotEvent): void {
+		this.#onEvent(event);
+	}
 }
 
 describe("Discord fleet persistence and identity isolation", () => {
@@ -69,9 +73,12 @@ describe("Discord fleet persistence and identity isolation", () => {
 	it("fails closed on an offline legacy token whose original application was never established", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-legacy-"));
 		try {
-			await writeFile(join(dir, "discord.json"), JSON.stringify({
-				bots: { legacy: { token: "app:offline", addedAt: 1 } },
-			}));
+			await writeFile(
+				join(dir, "discord.json"),
+				JSON.stringify({
+					bots: { legacy: { token: "app:offline", addedAt: 1 } },
+				}),
+			);
 			const fleet = await Fleet.open(dir, (onEvent) => new FakeBot(onEvent) as unknown as Bot);
 			await assert.rejects(fleet.setToken("legacy", "different:key"), /identity|connect|original/i);
 			await fleet.close();
@@ -95,8 +102,15 @@ describe("Discord fleet persistence and identity isolation", () => {
 			const bot = created[0]!;
 			const normal = (text: string): BotEvent => ({
 				kind: "message",
-				message: { id: text, channelId: "c1", author: { id: "u", name: "u", bot: false },
-					roles: [], text, mentionsBot: true, attachments: [] },
+				message: {
+					id: text,
+					channelId: "c1",
+					author: { id: "u", name: "u", bot: false },
+					roles: [],
+					text,
+					mentionsBot: true,
+					attachments: [],
+				},
 			});
 			bot.emit(normal("<@999> long task"));
 			bot.emit(normal("<@999> stop"));
