@@ -6278,7 +6278,7 @@ export class InteractiveMode {
 
 		this.showSelector((done) => {
 			const selector = new OAuthSelectorComponent(
-				"login",
+				addAccount ? "add" : "login",
 				providerOptions,
 				async (providerId, selectedAuthType) => {
 					done();
