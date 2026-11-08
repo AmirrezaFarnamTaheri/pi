@@ -76,14 +76,22 @@ class FakeDiscord implements DiscordPort {
 		return found;
 	}
 	/** History requests, as Discord gets them. */
-	readonly requests: { channel: string; after: string }[] = [];
+	readonly requests: { channel: string; after?: string; before?: string }[] = [];
 	/** Typing and history reads in order, as `typing:<channel>` and `messages:<channel>`. */
 	readonly events: string[] = [];
-	async messages(channelId: string, query: { after: string; limit: number }): Promise<DiscordMessage[]> {
-		this.requests.push({ channel: channelId, after: query.after });
+	async messages(
+		channelId: string,
+		query: { after?: string; before?: string; limit: number },
+	): Promise<DiscordMessage[]> {
+		this.requests.push({ channel: channelId, ...(query.after ? { after: query.after } : {}), ...(query.before ? { before: query.before } : {}) });
 		this.events.push(`messages:${channelId}`);
 		const all = this.history.get(channelId) ?? [];
-		return all.filter((entry) => BigInt(entry.id) > BigInt(query.after)).slice(0, Math.min(query.limit, 100));
+		const matching = all.filter((entry) => query.after !== undefined
+			? BigInt(entry.id) > BigInt(query.after)
+			: query.before !== undefined && BigInt(entry.id) < BigInt(query.before));
+		return query.before === undefined
+			? matching.slice(0, Math.min(query.limit, 100))
+			: matching.slice(-Math.min(query.limit, 100));
 	}
 	async reply(
 		channel: string,
@@ -643,6 +651,21 @@ describe("discord relay", () => {
 		assert.equal(sessions.delivered.length, 1);
 		assert.equal(sessions.delivered[0]?.requestId, `discord:${trigger.id}`);
 		assert.equal(state().bindings.c1?.cursor, trigger.id);
+	});
+
+
+	it("bounds extremely long delivery history while retaining the latest prompt context", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		for (let index = 0; index < 5_000; index++) discord.say("c1", message(`line ${index}`));
+		const trigger = discord.say("c1", message(`<@${BOT}> summarize the latest`));
+		await relay.onMessage("bot-a", trigger);
+		const input = sessions.delivered[0];
+		assert(input);
+		assert(discord.requests.length <= 40, "one delivery has a bounded number of Discord API reads");
+		assert.match(input.text.split("\n")[0]!, /truncated/i);
+		assert.match(input.text, /line 4999/);
+		assert.match(input.text, /summarize the latest/);
+		assert.doesNotMatch(input.text, /line 0\n/);
 	});
 
 	it("catches up after downtime: one batch per link and thread, every message from the cursor to the newest allowed mention", async () => {
