@@ -144,7 +144,7 @@ describe("isolated session regex search", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-regex-exact-"));
 		try {
 			const path = join(directory, "full.jsonl");
-			const first = "BEGIN" + "x".repeat(170_000) + "END";
+			const first = "BEGIN" + "q".repeat(170_000) + "END";
 			writeFileSync(path, [
 				JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }, { type: "text", text: "world" }] } }),
 				JSON.stringify({ type: "message", message: { role: "assistant", content: [
