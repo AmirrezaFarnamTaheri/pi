@@ -6141,6 +6141,26 @@ export class InteractiveMode {
 		}
 		const virtual = runtime.getModel("account-profiles", sourceProviderId);
 		if (!virtual) { this.showError("Add another account for this provider to enable rotation."); return; }
+		// A routed request includes existing transcript messages and tool outputs.
+		// Explicitly obtain user consent before exposing that context to another account.
+		const confirm = "Enable rotation and share this conversation across accounts";
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				"Confirm account rotation", ["Cancel", confirm],
+				(option) => {
+					done();
+					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual);
+				},
+				() => done(),
+				{
+					description: `The existing transcript (including tool output) may be sent through any of these accounts: ${connected.join(", ")}. Only enable this if cross-account sharing is authorized.`,
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private async activateAccountRotation(sourceProviderId: string, virtual: Model<any>): Promise<void> {
 		try {
 			await this.session.setModel(virtual, { persist: true });
 			this.footer.invalidate();
