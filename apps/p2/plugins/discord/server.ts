@@ -203,6 +203,7 @@ export default defineFacet((host) => {
 					await linkMutations.run(() => reconcile(ctx)).catch((error: unknown) =>
 						console.error("p2 discord: retrying pending link recovery:", errorText(error)));
 
+				relay.retryDeferredCatchUps();
 				await relay.typing();
 				if (tick % CHECK_EVERY === 0 && Object.keys(state.value.pending).length)
 					await relay.checkPending().catch(() => {});
