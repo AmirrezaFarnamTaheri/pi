@@ -82,3 +82,38 @@ it("does not restore a stale lock when another owner modified it after an interr
   assert.deepEqual(store.value().repairs, {});
   assert.deepEqual(current.capabilities, ["narrow"]);
 });
+
+it("does not release a lock until in-flight messages have drained", async () => {
+  const { store } = fakeState({
+    bindings: { c1: { session: "s1" } }, pending: {},
+    repairs: { s1: { session: "s1", kind: "unlink", lock: null } },
+  });
+  let drain!: () => void;
+  const gate = new Promise<void>((resolve) => { drain = resolve; });
+  let unlocked = false;
+  const repairing = resumeLinkRepairs(store, async () => { unlocked = true; }, {
+    beforeUnlock: async () => gate,
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(unlocked, false);
+  assert.deepEqual(store.value().bindings, {});
+  drain();
+  await repairing;
+  assert.equal(unlocked, true);
+});
+
+it("keeps an unlink repair durable when notifying its worker fails, then retries it", async () => {
+  const { store } = fakeState({
+    bindings: { c1: { session: "s1" } }, pending: {},
+    repairs: { s1: { session: "s1", kind: "unlink", lock: null } },
+  });
+  let notifications = 0;
+  const notifyUnlinked = async () => {
+    if (++notifications === 1) throw Error("worker unavailable");
+  };
+  await assert.rejects(resumeLinkRepairs(store, async () => {}, { notifyUnlinked }), /worker unavailable/);
+  assert(store.value().repairs.s1, "failed worker notification retains retry intent");
+  await resumeLinkRepairs(store, async () => {}, { notifyUnlinked });
+  assert.equal(notifications, 2);
+  assert.deepEqual(store.value().repairs, {});
+});
