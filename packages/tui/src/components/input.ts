@@ -68,7 +68,25 @@ export class Input implements Component, Focusable {
 	}
 
 	setMask(masked: boolean): void {
+		if (this.masked === masked) return;
+		// A secret must never become plaintext when the next prompt reuses this control.
+		if (this.masked) this.value = "";
+		this.cursor = 0;
 		this.masked = masked;
+		this.undoStack.clear();
+		this.killRing = new KillRing();
+		this.lastAction = null;
+	}
+
+	/** Drop all secret-bearing transient state, not just the displayed characters. */
+	clearSensitiveValue(): void {
+		this.value = "";
+		this.cursor = 0;
+		this.pasteBuffer = "";
+		this.isInPaste = false;
+		this.lastAction = null;
+		this.undoStack.clear();
+		this.killRing = new KillRing();
 	}
 
 	setValue(value: string): void {
@@ -299,7 +317,7 @@ export class Input implements Component, Focusable {
 		if (this.cursor === 0) return;
 		this.pushUndo();
 		const deletedText = this.value.slice(0, this.cursor);
-		this.killRing.push(deletedText, { prepend: true, accumulate: this.lastAction === "kill" });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: true, accumulate: this.lastAction === "kill" });
 		this.lastAction = "kill";
 		this.value = this.value.slice(this.cursor);
 		this.cursor = 0;
@@ -309,7 +327,7 @@ export class Input implements Component, Focusable {
 		if (this.cursor >= this.value.length) return;
 		this.pushUndo();
 		const deletedText = this.value.slice(this.cursor);
-		this.killRing.push(deletedText, { prepend: false, accumulate: this.lastAction === "kill" });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: false, accumulate: this.lastAction === "kill" });
 		this.lastAction = "kill";
 		this.value = this.value.slice(0, this.cursor);
 	}
@@ -328,7 +346,7 @@ export class Input implements Component, Focusable {
 		this.cursor = oldCursor;
 
 		const deletedText = this.value.slice(deleteFrom, this.cursor);
-		this.killRing.push(deletedText, { prepend: true, accumulate: wasKill });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: true, accumulate: wasKill });
 		this.lastAction = "kill";
 
 		this.value = this.value.slice(0, deleteFrom) + this.value.slice(this.cursor);
@@ -349,13 +367,14 @@ export class Input implements Component, Focusable {
 		this.cursor = oldCursor;
 
 		const deletedText = this.value.slice(this.cursor, deleteTo);
-		this.killRing.push(deletedText, { prepend: false, accumulate: wasKill });
+		if (!this.masked) this.killRing.push(deletedText, { prepend: false, accumulate: wasKill });
 		this.lastAction = "kill";
 
 		this.value = this.value.slice(0, this.cursor) + this.value.slice(deleteTo);
 	}
 
 	private yank(): void {
+		if (this.masked) return;
 		const text = this.killRing.peek();
 		if (!text) return;
 
@@ -367,6 +386,7 @@ export class Input implements Component, Focusable {
 	}
 
 	private yankPop(): void {
+		if (this.masked) return;
 		if (this.lastAction !== "yank" || this.killRing.length <= 1) return;
 
 		this.pushUndo();
@@ -385,10 +405,12 @@ export class Input implements Component, Focusable {
 	}
 
 	private pushUndo(): void {
+		if (this.masked) return;
 		this.undoStack.push({ value: this.value, cursor: this.cursor });
 	}
 
 	private undo(): void {
+		if (this.masked) return;
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
 		this.value = snapshot.value;
