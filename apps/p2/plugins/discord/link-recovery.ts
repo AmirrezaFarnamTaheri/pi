@@ -7,6 +7,10 @@ export type LinkRepair = {
   session: string;
   /** Prior lock for failed link, desired lock for unlink/update. */
   lock: SessionLock | null;
+  /** Lock expected before applying a link or update repair; used for atomic fencing. */
+  expectedLock?: SessionLock | null;
+  /** Lock installed by an interrupted link, if any. Never revert unrelated lock writes. */
+  proposedLock?: SessionLock | null;
   /** Desired wake policy on update. */
   wake?: Wake;
 };
@@ -35,7 +39,11 @@ export function removeSessionBinding(draft: LinkRepairState, session: string): v
  */
 export async function resumeLinkRepairs(
   state: RepairStore,
-  setLock: (session: string, lock: SessionLock | null) => Promise<void>,
+  setLock: (session: string, lock: SessionLock | null, expected?: SessionLock | null) => Promise<boolean | void>,
+  options: {
+    beforeUnlock?: (session: string) => Promise<void>;
+    notifyUnlinked?: (session: string) => Promise<void>;
+  } = {},
 ): Promise<void> {
   for (const [session, repair] of Object.entries(state.value().repairs)) {
     if (repair.session !== session) throw new Error(`Discord repair session mismatch: ${session}`);
@@ -43,20 +51,29 @@ export async function resumeLinkRepairs(
       case "link": {
         // A fully committed binding is authoritative; do not weaken its live lock.
         const isLinked = Object.values(state.value().bindings).some((binding) => binding.session === session);
-        if (!isLinked) await setLock(session, repair.lock);
+        // Never restore an old, potentially broader lock without a compare-and-set.
+        // A new owner lock policy supersedes the unfinished link operation.
+        if (!isLinked && repair.proposedLock !== undefined)
+          await setLock(session, repair.lock, repair.proposedLock);
         break;
       }
       case "unlink":
         // Drop relay access *before* removing the sandbox/tool lock.
         await state.change((draft) => removeSessionBinding(draft, session));
-        await setLock(session, null);
+        await options.beforeUnlock?.(session);
+        await setLock(session, null, repair.expectedLock);
+        // Notification must succeed before the intent is deleted. On crash/restart it
+        // is retried; archived/deleted sessions can be safely skipped by the caller.
+        await options.notifyUnlinked?.(session);
         break;
       case "update":
         if (!repair.wake) throw new Error(`Discord repair missing wake policy: ${session}`);
         if (!Object.values(state.value().bindings).some((binding) => binding.session === session)) {
           throw new Error(`Discord repair cannot update unlinked session ${session}`);
         }
-        await setLock(session, repair.lock);
+        const applied = await setLock(session, repair.lock, repair.expectedLock);
+        // A later owner lock update supersedes this stale wake-policy change as well.
+        if (applied === false) break;
         await state.change((draft) => {
           for (const binding of Object.values(draft.bindings)) {
             if (binding.session === session) binding.wake = repair.wake!;
