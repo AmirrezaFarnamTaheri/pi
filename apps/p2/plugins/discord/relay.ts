@@ -97,6 +97,8 @@ export const PAGE = 100;
 export const BATCH_CAP = 200;
 /** Maximum Discord history API pages examined in one catch-up invocation, across all links. */
 export const CATCH_UP_PAGES = 4;
+/** Aggregate cap shared by catch-up scan and any delivery-history lookups. */
+export const CATCH_UP_TOTAL_PAGES = 64;
 /** Maximum forward history pages per delivery before switching to newest-message pagination. */
 export const DELIVERY_HISTORY_PAGES = 32;
 /** Discord's limit for one message's text. */
@@ -243,18 +245,18 @@ export class Relay {
 	 * then advances the cursor and records the pending reply. A session that cannot take it gets a notice instead. One
 	 * delivery at a time per channel or thread: a later one starts from the cursor the earlier one left.
 	 */
-	deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
+	deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
 		const session = this.#state.value().bindings[channelId]?.session;
-		const task = this.#deliverQueued(channelId, trigger, thread);
+		const task = this.#deliverQueued(channelId, trigger, thread, historyBudget);
 		return session ? this.#trackSession(session, task) : task;
 	}
 
-	private async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
+	private async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
 		const target = thread?.id ?? channelId;
 		// "Typing" at once, before the wait for an earlier delivery and the history's pages: `typing()` refreshes it
 		// until the delivery ends, then the pending reply keeps it on.
 		const stopTyping = this.#typingWhile(channelId, target, trigger);
-		const run = (this.#lanes.get(target) ?? Promise.resolve()).then(() => this.#deliver(channelId, trigger, thread));
+		const run = (this.#lanes.get(target) ?? Promise.resolve()).then(() => this.#deliver(channelId, trigger, thread, historyBudget));
 		// The lane goes on whether this delivery failed or not; the caller still learns it failed.
 		const lane = run.catch(() => {});
 		this.#lanes.set(target, lane);
@@ -284,7 +286,7 @@ export class Relay {
 		};
 	}
 
-	async #deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined): Promise<void> {
+	async #deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
 		const binding = this.#state.value().bindings[channelId];
 		if (!binding) return;
 		const port = this.#port(binding.botId);
@@ -320,19 +322,29 @@ export class Relay {
 		const before = thread?.thread && cursor === null ? thread.thread.createdId : undefined;
 		let truncated = false;
 		const markTruncated = () => { truncated = true; };
+		const historicalPort: Pick<DiscordPort, "messages"> = historyBudget ? {
+			messages: async (id, query) => {
+				if (historyBudget.remaining <= 0) {
+					markTruncated();
+					return [];
+				}
+				historyBudget.remaining--;
+				return port.messages(id, query);
+			},
+		} : port;
 		if (before !== undefined)
-			for await (const message of history(port, channelId, binding.cursor, before, markTruncated))
+			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
-		for await (const message of history(port, where, cursor, trigger.id, markTruncated))
+		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
 			if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		if (truncated) {
 			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
 			window = new BatchWindow(BATCH_CAP);
 			if (before !== undefined)
-				for (const message of await recentHistory(port, channelId, binding.cursor, before, true, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
+				for (const message of await recentHistory(historicalPort, channelId, binding.cursor, before, true, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
 					if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
-			for (const message of await recentHistory(port, where, cursor, trigger.id, false, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
+			for (const message of await recentHistory(historicalPort, where, cursor, trigger.id, false, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
@@ -410,6 +422,7 @@ export class Relay {
 	 */
 	async catchUp(bot: string): Promise<void> {
 		const port = this.#port(bot);
+		const historyBudget = { remaining: CATCH_UP_TOTAL_PAGES };
 		const places = Object.values(this.#state.value().bindings)
 			.filter((binding) => binding.botId === bot)
 			.flatMap((binding) => [
@@ -439,6 +452,7 @@ export class Relay {
 				do {
 					const page = await port.messages(place.id, { after, limit: PAGE });
 					remaining--;
+					historyBudget.remaining--;
 					if (!page.length) {
 						more = false;
 						break;
@@ -457,7 +471,7 @@ export class Relay {
 				let refused = false;
 				if (newest) {
 					const thread = place.thread ? await port.channel(place.id) : undefined;
-					await this.deliver(binding.channelId, newest, thread);
+					await this.deliver(binding.channelId, newest, thread, historyBudget);
 					const updated = this.#state.value().bindings[binding.channelId];
 					const cursor = place.thread ? updated?.threads[place.id]?.cursor : updated?.cursor;
 					if (updated?.session === binding.session && (cursor === undefined || cursor === null || BigInt(cursor) < BigInt(newest.id))) {
@@ -674,7 +688,7 @@ function isPermanentReplyFailure(error: unknown): boolean {
  * with that message.
  */
 async function* history(
-	port: DiscordPort,
+	port: Pick<DiscordPort, "messages">,
 	channel: string,
 	cursor: string | null,
 	until?: string,
@@ -699,7 +713,7 @@ async function* history(
 
 /** Get at most the latest BATCH_CAP messages at/before a marker, without traversing a long backlog. */
 async function recentHistory(
-	port: DiscordPort,
+	port: Pick<DiscordPort, "messages">,
 	channel: string,
 	cursor: string | null,
 	until: string,
