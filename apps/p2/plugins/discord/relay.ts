@@ -2,6 +2,7 @@
 // by the link's bot, delivers the messages since the link's cursor (a thread's: to its forked subagent) as one input; a
 // pending reply is posted once its turn ended. Plain logic over ports, so tests run it with fake bots and sessions.
 import type { SessionLock } from "@p2/app/v1";
+import { replyNonce } from "./reply-nonce.ts";
 import { type Binding, COMMANDS, type Command, type OfferedFile, type Pending, type Wake } from "./contract.ts";
 
 /** A Discord message as the relay reads it. */
@@ -44,6 +45,7 @@ export type DiscordPort = {
 		messageId: string | undefined,
 		text: string,
 		files?: readonly { name: string; data: Uint8Array }[],
+		nonce?: string,
 	): Promise<void>;
 	/** The bytes one message's attachments may have in `channelId` (its server's limit). */
 	uploadLimit(channelId: string): Promise<number>;
@@ -494,7 +496,10 @@ export class Relay {
 				files.push({ name: file.name, data: await this.#readFile(pending.session, file) });
 			if (!this.#pendingIsCurrent(pending)) return false;
 			if (post.text || files.length)
-				await port.reply(pending.replyChannelId, index === 0 ? pending.messageId : undefined, post.text, files);
+				// Discord enforces this stable nonce for a short deduplication window, covering
+				// an HTTP success whose reply was lost before our local checkpoint.
+				await port.reply(pending.replyChannelId, index === 0 ? pending.messageId : undefined,
+					post.text, files, replyNonce(pending.messageId, index));
 			// Checkpoint each posted chunk so a later HTTP 429 never duplicates earlier successful chunks.
 			await this.#state.change((draft) => {
 				const current = draft.pending[pending.messageId];
