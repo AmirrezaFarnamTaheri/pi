@@ -38,3 +38,10 @@ test("root validation is read-only and formatting fixes are explicit", () => {
   assert.match(pkg.scripts.check, /biome-check\.mjs/);
   assert.match(pkg.scripts.format, /biome-check\.mjs --write/);
 });
+
+test("fork root scripts cannot publish into upstream-controlled package namespace", () => {
+  const pkg = JSON.parse(readFileSync(join(import.meta.dirname, "..", "package.json"), "utf8"));
+  for (const script of ["publish", "publish:dry", "release:patch", "release:minor", "release:major"]) {
+    assert.match(pkg.scripts[script], /reject-upstream-release\.mjs/, script + " must fail closed");
+  }
+});
