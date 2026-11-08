@@ -42,6 +42,29 @@ describe("EventStream opt-in result-only retention", () => {
 		expect(await stream.result()).toBe(2);
 	});
 
+	it("preserves bounded backpressure for an active result-only iterator", async () => {
+		const stream = new EventStream<number, number>((value) => value === 4, (value) => value, {
+			retention: "result-only",
+		});
+		const iterator = stream[Symbol.asyncIterator]();
+		const first = iterator.next();
+		stream.push(1);
+		expect(await first).toEqual({ value: 1, done: false });
+		await stream.pushWithBackpressure(2, 1);
+		let published = false;
+		const blocked = stream.pushWithBackpressure(3, 1).then(() => { published = true; });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(published).toBe(false);
+		expect(await iterator.next()).toEqual({ value: 2, done: false });
+		await blocked;
+		expect(published).toBe(true);
+		stream.push(4);
+		expect(await iterator.next()).toEqual({ value: 3, done: false });
+		expect(await iterator.next()).toEqual({ value: 4, done: false });
+		expect(await iterator.next()).toEqual({ done: true, value: undefined });
+		expect(await stream.result()).toBe(4);
+	});
+
 	it("allows assistant response callers to opt out without losing the final response", async () => {
 		const stream = createAssistantMessageEventStream({ retention: "result-only" });
 		const message = {
