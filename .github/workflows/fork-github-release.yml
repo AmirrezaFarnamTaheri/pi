@@ -89,11 +89,11 @@ jobs:
               sourceCommit: process.env.GITHUB_SHA,
               sourceTimestamp: Number(process.env.SOURCE_DATE_EPOCH),
               modelCatalogRevision: catalog.revision,
-              releaseTag: process.env.GITHUB_REF_NAME.replace(/^release\\/fork-/, ""),
+              releaseTag: process.env.GITHUB_REF_NAME.slice("release/fork-".length),
               modelDataPolicy: "immutable-sha256-pin",
               releaseChannel: "github-fork-only"
             };
-            fs.writeFileSync("release-assets/BUILD_MANIFEST.json", JSON.stringify(manifest, null, 2) + "\\n");
+            fs.writeFileSync("release-assets/BUILD_MANIFEST.json", JSON.stringify(manifest, null, 2) + String.fromCharCode(10));
           '
           (
             cd release-assets
