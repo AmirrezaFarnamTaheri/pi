@@ -39,7 +39,10 @@ jobs:
             echo "::error::Release SHA must be on the fork's main history"
             exit 1
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+          # GitHub paginates workflow runs; never mistake a later-page success for absence.
+          gh api --paginate --jq '.workflow_runs[]' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            | jq -s '{workflow_runs: .}' \
             | node scripts/verify-fork-release-ci.mjs "$GITHUB_SHA"
 
       - name: Setup Bun
