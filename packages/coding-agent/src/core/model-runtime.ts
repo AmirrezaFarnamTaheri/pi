@@ -1064,6 +1064,9 @@ export class ModelRuntime implements Models {
 		} else {
 			this.rebuildProviders();
 		}
+		// A models.json provider may become available only after a later refresh.
+		this.attachSavedAccountAliases();
+		this.updateModelSnapshot();
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,
@@ -1220,6 +1223,7 @@ export class ModelRuntime implements Models {
 	}
 
 	unregisterProvider(providerId: string): void {
+		if (this.accountProfiles.has(providerId)) throw new Error("Cannot unregister a managed account identity");
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
 		this.recomposeProvider(providerId);
