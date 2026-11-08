@@ -22,6 +22,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js for integration verification
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
       - name: Fetch upstream and prepare a reviewable merge
         id: merge
         shell: bash
@@ -56,6 +62,14 @@ jobs:
             echo "::error::Upstream merge conflicts. No commits were pushed; resolve without discarding fork code."
             exit 1
           fi
+          # GITHUB_TOKEN-authored PRs do not trigger ordinary CI workflows.
+          # Validate this merge explicitly before uploading the proposed branch.
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+          npm run test:scripts
+          npm run test --workspace packages/coding-agent
+
           git push origin HEAD:refs/heads/sync/upstream-main
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "Upstream changes proposed on sync/upstream-main; do not merge without CI and review." >> "$GITHUB_STEP_SUMMARY"
