@@ -96,9 +96,15 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`${status.user} is added already`);
 			}
+			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: Date.now(), applicationId: status.applicationId } } };
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
 			this.#adopt(id, bot);
-			this.#file.bots[id] = { token, addedAt: Date.now(), applicationId: status.applicationId };
-			await this.#save();
 			this.#changed();
 			return id;
 		});
@@ -124,10 +130,17 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`This token is for ${status.user}, another bot: add it as a new bot`);
 			}
-			await current.close();
+			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: old.addedAt, applicationId: identity } } };
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
 			this.#adopt(id, bot);
-			this.#file.bots[id] = { token, addedAt: old.addedAt, applicationId: identity };
-			await this.#save();
+			await current.close().catch((error: unknown) =>
+				console.error("p2 discord: old bot disconnect failed after token replacement:", error));
 			this.#changed();
 		});
 	}
@@ -135,10 +148,15 @@ export class Fleet {
 	/** Disconnects and forgets bot `id`. */
 	async remove(id: string): Promise<void> {
 		return this.#mutate(async () => {
-			await this.#bots.get(id)?.close();
+			if (!this.#file.bots[id]) return;
+			const next: BotsFile = { bots: { ...this.#file.bots } };
+			delete next.bots[id];
+			await this.#save(next);
+			this.#file = next;
+			const removed = this.#bots.get(id);
 			this.#bots.delete(id);
-			delete this.#file.bots[id];
-			await this.#save();
+			await removed?.close().catch((error: unknown) =>
+				console.error("p2 discord: removed bot disconnect failed:", error));
 			this.#changed();
 		});
 	}
@@ -239,8 +257,8 @@ export class Fleet {
 		return bot;
 	}
 
-	async #save(): Promise<void> {
-		const snapshot = `${JSON.stringify(this.#file, null, "\t")}\n`;
+	async #save(file: BotsFile = this.#file): Promise<void> {
+		const snapshot = `${JSON.stringify(file, null, "\t")}\n`;
 		const persist = async () => {
 			// Each attempt has its own temp file; the queue also prevents stale snapshots from winning.
 			const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
