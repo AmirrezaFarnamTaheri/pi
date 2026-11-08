@@ -163,3 +163,33 @@ it("idle waits for an outstanding asynchronous rejected-command notice", async (
   await scheduler.idle();
   assert.equal(idle, true);
 });
+
+it("reuses rejected-control notice slots after both successful and failed notices", async () => {
+  let releaseWork!: () => void;
+  const blockedWork = new Promise<void>((resolve) => { releaseWork = resolve; });
+  const errors: string[] = [];
+  const scheduler = new DiscordScheduler(() => {}, (error) => errors.push(String(error)), 1, 1, 1, 1);
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: () => blockedWork });
+  scheduler.enqueue({ bot: "b", key: "busy", priority: true, run: async () => {} });
+
+  let finished = 0;
+  for (let index = 0; index < 8; index++) {
+    scheduler.enqueue({ bot: "b", key: `reject-${index}`, priority: true,
+      run: async () => {},
+      onRejected: async () => { finished++; if (index % 2 === 0) throw new Error("notice failure"); },
+    });
+  }
+  await tick();
+  await tick();
+  assert.equal(finished, 8, "the first batch filled then returned all eight notice slots");
+
+  let after = 0;
+  scheduler.enqueue({ bot: "b", key: "again", priority: true,
+    run: async () => {}, onRejected: async () => { after++; },
+  });
+  await tick();
+  assert.equal(after, 1, "a later rejection can use a released notice slot");
+  assert.equal(errors.filter((message) => message.includes("notice failure")).length, 4);
+  releaseWork();
+  await scheduler.idle();
+});
