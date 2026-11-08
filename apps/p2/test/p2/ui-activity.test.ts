@@ -203,7 +203,7 @@ describe("a block's steps and active thought", { skip: !browserTests }, () => {
 		await browser.wait("document.querySelectorAll('.row [data-testid=activity]').length===2");
 		assert.deepEqual(
 			await browser.evaluate(
-				"[...document.querySelectorAll('.row')].map(r=>r.querySelector('[data-testid=activity]')?'activity':r.querySelector('[data-testid=thought]')?'thought':r.textContent.trim())",
+				"[...document.querySelectorAll('.row')].map(r=>r.querySelector('[data-testid=activity]')?'activity':r.querySelector('[data-testid=thought]')?'thought':r.textContent.replace(r.querySelector('.message-time')?.textContent??'','').trim())",
 			),
 			["thought", "First the tests.", "activity", "Now the fix.", "activity", "Fixed and tested."],
 		);
@@ -225,6 +225,40 @@ describe("a block's steps and active thought", { skip: !browserTests }, () => {
 		assert.equal(await browser.evaluate("document.querySelectorAll('.activity-block.selected').length"), 1);
 		await browser.click("[data-testid=activity]");
 		await browser.wait("document.querySelectorAll('[data-testid=step] > button[aria-expanded=true]').length===2");
+		await browser.evaluate("history.back()");
+		await browser.wait(`!${panel}`);
+	});
+
+	it("shows when steps started, once per minute", async () => {
+		const minute = new Date().setHours(9, 5, 0, 0);
+		const entries: ConversationView["entries"][number][] = [];
+		respond(
+			entries,
+			[
+				call("a", "bash", { command: "one" }),
+				call("b", "bash", { command: "two" }),
+				call("c", "bash", { command: "three" }),
+			],
+			"toolUse",
+			{
+				// Started 09:05:03, 09:05:20 and 09:06:10: the second shares the first's minute.
+				a: { timestamp: minute + 5_000, durationMs: 2_000 },
+				b: { timestamp: minute + 20_000 },
+				c: { timestamp: minute + 70_000 },
+			},
+		);
+		await show({ conversation, entries, docs: {} });
+		await browser.click("[data-testid=activity]");
+		await browser.wait("document.querySelectorAll('[data-testid=step]').length===3");
+		// In the browser's locale.
+		const clock = (at: number) =>
+			browser.evaluate<string>(`new Date(${at}).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })`);
+		assert.deepEqual(
+			await browser.evaluate(
+				"[...document.querySelectorAll('[data-testid=step]')].map((e) => e.querySelector('.step-time')?.textContent ?? '')",
+			),
+			[await clock(minute + 3_000), "", await clock(minute + 70_000)],
+		);
 		await browser.evaluate("history.back()");
 		await browser.wait(`!${panel}`);
 	});

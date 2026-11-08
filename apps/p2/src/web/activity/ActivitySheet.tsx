@@ -7,6 +7,7 @@ import { getNavigation, Sheet, useRoute, useScrollMemory } from "../../runtime/w
 import { ToolActivityContext, WorkingDirectory } from "../chat-context.ts";
 import { CloseIcon } from "../icons.tsx";
 import type { Route } from "../navigation.ts";
+import { clockTime, Time } from "../Time.tsx";
 import { DetailProse, imageUrl, StepDetail } from "./Detail.tsx";
 import { ChevronIcon, CommentIcon, SparkIcon } from "./icons.tsx";
 import { KindIcon } from "./Label.tsx";
@@ -227,7 +228,11 @@ function StepThumbnails({ images }: { images: readonly ImageContent[] }) {
 	);
 }
 
-/** A block's steps, each with its images as thumbnails; in the panel their details expand beneath their headers. */
+/**
+ * A block's steps, each with its images as thumbnails and, under its state, when it started: only where the clock
+ * shows another minute than the step before it, so a run within a minute names its time once. In the panel their
+ * details expand beneath their headers.
+ */
 export function StepList({
 	entries,
 	onStep,
@@ -239,10 +244,15 @@ export function StepList({
 }) {
 	const tools = useContext(ToolActivityContext);
 	const cwd = useContext(WorkingDirectory)?.replace(/\/+$/, "");
+	let shownTime: string | undefined;
 	return (
 		<ul className="step-list" data-testid="timeline">
 			{entries.map((entry) => {
 				const step = entry.kind === "call" ? entry.step : undefined;
+				const at = step?.tool.at;
+				const label = at === undefined ? undefined : clockTime(at);
+				const time = label === shownTime ? undefined : at;
+				if (label) shownTime = label;
 				const id = entry.kind === "call" ? entry.step.id : entry.id;
 				const open = expanded?.has(id) ?? false;
 				const argument = step
@@ -277,8 +287,11 @@ export function StepList({
 								{argument && <span className="step-argument">{argument}</span>}
 							</span>
 							{step && <StepThumbnails images={step.tool.images} />}
-							<span className="step-state" data-state={step?.status ?? "done"}>
-								{step ? stepState(step, tools) : entry.kind !== "call" && entry.live ? "● thinking" : ""}
+							<span className="step-end">
+								<span className="step-state" data-state={step?.status ?? "done"}>
+									{step ? stepState(step, tools) : entry.kind !== "call" && entry.live ? "● thinking" : ""}
+								</span>
+								{time !== undefined && <Time at={time} className="step-time" />}
 							</span>
 							<span className="step-chevron" aria-hidden="true">
 								<ChevronIcon size={16} />

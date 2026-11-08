@@ -746,10 +746,17 @@ textarea.input {
 		animation: none;
 	}
 }
+/* A person's message: the bubble with Reply beside it, its actions (time, Edit, Copy) below at its right edge. */
 .user {
 	display: flex;
-	justify-content: flex-end;
+	flex-direction: column;
+	align-items: flex-end;
 	padding-left: 12%;
+}
+.user-line {
+	display: flex;
+	justify-content: flex-end;
+	max-width: 100%;
 }
 .bubble {
 	max-width: 100%;
@@ -795,7 +802,19 @@ textarea.input {
 }
 .message-actions {
 	display: flex;
+	align-items: center;
 	margin: calc(-1 * var(--s2)) 0 0 calc(-1 * var(--s2));
+}
+.user .message-actions {
+	margin: 0 calc(-1 * var(--s2)) 0 0;
+}
+/* When a message was sent or an answer began: as quiet as the actions beside it. */
+.message-time {
+	padding: 0 var(--s2);
+	color: var(--muted);
+	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
 }
 /* Replies: a button beside a person's message (on hover; a coarse pointer uses a long press instead), the
    quoted line above a reply, and a brief highlight of the message a quoted line leads to. */
@@ -819,7 +838,8 @@ textarea.input {
 .user .reply-button:focus-visible {
 	opacity: 1;
 }
-/* Editing a person's message (`/tree`): beside it on hover, always shown where there is no hover. */
+/* Editing someone else's message (`/tree`): in its header on hover, always shown where there is no hover. The owner's
+   messages have Edit in their actions below the bubble. */
 .edit-button {
 	display: inline-flex;
 	flex: none;
@@ -834,7 +854,6 @@ textarea.input {
 .edit-button:hover {
 	color: var(--text);
 }
-.user:hover .edit-button,
 .edit-button:focus-visible {
 	opacity: 1;
 }
