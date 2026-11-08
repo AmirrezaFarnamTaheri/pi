@@ -63,9 +63,13 @@ export async function executeBashWithOperations(
 	let totalBytes = 0;
 
 	const disableTempFile = () => {
+		const stream = tempFileStream;
 		tempFileFailed = true;
 		tempFilePath = undefined;
 		tempFileStream = undefined;
+		// Synchronous write failures may not auto-destroy the stream. Release
+		// its file descriptor before returning a truncated in-memory result.
+		if (stream && !stream.destroyed) stream.destroy();
 	};
 
 	const writeTempFile = (chunk: string) => {
