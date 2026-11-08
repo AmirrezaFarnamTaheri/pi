@@ -2,6 +2,7 @@
 // sessions to channels with their cursors, threads and pending replies (persisted), the relay between them (relay.ts),
 // and the owner's `Discord` view. Linking moves the session into a sandbox and locks it to the picked resources;
 // unlinking lifts the lock.
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { obj } from "@earendil-works/pi-schema";
 import {
@@ -97,6 +98,14 @@ export default defineFacet((host) => {
 			read: (session, id, offset, length) =>
 				ingress(session, (worker, ctx) => worker.read({ id, offset, length }, ctx)),
 		};
+		// Owner link mutations may await remote Discord calls; serialize their entire
+		// transaction, including unlink, to preserve the one-session/one-channel invariant.
+		let linkTail: Promise<void> = Promise.resolve();
+		const linkExclusive = <T>(action: () => Promise<T>): Promise<T> => {
+			const result = linkTail.then(action, action);
+			linkTail = result.then(() => {}, () => {});
+			return result;
+		};
 		const relay = new Relay((bot) => fleet.value.connected(bot), sessions, {
 			// The state's drafts are the same JSON as the relay's plain records.
 			value: () => state.value as RelayState,
@@ -178,6 +187,9 @@ export default defineFacet((host) => {
 			await state.change((draft) => {
 				for (const [channel, binding] of Object.entries(draft.bindings))
 					if (binding.session === session) delete draft.bindings[channel];
+				// A disconnect revokes queued and completed replies, including thread replies.
+				for (const [id, pending] of Object.entries(draft.pending))
+					if (pending.session === session) delete draft.pending[id];
 			}, ctx);
 			await locks.set({ session, lock: null }, ctx);
 			// A session that is gone or archived has no worker to tell (and none to start).
@@ -201,18 +213,18 @@ export default defineFacet((host) => {
 				await fleet.value.setToken(bot, token);
 				return null;
 			},
-			removeBot: async ({ bot }, ctx) => {
+			removeBot: ({ bot }, ctx) => linkExclusive(async () => {
 				for (const binding of Object.values(state.value.bindings))
 					if (binding.botId === bot) await unlink(binding.session, ctx);
 				await fleet.value.remove(bot);
 				return null;
-			},
+			}),
 			server: ({ bot, guild }) => connected(bot).server(guild),
 			mcpServers: async () => {
 				const text = await optionalText(join(dataDir(), "mcp.json"));
 				return text ? mcpServerNames(text) : [];
 			},
-			link: async ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) => {
+			link: ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) => linkExclusive(async () => {
 				const bindings = Object.values(state.value.bindings);
 				if (bindings.some((binding) => binding.session === session))
 					throw new Error("This session is linked already: unlink it first");
@@ -231,6 +243,9 @@ export default defineFacet((host) => {
 				}
 				await locks.set({ session, lock }, ctx);
 				await state.change((draft) => {
+					if (Object.values(draft.bindings).some((binding) => binding.session === session))
+						throw new Error("This session is linked already: unlink it first");
+					if (draft.bindings[channelId]) throw new Error("This channel is linked to another session");
 					draft.bindings[channelId] = {
 						botId: bot,
 						channelId,
@@ -243,15 +258,16 @@ export default defineFacet((host) => {
 						cursor: channel.lastMessageId,
 						threads: {},
 						createdAt: Date.now(),
+						generation: randomUUID(),
 					};
 				}, ctx);
 				return null;
-			},
-			unlink: async ({ session }, ctx) => {
+			}),
+			unlink: ({ session }, ctx) => linkExclusive(async () => {
 				await unlink(session, ctx);
 				return null;
-			},
-			updateLink: async ({ session, wake, lock }, ctx) => {
+			}),
+			updateLink: ({ session, wake, lock }, ctx) => linkExclusive(async () => {
 				if (!Object.values(state.value.bindings).some((binding) => binding.session === session))
 					throw new Error("This session is not linked");
 				// Both apply at once: who may wake Pi is read at each message, the lock is mirrored into the session.
@@ -261,7 +277,7 @@ export default defineFacet((host) => {
 						if (binding.session === session) binding.wake = wake;
 				}, ctx);
 				return null;
-			},
+			}),
 		};
 	});
 
