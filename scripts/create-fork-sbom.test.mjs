@@ -54,3 +54,20 @@ test("installer SBOM includes only packages reachable from its install-lock root
   const bom = createCycloneDxBom(lock, { rootPath: "" });
   assert.deepEqual(bom.components.map((part) => part.name), ["@scope/pi-coding-agent", "a"]);
 });
+
+test("resolves dependencies from every parent including packages/node_modules", () => {
+  const lock = { name: "monorepo", version: "1", lockfileVersion: 3, packages: {
+    "": {},
+    "packages/worker": { name: "worker", version: "1", dependencies: { shared: "1.0.0" } },
+    "packages/node_modules/shared": { name: "shared", version: "1.0.0" },
+    "node_modules/shared": { name: "shared", version: "2.0.0" },
+  } };
+  const names = createCycloneDxBom(lock, { rootPath: "packages/worker" }).components;
+  assert.deepEqual(names.map((c) => c.version), ["1.0.0"]);
+});
+test("a missing nonoptional runtime dependency fails closed", () => {
+  const lock = { lockfileVersion: 3, packages: {
+    "": { name: "root", version: "1", dependencies: { missing: "1.0.0" } },
+  } };
+  assert.throws(() => createCycloneDxBom(lock, { rootPath: "" }), /Missing locked runtime dependency missing/);
+});
