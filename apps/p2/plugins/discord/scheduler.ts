@@ -9,6 +9,8 @@ export type ScheduledDiscordEvent = {
 	bot: string;
 	key: string;
 	priority: boolean;
+	/** Called when a control event cannot be accepted; must not throw synchronously. */
+	onRejected?(): Promise<void>;
 	run(): Promise<void>;
 };
 
@@ -50,8 +52,12 @@ export class DiscordScheduler {
 		const queue = event.priority ? this.#priority : this.#normal;
 		const limit = event.priority ? this.#maxPendingPriority : this.#maxPending;
 		if (queue.length >= limit) {
-			if (event.priority) this.#error(new Error("Discord control command backlog saturated"));
-			else this.#overflow(event.bot);
+			if (event.priority) {
+				try { this.#error(new Error("Discord control command backlog saturated")); } catch { /* Continue to rejection notice. */ }
+				void Promise.resolve().then(() => event.onRejected?.()).catch((error: unknown) => {
+					try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
+				});
+			} else this.#overflow(event.bot);
 			return false;
 		}
 		queue.push(event);
