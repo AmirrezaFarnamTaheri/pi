@@ -5,35 +5,70 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = `
+const REGEX_WORKER_CODE = String.raw\`
 "use strict";
 const { parentPort } = require("node:worker_threads");
 const { createReadStream } = require("node:fs");
-const { createInterface } = require("node:readline");
 
-/**
- * Parse session content inside the worker for large transcripts. The main
- * thread sends only a file path, avoiding synchronous structured-clone work
- * on multi-megabyte strings during interactive search.
- */
-async function loadSearchText(path) {
-  const texts = [];
-  const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
-  for await (const line of lines) {
+// Hard memory ceiling per JSONL entry; a huge single JSON string cannot be
+// parsed safely without a streaming JSON tokenizer, so reject it explicitly.
+const MAX_LINE_CHARS = 512 * 1024;
+const MATCH_CHUNK_CHARS = 16 * 1024;
+const MATCH_OVERLAP_CHARS = 16 * 1024;
+
+/** Incrementally scan JSONL user/assistant text without joining all messages. */
+async function matchHistoryFile(path, regex) {
+  let line = "";
+  let overlap = "";
+  let contentStarted = false;
+  // End-anchored patterns must run only at EOF, not at a temporary chunk end.
+  const endAnchored = /(^|[^\\\\])\\$$/.test(regex.source);
+  const append = (text) => {
+    if (!text) return false;
+    for (let start = 0; start < text.length; start += MATCH_CHUNK_CHARS) {
+      const candidate = overlap + text.slice(start, start + MATCH_CHUNK_CHARS);
+      if (!endAnchored && regex.test(candidate)) return true;
+      overlap = candidate.slice(-MATCH_OVERLAP_CHARS);
+    }
+    return false;
+  };
+  const processLine = (json) => {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (entry?.type !== "message") continue;
+    try { entry = JSON.parse(json); } catch { return false; }
+    if (entry?.type !== "message") return false;
     const message = entry.message;
-    if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+    if (!message || (message.role !== "user" && message.role !== "assistant")) return false;
     const content = message.content;
     const text = typeof content === "string"
-      ? content
+      ? [content]
       : Array.isArray(content)
-        ? content.filter((block) => block?.type === "text").map((block) => block.text).join(" ")
-        : "";
-    if (text) texts.push(text);
+        ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text)
+        : [];
+    for (const part of text) {
+      if (!part) continue;
+      if (contentStarted && append(" ")) return true;
+      contentStarted = true;
+      if (append(part)) return true;
+    }
+    return false;
+  };
+
+  for await (const chunk of createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 })) {
+    let start = 0;
+    while (start < chunk.length) {
+      const newline = chunk.indexOf("\\n", start);
+      const fragment = newline === -1 ? chunk.slice(start) : chunk.slice(start, newline);
+      if (line.length + fragment.length > MAX_LINE_CHARS)
+        throw new Error("Session history line too large for bounded regex search");
+      line += fragment;
+      if (newline === -1) break;
+      if (processLine(line)) return true;
+      line = "";
+      start = newline + 1;
+    }
   }
-  return texts.join(" ");
+  if (line && processLine(line)) return true;
+  return endAnchored ? regex.test(overlap) : false;
 }
 
 parentPort.on("message", async ({ pattern, sessions }) => {
@@ -41,23 +76,18 @@ parentPort.on("message", async ({ pattern, sessions }) => {
     const regex = new RegExp(pattern, "i");
     const scores = [];
     for (const { name, id, text, path, cwd } of sessions) {
-      if (name && regex.test(name)) {
-        scores.push(0);
-        continue;
-      }
-      if (regex.test(id) || regex.test(cwd)) {
-        scores.push(1);
-        continue;
-      }
-      const searchable = text === undefined ? await loadSearchText(path) : text;
-      scores.push(regex.test(searchable) ? 1 : -1);
+      if (name && regex.test(name)) { scores.push(0); continue; }
+      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }
+      scores.push(text === undefined
+        ? (await matchHistoryFile(path, regex) ? 1 : -1)
+        : (regex.test(text) ? 1 : -1));
     }
     parentPort.postMessage({ scores });
   } catch (error) {
     parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
 });
-`;
+\`;
 
 const SEARCH_BUDGET_MS = 500;
 const BATCH_SIZE = 16;
@@ -67,7 +97,7 @@ type SearchResponse = { scores?: number[]; error?: string };
 
 /**
  * Search full session texts off the UI thread. Serial batches bound the size
- * of each structured-clone transfer. Large session texts are loaded inside the
+ * of each structured-clone transfer. Large JSONL files are scanned incrementally with bounded line buffers inside the
  * worker, and an idle batch deadline terminates non-progressing regex work.
  */
 export async function filterSessionsByRegexInWorker(
