@@ -5305,6 +5305,10 @@ export class InteractiveMode {
 
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
+			if (model.provider === "account-profiles") {
+				await this.enableAccountRotation(model.id);
+				return;
+			}
 			try {
 				await this.session.setModel(model, { persist: false });
 				this.footer.invalidate();
@@ -5448,6 +5452,11 @@ export class InteractiveMode {
 	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
+				if (model.provider === "account-profiles") {
+					done();
+					await this.enableAccountRotation(model.id);
+					return;
+				}
 				try {
 					await this.session.setModel(model, { persist });
 					this.updateAvailableProviderCount();
@@ -6162,7 +6171,7 @@ export class InteractiveMode {
 
 	private async activateAccountRotation(sourceProviderId: string, virtual: Model<any>): Promise<void> {
 		try {
-			await this.session.setModel(virtual, { persist: true });
+			await this.session.setModel(virtual, { persist: true, accountRotationConsent: true });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(`Rotation enabled for ${sourceProviderId}. Each new user turn selects a healthy account; tool continuations stay on the same identity.`);
