@@ -230,6 +230,23 @@ describe("discord relay", () => {
 		await drain;
 		assert.equal(drained, true);
 	});
+
+	it("authorizes overflow notices only for the bound bot and permitted channel/thread members", async () => {
+		const { discord, relay, state } = setup();
+		const allowed = message(`<@${BOT}> stop`);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", allowed), true);
+		assert.equal(await relay.mayNotifyControlRejected("bot-b", allowed), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", message("no command")), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", message(`<@${BOT}> stop`, {
+			author: { id: "stranger", name: "stranger", bot: false },
+		})), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "unlinked" }), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "t1" }), true);
+		delete state().bindings.c1;
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", allowed), false);
+		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "t1" }), false);
+	});
+
 	it("delivers the messages since the cursor when someone allowed mentions Pi; others are ignored", async () => {
 		const { discord, sessions, relay, state } = setup();
 		discord.say("c1", message("before the bot"));
