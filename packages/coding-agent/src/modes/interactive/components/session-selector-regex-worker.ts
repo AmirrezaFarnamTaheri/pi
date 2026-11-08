@@ -67,6 +67,11 @@ parentPort.on("message", async ({ pattern, sessions, maxTextChars }) => {
     for (const { name, id, text, path, cwd } of sessions) {
       if (name && regex.test(name)) { scores.push(0); continue; }
       if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }
+      if (text !== undefined && text.length > Math.min(MAX_TEXT_CHARS, maxTextChars ?? MAX_TEXT_CHARS)) {
+        incomplete.push(id);
+        scores.push(-1);
+        continue;
+      }
       try {
         scores.push(text === undefined
           ? (await matchHistoryFile(path, regex, Math.min(MAX_TEXT_CHARS, maxTextChars ?? MAX_TEXT_CHARS)) ? 1 : -1)
