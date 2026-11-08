@@ -2664,11 +2664,12 @@ export class AgentSession {
 		const availableIds = new Set(
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
-		const consent = options.accountRotationConsent === true ||
-			this._rotationConsentSessionId === this.sessionManager.getSessionId();
-		const scopedModels = allowedCycleModels(this._scopedModels.filter((scoped) =>
-			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
-		), consent).map((scoped) => scoped);
+		const consent =
+			options.accountRotationConsent === true || this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		const scopedModels = allowedCycleModels(
+			this._scopedModels.filter((scoped) => availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`)),
+			consent,
+		);
 		const currentModel = this.model;
 		const currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
 		const nextIndex = getNextCycleIndex(currentIndex, scopedModels.length, direction);
@@ -2702,8 +2703,8 @@ export class AgentSession {
 		direction: "forward" | "backward",
 		options: ModelMutationOptions,
 	): Promise<ModelCycleResult | undefined> {
-		const consent = options.accountRotationConsent === true ||
-			this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		const consent =
+			options.accountRotationConsent === true || this._rotationConsentSessionId === this.sessionManager.getSessionId();
 		const availableModels = allowedCycleModels(this._modelRuntime.getAvailableSnapshot(), consent);
 		const currentModel = this.model;
 		const currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
