@@ -92,7 +92,7 @@ test("fork release supports an explicit manual rerun on the verified release bra
   const release = readFileSync(
     join(import.meta.dirname, "..", ".github", "workflows", "fork-github-release.yml"), "utf8",
   );
-  assert.match(release, /^on:\s*\n\s+workflow_dispatch:\s*\n\s+push:/m);
+  assert.match(release, /^on:\s*\n(?:\s*#.*\n)*\s*workflow_dispatch:\s*\n(?:\s*#.*\n)*\s*push:/m);
   assert.match(
     release,
     /if:\s*github\.repository == 'AmirrezaFarnamTaheri\/pi' && startsWith\(github\.ref, 'refs\/heads\/release\/fork-v'\)/,
