@@ -4,6 +4,9 @@
 name: Fork GitHub Release
 
 on:
+  # An opt-in rerun from Actions after the exact source SHA has passed main CI.
+  # Select release/fork-v<version> as the branch; the build job rejects other refs.
+  workflow_dispatch:
   push:
     branches:
       - "release/fork-v*"
@@ -16,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'AmirrezaFarnamTaheri/pi'
+    if: github.repository == 'AmirrezaFarnamTaheri/pi' && startsWith(github.ref, 'refs/heads/release/fork-v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
