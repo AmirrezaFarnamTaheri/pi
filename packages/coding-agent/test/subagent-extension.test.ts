@@ -325,8 +325,7 @@ describe("subagent example extension", () => {
 			// The child writes its PID before publishing the first message. Waiting
 			// only for the PID races child stdout parsing and makes this assertion flaky.
 			await waitFor(() => existsSync(pidFile));
-			await waitFor(() => updates.some((update) =>
-				(detailsOf(update).results[0]?.messages.length ?? 0) > 0));
+			await waitFor(() => updates.some((update) => (detailsOf(update).results[0]?.messages.length ?? 0) > 0));
 			const pid = Number(readFileSync(pidFile, "utf8"));
 			vi.useFakeTimers();
 			controller.abort();

@@ -68,11 +68,16 @@ import {
 	imageErrorResult,
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
+import { classifyCredentialFailure, RotationPool } from "../extensions/account-rotation-policy.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
-import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
-import { RotationPool, classifyCredentialFailure } from "../extensions/account-rotation-policy.ts";
 import { createStoredAccountAlias } from "./account-aliases.ts";
-import { addAccountProfile, loadAccountProfiles, removeAccountProfile, type AccountProfile } from "./account-profiles.ts";
+import {
+	type AccountProfile,
+	addAccountProfile,
+	loadAccountProfiles,
+	removeAccountProfile,
+} from "./account-profiles.ts";
+import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -230,9 +235,13 @@ export class ModelRuntime implements Models {
 		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
-		const accountProfilesPath = options.accountProfilesPath === null ? undefined
-			: options.accountProfilesPath ?? (options.modelsPath === null ? undefined
-				: join(dirname(options.authPath ?? join(getAgentDir(), "auth.json")), "account-profiles.json"));
+		const accountProfilesPath =
+			options.accountProfilesPath === null
+				? undefined
+				: (options.accountProfilesPath ??
+					(options.modelsPath === null
+						? undefined
+						: join(dirname(options.authPath ?? join(getAgentDir(), "auth.json")), "account-profiles.json")));
 		const config = await ModelConfig.load(modelsPath);
 		const modelsStore =
 			options.modelsStore ??
@@ -553,7 +562,8 @@ export class ModelRuntime implements Models {
 	private restoreAccountAliases(): void {
 		if (!this.accountProfilesPath) return;
 		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
-			if (this.models.getProvider(profile.id)) throw new Error(`Account alias conflicts with provider: ${profile.id}`);
+			if (this.models.getProvider(profile.id))
+				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
 			this.accountProfiles.set(profile.id, profile);
 		}
 		// Some providers are registered by extensions after ModelRuntime.create().
@@ -567,7 +577,11 @@ export class ModelRuntime implements Models {
 		for (const profile of this.accountProfiles.values()) {
 			if (sourceFilter && profile.sourceProviderId !== sourceFilter) continue;
 			if (this.nativeExtensionProviders.has(profile.id)) continue;
-			if (this.builtins.has(profile.id) || this.extensionProviders.has(profile.id) || this.models.getProvider(profile.id)) {
+			if (
+				this.builtins.has(profile.id) ||
+				this.extensionProviders.has(profile.id) ||
+				this.models.getProvider(profile.id)
+			) {
 				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
 			}
 			const source = this.models.getProvider(profile.sourceProviderId);
@@ -590,7 +604,8 @@ export class ModelRuntime implements Models {
 		}
 		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
 		try {
-			if (this.models.getProvider(profile.id)) throw new Error("Account identity conflicts with an existing provider");
+			if (this.models.getProvider(profile.id))
+				throw new Error("Account identity conflicts with an existing provider");
 			const provider = createStoredAccountAlias(source, profile.id, profile.label);
 			this.registerNativeProvider(provider);
 			this.accountProfiles.set(profile.id, profile);
@@ -621,9 +636,7 @@ export class ModelRuntime implements Models {
 
 	/** Build an opt-in virtual model per source, not a silent global credential switch. */
 	private configureAutomaticAccountRotation(sourceFilter?: string): void {
-		const sources = new Set(
-			[...this.accountProfiles.values()].map((profile) => profile.sourceProviderId),
-		);
+		const sources = new Set([...this.accountProfiles.values()].map((profile) => profile.sourceProviderId));
 		const candidates = sourceFilter ? [sourceFilter] : [...sources];
 		for (const sourceId of candidates) {
 			const aliases = [...this.accountProfiles.values()]
@@ -644,24 +657,34 @@ export class ModelRuntime implements Models {
 				name: `Rotate ${this.getProvider(sourceId)?.name ?? sourceId} (${memberIds.length} accounts)`,
 				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 				shouldRetry: (message) =>
-					message.stopReason === "error" && memberSet.has(message.provider) &&
+					message.stopReason === "error" &&
+					memberSet.has(message.provider) &&
 					classifyCredentialFailure(message.errorMessage ?? "") !== undefined &&
-					message.content.every((block) => block.type !== "toolCall" &&
-						(block.type !== "text" || block.text.length === 0) &&
-						(block.type !== "thinking" || block.thinking.length === 0)),
+					message.content.every(
+						(block) =>
+							block.type !== "toolCall" &&
+							(block.type !== "text" || block.text.length === 0) &&
+							(block.type !== "thinking" || block.thinking.length === 0),
+					),
 				route: (request) => {
 					if (request.signal?.aborted) throw new Error("Account rotation cancelled");
 					const previous = request.previous?.model;
 					const failed = request.failed?.model;
 					const state = (request.state as { active?: { provider: string; model: string } } | undefined)?.active;
-					const retained = request.reason === "retry" ? failed : request.reason === "continuation" ? previous : undefined;
-					const preferredId = retained && memberSet.has(retained.provider)
-						? retained.id
-						: state && memberSet.has(state.provider) ? state.model
-						: previous && memberSet.has(previous.provider) ? previous.id : undefined;
-					const primaryModelId = preferredId && memberIds.some((id) => !!this.getPhysicalModel(id, preferredId))
-						? preferredId
-						: memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
+					const retained =
+						request.reason === "retry" ? failed : request.reason === "continuation" ? previous : undefined;
+					const preferredId =
+						retained && memberSet.has(retained.provider)
+							? retained.id
+							: state && memberSet.has(state.provider)
+								? state.model
+								: previous && memberSet.has(previous.provider)
+									? previous.id
+									: undefined;
+					const primaryModelId =
+						preferredId && memberIds.some((id) => !!this.getPhysicalModel(id, preferredId))
+							? preferredId
+							: memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
 					if (!primaryModelId) throw new Error("No physical models found for these accounts");
 					let pool = pools.get(primaryModelId);
 					if (!pool) {
@@ -669,12 +692,15 @@ export class ModelRuntime implements Models {
 						pools.set(primaryModelId, pool);
 					}
 					for (const provider of memberIds) {
-						pool.setAvailable({ provider, model: primaryModelId },
-							!!this.getPhysicalModel(provider, primaryModelId) && this.hasConfiguredAuth(provider));
+						pool.setAvailable(
+							{ provider, model: primaryModelId },
+							!!this.getPhysicalModel(provider, primaryModelId) && this.hasConfiguredAuth(provider),
+						);
 					}
 					const toTarget = (model: Model<Api> | undefined) =>
 						model && memberSet.has(model.provider) && model.id === primaryModelId
-							? { provider: model.provider, model: model.id } : undefined;
+							? { provider: model.provider, model: model.id }
+							: undefined;
 					const previousTarget = toTarget(previous);
 					if (previousTarget && request.reason !== "retry") pool.markSuccess(previousTarget);
 					const failedTarget = toTarget(failed);
@@ -683,13 +709,20 @@ export class ModelRuntime implements Models {
 						reason: request.reason,
 						previous: previousTarget,
 						active: state && state.model === primaryModelId && memberSet.has(state.provider) ? state : undefined,
-						...(failedTarget && failedMessage ? { failed: {
-							target: failedTarget,
-							errorMessage: failedMessage.errorMessage ?? "",
-							hasOutput: failedMessage.content.some((block) => block.type === "toolCall" ||
-								(block.type === "text" && block.text.length > 0) ||
-								(block.type === "thinking" && block.thinking.length > 0)),
-						} } : {}),
+						...(failedTarget && failedMessage
+							? {
+									failed: {
+										target: failedTarget,
+										errorMessage: failedMessage.errorMessage ?? "",
+										hasOutput: failedMessage.content.some(
+											(block) =>
+												block.type === "toolCall" ||
+												(block.type === "text" && block.text.length > 0) ||
+												(block.type === "thinking" && block.thinking.length > 0),
+										),
+									},
+								}
+							: {}),
 					});
 					const model = this.getPhysicalModel(result.target.provider, result.target.model);
 					if (!model) throw new Error("Selected account model is no longer available");
@@ -1185,7 +1218,12 @@ export class ModelRuntime implements Models {
 		const staged = new Map<string, ProviderConfigInput>();
 		for (const { providerId, config } of registrations) {
 			if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
-			validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
+			validateExtensionProvider(
+				providerId,
+				this.builtins.get(providerId),
+				this.config.getProvider(providerId),
+				config,
+			);
 			const previous = staged.get(providerId) ?? this.extensionProviders.get(providerId);
 			const effective: ProviderConfigInput = { ...previous };
 			for (const [key, value] of Object.entries(config)) {

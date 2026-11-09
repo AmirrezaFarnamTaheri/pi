@@ -162,12 +162,14 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
 						exitedBeforeDeadlineAfterMs = shellExitedAfterMs;
-						cancelOutputWait?.(new ShellTimeoutError(
-							timeout,
-							shellExitedAfterMs !== undefined
-								? { exitCode: child.exitCode ?? 1, afterSeconds: Math.round(shellExitedAfterMs / 100) / 10 }
-								: undefined,
-						));
+						cancelOutputWait?.(
+							new ShellTimeoutError(
+								timeout,
+								shellExitedAfterMs !== undefined
+									? { exitCode: child.exitCode ?? 1, afterSeconds: Math.round(shellExitedAfterMs / 100) / 10 }
+									: undefined,
+							),
+						);
 						child.stdout?.resume();
 						child.stderr?.resume();
 						// Also when the shell already exited: on Unix the group kill still reaches background
@@ -204,21 +206,23 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					child.stdout?.pause();
 					child.stderr?.pause();
 					let pending!: Promise<void>;
-					pending = Promise.resolve(result).then(
-						() => {},
-						(error: unknown) => failOutput(error),
-					).finally(() => {
-						pendingOutput.delete(pending);
-						if (pendingOutput.size === 0 && !hasOutputFailure) {
-							while (queuedChunks.length > 0 && pendingOutput.size === 0 && !hasOutputFailure) {
-								deliverChunk(queuedChunks.shift()!);
-							}
+					pending = Promise.resolve(result)
+						.then(
+							() => {},
+							(error: unknown) => failOutput(error),
+						)
+						.finally(() => {
+							pendingOutput.delete(pending);
 							if (pendingOutput.size === 0 && !hasOutputFailure) {
-								child.stdout?.resume();
-								child.stderr?.resume();
+								while (queuedChunks.length > 0 && pendingOutput.size === 0 && !hasOutputFailure) {
+									deliverChunk(queuedChunks.shift()!);
+								}
+								if (pendingOutput.size === 0 && !hasOutputFailure) {
+									child.stdout?.resume();
+									child.stderr?.resume();
+								}
 							}
-						}
-					});
+						});
 					pendingOutput.add(pending);
 				};
 				const onChunk = (data: Buffer) => {

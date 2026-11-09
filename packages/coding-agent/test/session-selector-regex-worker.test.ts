@@ -53,8 +53,9 @@ describe("isolated session regex search", () => {
 	it("cancels a search before starting work", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		await expect(filterSessionsByRegexInWorker([session("one", "x")], "x", "recent", controller.signal))
-			.rejects.toThrow(/cancelled/i);
+		await expect(
+			filterSessionsByRegexInWorker([session("one", "x")], "x", "recent", controller.signal),
+		).rejects.toThrow(/cancelled/i);
 	});
 
 	it("cancels a catastrophic regex after execution begins without blocking the event loop", async () => {
@@ -74,11 +75,30 @@ describe("isolated session regex search", () => {
 		try {
 			const path = join(directory, "large.jsonl");
 			const first = "x".repeat(150_000) + "needle";
-			writeFileSync(path, [
-				JSON.stringify({ type: "session", version: 3, id: "large", cwd: directory, timestamp: "2026-01-01T00:00:00Z" }),
-				JSON.stringify({ type: "message", id: "1", message: { role: "user", content: first }, timestamp: "2026-01-01T00:00:01Z" }),
-				JSON.stringify({ type: "message", id: "2", message: { role: "assistant", content: [{ type: "text", text: "next" }] }, timestamp: "2026-01-01T00:00:02Z" }),
-			].join("\n") + "\n");
+			writeFileSync(
+				path,
+				[
+					JSON.stringify({
+						type: "session",
+						version: 3,
+						id: "large",
+						cwd: directory,
+						timestamp: "2026-01-01T00:00:00Z",
+					}),
+					JSON.stringify({
+						type: "message",
+						id: "1",
+						message: { role: "user", content: first },
+						timestamp: "2026-01-01T00:00:01Z",
+					}),
+					JSON.stringify({
+						type: "message",
+						id: "2",
+						message: { role: "assistant", content: [{ type: "text", text: "next" }] },
+						timestamp: "2026-01-01T00:00:02Z",
+					}),
+				].join("\n") + "\n",
+			);
 			const item = { ...session("large", first + " next"), path, cwd: directory };
 			const result = await filterSessionsByRegexInWorker([item], "needle next$", "recent");
 			expect(result.map((value) => value.id)).toEqual(["large"]);
@@ -92,7 +112,10 @@ describe("isolated session regex search", () => {
 		try {
 			const path = join(directory, "many.jsonl");
 			const lines = Array.from({ length: 1_000 }, (_, id) =>
-				JSON.stringify({ type: "message", message: { role: "user", content: "prefix " + "x".repeat(1_000) + (id === 999 ? " final-marker" : "") } }),
+				JSON.stringify({
+					type: "message",
+					message: { role: "user", content: "prefix " + "x".repeat(1_000) + (id === 999 ? " final-marker" : "") },
+				}),
 			);
 			writeFileSync(path, lines.join("\n") + "\n");
 			const item = { ...session("many", "x".repeat(100_000)), path };
@@ -108,12 +131,20 @@ describe("isolated session regex search", () => {
 		try {
 			const hugePath = join(directory, "oversized.jsonl");
 			const validPath = join(directory, "valid.jsonl");
-			writeFileSync(hugePath, JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(1_200_000) } }) + "\n");
-			writeFileSync(validPath, JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }) + "\n");
+			writeFileSync(
+				hugePath,
+				JSON.stringify({ type: "message", message: { role: "user", content: "x".repeat(1_200_000) } }) + "\n",
+			);
+			writeFileSync(
+				validPath,
+				JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }) + "\n",
+			);
 			const huge = { ...session("oversized", "x".repeat(100_000)), path: hugePath };
 			const valid = { ...session("valid", "x".repeat(100_000)), path: validPath };
 			const failures: string[][] = [];
-			const result = await filterSessionsByRegexInWorker([huge, valid], "needle", "recent", undefined, (ids) => failures.push(ids));
+			const result = await filterSessionsByRegexInWorker([huge, valid], "needle", "recent", undefined, (ids) =>
+				failures.push(ids),
+			);
 			expect(result.map((entry) => entry.id)).toEqual(["valid"]);
 			expect(failures).toEqual([["oversized"]]);
 		} finally {
@@ -125,10 +156,13 @@ describe("isolated session regex search", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-regex-anchors-"));
 		try {
 			const path = join(directory, "anchored.jsonl");
-			writeFileSync(path, [
-				JSON.stringify({ type: "message", message: { role: "user", content: "start-" + "x".repeat(150_000) } }),
-				JSON.stringify({ type: "message", message: { role: "assistant", content: "final" } }),
-			].join("\n") + "\n");
+			writeFileSync(
+				path,
+				[
+					JSON.stringify({ type: "message", message: { role: "user", content: "start-" + "x".repeat(150_000) } }),
+					JSON.stringify({ type: "message", message: { role: "assistant", content: "final" } }),
+				].join("\n") + "\n",
+			);
 			const item = { ...session("anchored", "x".repeat(100_000)), path };
 			const begin = await filterSessionsByRegexInWorker([item], "^final", "recent");
 			expect(begin).toEqual([]);
@@ -144,19 +178,45 @@ describe("isolated session regex search", () => {
 		try {
 			const path = join(directory, "full.jsonl");
 			const first = "BEGIN" + "q".repeat(170_000) + "END";
-			writeFileSync(path, [
-				JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "hello" }, { type: "text", text: "world" }] } }),
-				JSON.stringify({ type: "message", message: { role: "assistant", content: [
-					{ type: "text", text: "a" }, { type: "text", text: "" }, { type: "text", text: "b" },
-				] } }),
-				JSON.stringify({ type: "message", message: { role: "user", content: first } }),
-				JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }),
-			].join("\n") + "\n");
+			writeFileSync(
+				path,
+				[
+					JSON.stringify({
+						type: "message",
+						message: {
+							role: "user",
+							content: [
+								{ type: "text", text: "hello" },
+								{ type: "text", text: "world" },
+							],
+						},
+					}),
+					JSON.stringify({
+						type: "message",
+						message: {
+							role: "assistant",
+							content: [
+								{ type: "text", text: "a" },
+								{ type: "text", text: "" },
+								{ type: "text", text: "b" },
+							],
+						},
+					}),
+					JSON.stringify({ type: "message", message: { role: "user", content: first } }),
+					JSON.stringify({ type: "message", message: { role: "user", content: "needle" } }),
+				].join("\n") + "\n",
+			);
 			const item = { ...session("full", "x".repeat(100_000)), path };
 			for (const [pattern, present] of [
-				["^hello world", true], ["a {2}b", true], ["BEGIN[\\s\\S]*END", true],
-				["^absent|needle", true], ["(?:needle$)", true], ["foo(?!bar)", false],
-				["x{20000}$", false], ["^needle", false], ["^missing|absent", false],
+				["^hello world", true],
+				["a {2}b", true],
+				["BEGIN[\\s\\S]*END", true],
+				["^absent|needle", true],
+				["(?:needle$)", true],
+				["foo(?!bar)", false],
+				["x{20000}$", false],
+				["^needle", false],
+				["^missing|absent", false],
 			] as const) {
 				const result = await filterSessionsByRegexInWorker([item], pattern, "recent");
 				expect(result.length, pattern).toBe(present ? 1 : 0);
@@ -170,14 +230,22 @@ describe("isolated session regex search", () => {
 		const directory = mkdtempSync(join(tmpdir(), "pi-regex-memory-limit-"));
 		try {
 			const path = join(directory, "large.jsonl");
-			writeFileSync(path, Array.from({ length: 1_000 }, (_, index) =>
-				JSON.stringify({ type: "message", message: { role: "user",
-					content: `line ${index} ` + "x".repeat(100) } }),
-			).join("\n") + "\n");
+			writeFileSync(
+				path,
+				Array.from({ length: 1_000 }, (_, index) =>
+					JSON.stringify({
+						type: "message",
+						message: { role: "user", content: `line ${index} ` + "x".repeat(100) },
+					}),
+				).join("\n") + "\n",
+			);
 			const fixture = { ...session("large", "x".repeat(100_000)), path };
 			const incomplete: string[][] = [];
 			const result = await filterSessionsByRegexInWorker(
-				[fixture], "no-match", "recent", undefined,
+				[fixture],
+				"no-match",
+				"recent",
+				undefined,
 				(ids) => incomplete.push(ids),
 				{ maxSessionTextChars: 16_384 },
 			);
@@ -186,20 +254,17 @@ describe("isolated session regex search", () => {
 			// The production cap is 16 MiB; the test uses a much smaller injected
 			// cap to deterministically prove we stop retaining text past the limit.
 			await expect(
-					filterSessionsByRegexInWorker(
-						[fixture], "x", "recent", undefined, undefined,
-						{ maxSessionTextChars: 32 * 1024 * 1024 },
-					),
-				).rejects.toThrow(/cap/i);
+				filterSessionsByRegexInWorker([fixture], "x", "recent", undefined, undefined, {
+					maxSessionTextChars: 32 * 1024 * 1024,
+				}),
+			).rejects.toThrow(/cap/i);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
 
 	it("preserves recent order across worker batches", async () => {
-		const items = Array.from({ length: 51 }, (_, index) =>
-			session(`s${index}`, index % 3 === 0 ? "match" : "miss"),
-		);
+		const items = Array.from({ length: 51 }, (_, index) => session(`s${index}`, index % 3 === 0 ? "match" : "miss"));
 		const result = await filterSessionsByRegexInWorker(items, "match", "recent");
 		expect(result.map((item) => item.id)).toEqual(items.filter((_, index) => index % 3 === 0).map((item) => item.id));
 	});

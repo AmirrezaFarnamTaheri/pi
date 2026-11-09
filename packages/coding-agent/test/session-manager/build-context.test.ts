@@ -3,11 +3,11 @@ import {
 	type BranchSummaryEntry,
 	buildContextEntries,
 	buildSessionContext,
-	SessionManager,
 	type CompactionEntry,
 	type CustomEntry,
 	type ModelChangeEntry,
 	type SessionEntry,
+	SessionManager,
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "../../src/core/session-manager.ts";
@@ -307,10 +307,7 @@ describe("buildSessionContext", () => {
 
 describe("corrupt session parent chains", () => {
 	it("fails promptly when the indexed entry ancestry contains a cycle", () => {
-		const entries: SessionEntry[] = [
-			custom("node-a", "node-b", "cycle"),
-			custom("node-b", "node-a", "cycle"),
-		];
+		const entries: SessionEntry[] = [custom("node-a", "node-b", "cycle"), custom("node-b", "node-a", "cycle")];
 		const index = new Map(entries.map((entry) => [entry.id, entry]));
 		const originalGet = index.get.bind(index);
 		let reads = 0;
@@ -342,8 +339,10 @@ describe("long-running agent session hot paths", () => {
 	});
 
 	it("does not overflow the JS argument limit after a large post-compaction history", () => {
-		const entries: SessionEntry[] = [msg("root", null, "user", "first"),
-			compaction("compact", "root", "checkpoint", "root")];
+		const entries: SessionEntry[] = [
+			msg("root", null, "user", "first"),
+			compaction("compact", "root", "checkpoint", "root"),
+		];
 		let previous = "compact";
 		for (let index = 0; index < 140_000; index++) {
 			const id = `state-${index}`;

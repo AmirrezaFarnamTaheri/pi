@@ -102,13 +102,25 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.addChild(new Spacer(1));
 
 		// Add title
-		const title = mode === "add" ? "Add a separate account" : mode === "login" ? "Connect a provider" : "Disconnect a provider";
+		const title =
+			mode === "add" ? "Add a separate account" : mode === "login" ? "Connect a provider" : "Disconnect a provider";
 		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
 		this.addChild(new Spacer(1));
 
-		this.addChild(new TruncatedText(theme.fg("muted", mode === "add"
-			? "A new identity is created; existing sign-ins stay connected."
-			: mode === "login" ? "Select a provider and authentication method." : "Only the selected stored credential will be removed."), 1, 0));
+		this.addChild(
+			new TruncatedText(
+				theme.fg(
+					"muted",
+					mode === "add"
+						? "A new identity is created; existing sign-ins stay connected."
+						: mode === "login"
+							? "Select a provider and authentication method."
+							: "Only the selected stored credential will be removed.",
+				),
+				1,
+				0,
+			),
+		);
 		this.addChild(new Spacer(1));
 		this.searchInput = new Input({ prompt: "⌕ ", placeholder: "Search providers…" });
 		if (initialSearchInput) {
@@ -152,8 +164,16 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 
 	private updateList(): void {
 		this.listContainer.clear();
-		this.listContainer.addChild(new TruncatedText(theme.fg("muted",
-			`  ${this.filteredProviders.length} match${this.filteredProviders.length === 1 ? "" : "es"}`), 1, 0));
+		this.listContainer.addChild(
+			new TruncatedText(
+				theme.fg(
+					"muted",
+					`  ${this.filteredProviders.length} match${this.filteredProviders.length === 1 ? "" : "es"}`,
+				),
+				1,
+				0,
+			),
+		);
 		this.listContainer.addChild(new Spacer(1));
 
 		const startIndex = Math.max(

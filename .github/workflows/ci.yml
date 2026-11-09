@@ -38,7 +38,7 @@ jobs:
       - name: Export complete native Biome formatting results
         shell: bash
         run: |
-          npm run format || true
+          npm run format --workspace apps/p2 || true
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
           import { readFileSync } from "node:fs";

@@ -216,17 +216,14 @@ export class LiveQuery extends Source {
 	}
 
 	/** A run inside the commit step `step`, after its writes: the rows, or the failure; it never throws. */
-	async rerun(
-		step: Step,
-		context: Context,
-		reads?: Map<string, Promise<StoredRow[]>>,
-	): Promise<QueryRun> {
+	async rerun(step: Step, context: Context, reads?: Map<string, Promise<StoredRow[]>>): Promise<QueryRun> {
 		try {
 			this.#count(context);
 			const { sql, params } = this.#statement;
-			const key = JSON.stringify([sql, params.map((value) =>
-				typeof value === "bigint" ? ["bigint", value.toString()] : ["value", value],
-			)]);
+			const key = JSON.stringify([
+				sql,
+				params.map((value) => (typeof value === "bigint" ? ["bigint", value.toString()] : ["value", value])),
+			]);
 			let stored = reads?.get(key);
 			if (!stored) {
 				stored = step.all<StoredRow>(sql, ...params);

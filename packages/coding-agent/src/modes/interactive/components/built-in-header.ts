@@ -36,4 +36,3 @@ export class BuiltInHeader extends ExpandableText {
 		return { handled: true };
 	}
 }
-

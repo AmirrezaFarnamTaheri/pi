@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertAccountRotationConsent, allowedCycleModels } from "../src/core/account-rotation-consent.ts";
+import { allowedCycleModels, assertAccountRotationConsent } from "../src/core/account-rotation-consent.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
+import type { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -28,7 +28,9 @@ describe("cross-account model selection requires opt-in", () => {
 describe("rotation consent is scoped to each session transcript", () => {
 	it("permits an approved rotation only while the same session remains active", () => {
 		expect(() => assertAccountRotationConsent("account-profiles", true, "session-1", "session-1")).not.toThrow();
-		expect(() => assertAccountRotationConsent("account-profiles", true, "session-1", "session-2")).toThrow(/consent/i);
+		expect(() => assertAccountRotationConsent("account-profiles", true, "session-1", "session-2")).toThrow(
+			/consent/i,
+		);
 	});
 
 	it("cycles past an unconsented account group without trapping model navigation", () => {
@@ -66,9 +68,7 @@ describe("AgentSession model mutation regression (not merely a consent helper)",
 			modelRuntime: runtime,
 			sessionManager: SessionManager.inMemory(),
 			noTools: "all",
-			...(scoped
-				? { scopedModels: [{ model: original }, { model: virtual }, { model: ordinary }] }
-				: {}),
+			...(scoped ? { scopedModels: [{ model: original }, { model: virtual }, { model: ordinary }] } : {}),
 		});
 		return { session, original, virtual, ordinary };
 	}
@@ -122,7 +122,9 @@ describe("interactive account rotation consent and cancellation", () => {
 			},
 		};
 		mode.showSelector = (factory) => {
-			const result = factory(() => { cancelled++; });
+			const result = factory(() => {
+				cancelled++;
+			});
 			selector = result.component;
 		};
 		mode.showError = (error) => errors.push(error);
@@ -149,10 +151,12 @@ describe("interactive account rotation consent and cancellation", () => {
 			getSelector().handleInput("\n");
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(errors).toEqual([]);
-			expect(chosen).toEqual([{
-				model: { provider: "account-profiles", id: "anthropic", name: "Anthropic accounts" },
-				options: { persist, accountRotationConsent: true },
-			}]);
+			expect(chosen).toEqual([
+				{
+					model: { provider: "account-profiles", id: "anthropic", name: "Anthropic accounts" },
+					options: { persist, accountRotationConsent: true },
+				},
+			]);
 		});
 	}
 });

@@ -61,8 +61,8 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
-import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
 import { allowedCycleModels, assertAccountRotationConsent } from "./account-rotation-consent.ts";
+import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -176,7 +176,7 @@ export function markRuntimeStreamFunction(streamFn: StreamFn, modelRuntime: Mode
 // Skill Block Parsing
 // ============================================================================
 
-export { parseSkillBlock, type ParsedSkillBlock } from "./agent-session-utils.ts";
+export { type ParsedSkillBlock, parseSkillBlock } from "./agent-session-utils.ts";
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {
@@ -235,7 +235,6 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // ============================================================================
 // Types
 // ============================================================================
-
 
 export interface AgentSessionConfig {
 	agent: Agent;
@@ -353,7 +352,6 @@ interface ToolDefinitionEntry {
 	definition: ToolDefinition;
 	sourceInfo: SourceInfo;
 }
-
 
 // ============================================================================
 // AgentSession Class
@@ -1900,7 +1898,12 @@ export class AgentSession {
 	 */
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
 		if (this.model?.provider === "account-profiles")
-			assertAccountRotationConsent(this.model.provider, true, this._rotationConsentSessionId, this.sessionManager.getSessionId());
+			assertAccountRotationConsent(
+				this.model.provider,
+				true,
+				this._rotationConsentSessionId,
+				this.sessionManager.getSessionId(),
+			);
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -2161,7 +2164,12 @@ export class AgentSession {
 	 */
 	private async _preparePrompt(text: string, options?: PromptOptions): Promise<BeforeAgentStartTrigger | undefined> {
 		if (this.model?.provider === "account-profiles")
-			assertAccountRotationConsent(this.model.provider, true, this._rotationConsentSessionId, this.sessionManager.getSessionId());
+			assertAccountRotationConsent(
+				this.model.provider,
+				true,
+				this._rotationConsentSessionId,
+				this.sessionManager.getSessionId(),
+			);
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 
@@ -2612,7 +2620,8 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(model);
 		this.agent.state.model = model;
-		this._rotationConsentSessionId = model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
+		this._rotationConsentSessionId =
+			model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2665,7 +2674,8 @@ export class AgentSession {
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
 		const consent =
-			options.accountRotationConsent === true || this._rotationConsentSessionId === this.sessionManager.getSessionId();
+			options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
 		// Scoped entries wrap the model, so filter their provider through
 		// scoped.model rather than treating the entry itself as a Model.
 		const scopedModels = this._scopedModels.filter(
@@ -2683,7 +2693,8 @@ export class AgentSession {
 
 		// Apply model
 		this.agent.state.model = next.model;
-		this._rotationConsentSessionId = next.model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
+		this._rotationConsentSessionId =
+			next.model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2707,7 +2718,8 @@ export class AgentSession {
 		options: ModelMutationOptions,
 	): Promise<ModelCycleResult | undefined> {
 		const consent =
-			options.accountRotationConsent === true || this._rotationConsentSessionId === this.sessionManager.getSessionId();
+			options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
 		const availableModels = allowedCycleModels(this._modelRuntime.getAvailableSnapshot(), consent);
 		const currentModel = this.model;
 		const currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
@@ -2718,7 +2730,8 @@ export class AgentSession {
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
 		this.agent.state.model = nextModel;
-		this._rotationConsentSessionId = nextModel.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
+		this._rotationConsentSessionId =
+			nextModel.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
@@ -3848,7 +3861,10 @@ export class AgentSession {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
 		const selected = this.model;
-		return (selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) || isRetryableAssistantError(message);
+		return (
+			(selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) ||
+			isRetryableAssistantError(message)
+		);
 	}
 
 	/**

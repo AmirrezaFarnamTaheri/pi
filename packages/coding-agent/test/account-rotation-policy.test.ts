@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RotationPool, classifyCredentialFailure } from "../src/extensions/account-rotation-policy.ts";
+import { classifyCredentialFailure, RotationPool } from "../src/extensions/account-rotation-policy.ts";
 
 const accounts = [
 	{ provider: "anthropic", model: "sonnet" },
@@ -18,28 +18,53 @@ describe("AccountRotationPool", () => {
 	it("fails over on a pre-output 429 and skips the failed key during cooldown", () => {
 		const pool = new RotationPool(accounts, 1_000);
 		pool.choose({ reason: "user", now: 0 });
-		expect(pool.choose({ reason: "retry", failed: { target: accounts[0], errorMessage: "HTTP 429", hasOutput: false }, now: 1 }).index).toBe(1);
+		expect(
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[0], errorMessage: "HTTP 429", hasOutput: false },
+				now: 1,
+			}).index,
+		).toBe(1);
 		expect(pool.choose({ reason: "user", now: 500 }).index).toBe(2);
 		expect(pool.choose({ reason: "user", now: 1_100 }).index).toBe(0);
 	});
 
 	it("quarantines invalid credentials for longer than ordinary overload", () => {
 		const pool = new RotationPool(accounts, 1_000);
-		expect(pool.choose({ reason: "retry", failed: { target: accounts[0], errorMessage: "401 invalid api key", hasOutput: false }, now: 0 }).index).toBe(1);
+		expect(
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[0], errorMessage: "401 invalid api key", hasOutput: false },
+				now: 0,
+			}).index,
+		).toBe(1);
 		expect(pool.status(1_500)[0]?.readyInMs).toBeGreaterThan(0);
 	});
 
 	it("does not move accounts after partial output or content-policy failures", () => {
 		const pool = new RotationPool(accounts);
-		for (const [errorMessage, hasOutput] of [["429 rate limit", true], ["403 content policy", false], ["context length exceeded", false]] as const) {
-			expect(pool.choose({ reason: "retry", failed: { target: accounts[1], errorMessage, hasOutput }, now: 0 }).index).toBe(1);
+		for (const [errorMessage, hasOutput] of [
+			["429 rate limit", true],
+			["403 content policy", false],
+			["context length exceeded", false],
+		] as const) {
+			expect(
+				pool.choose({ reason: "retry", failed: { target: accounts[1], errorMessage, hasOutput }, now: 0 }).index,
+			).toBe(1);
 		}
 	});
 
 	it("stops when all credentials are cooling down and allows manual reset", () => {
 		const pool = new RotationPool(accounts, 1_000);
-		for (const account of accounts.slice(0, 2)) pool.choose({ reason: "retry", failed: { target: account, errorMessage: "429", hasOutput: false }, now: 0 });
-		expect(() => pool.choose({ reason: "retry", failed: { target: accounts[2], errorMessage: "429", hasOutput: false }, now: 0 })).toThrow(/all.*cooling down/i);
+		for (const account of accounts.slice(0, 2))
+			pool.choose({ reason: "retry", failed: { target: account, errorMessage: "429", hasOutput: false }, now: 0 });
+		expect(() =>
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[2], errorMessage: "429", hasOutput: false },
+				now: 0,
+			}),
+		).toThrow(/all.*cooling down/i);
 		pool.reset();
 		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(0);
 	});
@@ -63,7 +88,6 @@ describe("AccountRotationPool", () => {
 		expect(classifyCredentialFailure("context window exceeded")).toBeUndefined();
 	});
 });
-
 
 describe("account strategies and quota-aware health (CortexKit / pi-antigravity-auth adoption)", () => {
 	it("supports sticky selection across user turns and skips a disabled identity on new requests", () => {
@@ -100,11 +124,27 @@ describe("account strategies and quota-aware health (CortexKit / pi-antigravity-
 
 	it("applies exponential credential-specific backoff and honours a server reset hint", () => {
 		const pool = new RotationPool(accounts, 1_000);
-		pool.choose({ reason: "retry", now: 0, failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false } });
+		pool.choose({
+			reason: "retry",
+			now: 0,
+			failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false },
+		});
 		expect(pool.status(0)[0]?.readyInMs).toBe(1_000);
-		pool.choose({ reason: "retry", now: 1_001, failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false } });
+		pool.choose({
+			reason: "retry",
+			now: 1_001,
+			failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false },
+		});
 		expect(pool.status(1_001)[0]?.readyInMs).toBe(2_000);
-		pool.choose({ reason: "retry", now: 3_002, failed: { target: accounts[0]!, errorMessage: "Usage Limit Reached; limit will reset in 10 minutes", hasOutput: false } });
+		pool.choose({
+			reason: "retry",
+			now: 3_002,
+			failed: {
+				target: accounts[0]!,
+				errorMessage: "Usage Limit Reached; limit will reset in 10 minutes",
+				hasOutput: false,
+			},
+		});
 		expect(pool.status(3_002)[0]?.readyInMs).toBe(600_000);
 		expect(pool.status(3_002)[0]?.failureCount).toBe(3);
 		pool.markSuccess(accounts[0]!);
@@ -137,7 +177,12 @@ describe("account strategies and quota-aware health (CortexKit / pi-antigravity-
 	it("keeps normal content, policy, and post-output failures in the original account", () => {
 		const pool = new RotationPool(accounts, 1000, "hybrid");
 		pool.reportQuota(accounts[0]!, 0.99);
-		expect(pool.choose({ reason: "retry", failed: { target: accounts[1]!, errorMessage: "429 rate limit", hasOutput: true } }).index).toBe(1);
+		expect(
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[1]!, errorMessage: "429 rate limit", hasOutput: true },
+			}).index,
+		).toBe(1);
 		expect(pool.status()[1]?.failureCount).toBe(0);
 	});
 });
@@ -157,7 +202,11 @@ describe("rotation account safety regressions", () => {
 		const health = new Map();
 		const first = new RotationPool(accounts, 1000, "round-robin", Math.random, health);
 		const second = new RotationPool(accounts.slice(0, 2), 1000, "round-robin", Math.random, health);
-		first.choose({ reason: "retry", failed: { target: accounts[0]!, errorMessage: "429 rate limit", hasOutput: false }, now: 10 });
+		first.choose({
+			reason: "retry",
+			failed: { target: accounts[0]!, errorMessage: "429 rate limit", hasOutput: false },
+			now: 10,
+		});
 		expect(second.status(11)[0]?.readyInMs).toBe(999);
 		expect(second.choose({ reason: "user", now: 11 }).target.provider).toBe(accounts[1]!.provider);
 		second.markSuccess(accounts[0]!);
@@ -181,9 +230,15 @@ describe("rotation account safety regressions", () => {
 
 	it("recognizes retry after seconds and quota reset timestamps without leaking tokens", () => {
 		const pool = new RotationPool(accounts, 1_000);
-		pool.choose({ reason: "retry", now: 1, failed: {
-			target: accounts[0]!, errorMessage: "429 retry-after: 120", hasOutput: false,
-		} });
+		pool.choose({
+			reason: "retry",
+			now: 1,
+			failed: {
+				target: accounts[0]!,
+				errorMessage: "429 retry-after: 120",
+				hasOutput: false,
+			},
+		});
 		expect(pool.status(1)[0]?.readyInMs).toBe(120_000);
 	});
 });
@@ -201,17 +256,18 @@ describe("rotation state restored after another provider was selected", () => {
 	});
 });
 
-
 describe("pinned account retry safety", () => {
 	it("never sends a retry to a different account when the pinned account receives 429", () => {
 		const pool = new RotationPool(accounts, 1_000);
 		pool.pin(accounts[0]!);
 		expect(pool.choose({ reason: "user", now: 0 }).index).toBe(0);
-		expect(() => pool.choose({
-			reason: "retry",
-			failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false },
-			now: 1,
-		})).toThrow(/pinned account/i);
+		expect(() =>
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[0]!, errorMessage: "HTTP 429", hasOutput: false },
+				now: 1,
+			}),
+		).toThrow(/pinned account/i);
 		expect(pool.status(1)[0]?.failureCount).toBe(1);
 		expect(pool.status(1)[0]?.pinned).toBe(true);
 		expect(() => pool.choose({ reason: "user", now: 10 })).toThrow(/pinned account/i);
@@ -221,10 +277,12 @@ describe("pinned account retry safety", () => {
 	it("does not switch to a newly pinned identity on another account's failing request", () => {
 		const pool = new RotationPool(accounts, 1_000);
 		pool.pin(accounts[1]!);
-		expect(() => pool.choose({
-			reason: "retry",
-			failed: { target: accounts[0]!, errorMessage: "401 Unauthorized", hasOutput: false },
-			now: 1,
-		})).toThrow(/pinned account/i);
+		expect(() =>
+			pool.choose({
+				reason: "retry",
+				failed: { target: accounts[0]!, errorMessage: "401 Unauthorized", hasOutput: false },
+				now: 1,
+			}),
+		).toThrow(/pinned account/i);
 	});
 });

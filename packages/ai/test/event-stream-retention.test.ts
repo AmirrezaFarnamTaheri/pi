@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EventStream, createAssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { createAssistantMessageEventStream, EventStream } from "../src/utils/event-stream.ts";
 
 describe("EventStream opt-in result-only retention", () => {
 	it("preserves historical events by default for late consumers", async () => {
-		const stream = new EventStream<number, number>((event) => event === 3, (event) => event);
+		const stream = new EventStream<number, number>(
+			(event) => event === 3,
+			(event) => event,
+		);
 		stream.push(1);
 		stream.push(2);
 		stream.push(3);
@@ -33,7 +36,9 @@ describe("EventStream opt-in result-only retention", () => {
 			{ retention: "result-only" },
 		);
 		const seen: number[] = [];
-		const consuming = (async () => { for await (const event of stream) seen.push(event); })();
+		const consuming = (async () => {
+			for await (const event of stream) seen.push(event);
+		})();
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		stream.push(1);
 		stream.push(2);
@@ -43,16 +48,22 @@ describe("EventStream opt-in result-only retention", () => {
 	});
 
 	it("preserves bounded backpressure for an active result-only iterator", async () => {
-		const stream = new EventStream<number, number>((value) => value === 4, (value) => value, {
-			retention: "result-only",
-		});
+		const stream = new EventStream<number, number>(
+			(value) => value === 4,
+			(value) => value,
+			{
+				retention: "result-only",
+			},
+		);
 		const iterator = stream[Symbol.asyncIterator]();
 		const first = iterator.next();
 		stream.push(1);
 		expect(await first).toEqual({ value: 1, done: false });
 		await stream.pushWithBackpressure(2, 1);
 		let published = false;
-		const blocked = stream.pushWithBackpressure(3, 1).then(() => { published = true; });
+		const blocked = stream.pushWithBackpressure(3, 1).then(() => {
+			published = true;
+		});
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(published).toBe(false);
 		expect(await iterator.next()).toEqual({ value: 2, done: false });
@@ -66,9 +77,13 @@ describe("EventStream opt-in result-only retention", () => {
 	});
 
 	it("discards queued progress after an early consumer exit in result-only mode", async () => {
-		const stream = new EventStream<number, number>((event) => event === 99, (event) => event, {
-			retention: "result-only",
-		});
+		const stream = new EventStream<number, number>(
+			(event) => event === 99,
+			(event) => event,
+			{
+				retention: "result-only",
+			},
+		);
 		const iterator = stream[Symbol.asyncIterator]();
 		const pending = iterator.next();
 		stream.push(1);
@@ -94,7 +109,11 @@ describe("EventStream opt-in result-only retention", () => {
 			timestamp: Date.now(),
 			stopReason: "stop" as const,
 			usage: {
-				input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 		};
@@ -107,9 +126,16 @@ describe("EventStream opt-in result-only retention", () => {
 	});
 
 	it("rejects unsupported retention modes instead of silently replaying all events", () => {
-		expect(() => new EventStream<number, number>((event) => event === 1, (event) => event, {
-			retention: "unknown" as "all",
-		})).toThrow(RangeError);
+		expect(
+			() =>
+				new EventStream<number, number>(
+					(event) => event === 1,
+					(event) => event,
+					{
+						retention: "unknown" as "all",
+					},
+				),
+		).toThrow(RangeError);
 	});
 
 	it("still propagates producer failure to both result and iteration", async () => {
@@ -121,7 +147,11 @@ describe("EventStream opt-in result-only retention", () => {
 		stream.push(1);
 		stream.fail(new Error("provider failed"));
 		await expect(stream.result()).rejects.toThrow("provider failed");
-		const consume = async () => { for await (const _event of stream) { /* nothing */ } };
+		const consume = async () => {
+			for await (const _event of stream) {
+				/* nothing */
+			}
+		};
 		await expect(consume()).rejects.toThrow("provider failed");
 	});
 });

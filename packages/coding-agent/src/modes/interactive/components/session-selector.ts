@@ -18,8 +18,8 @@ import { canonicalizePath, getPathComparisonKey, shortenHomePath } from "../../.
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
-import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 import { filterSessionsByRegexInWorker } from "./session-selector-regex-worker.ts";
+import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 
 type SessionScope = "current" | "all";
 
@@ -430,7 +430,9 @@ class SessionList implements Component, Focusable {
 				this.regexDelay = undefined;
 				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal, (ids) => {
 					if (this.regexSearchVersion === version && !controller.signal.aborted)
-						this.onError?.(`Regex search incomplete: skipped ${ids.length} oversized or unreadable session${ids.length === 1 ? "" : "s"} (${ids.slice(0, 3).join(", ")}).`);
+						this.onError?.(
+							`Regex search incomplete: skipped ${ids.length} oversized or unreadable session${ids.length === 1 ? "" : "s"} (${ids.slice(0, 3).join(", ")}).`,
+						);
 				})
 					.then((filtered) => {
 						if (this.regexSearchVersion !== version || controller.signal.aborted) return;
@@ -441,8 +443,13 @@ class SessionList implements Component, Focusable {
 							ancestorContinues: [],
 						}));
 						const selected = this.regexSelectedPath;
-						const restored = selected ? this.filteredSessions.findIndex((node) => node.session.path === selected) : -1;
-						this.selectedIndex = restored >= 0 ? restored : Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
+						const restored = selected
+							? this.filteredSessions.findIndex((node) => node.session.path === selected)
+							: -1;
+						this.selectedIndex =
+							restored >= 0
+								? restored
+								: Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
 						this.regexSearching = false;
 						this.regexAbort = undefined;
 						const needsRefresh = this.regexNeedsRefresh;
@@ -712,7 +719,10 @@ class SessionList implements Component, Focusable {
 		}
 		// Page down - jump down by maxVisible items
 		else if (kb.matches(keyData, "tui.select.pageDown")) {
-			this.selectedIndex = Math.max(0, Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible));
+			this.selectedIndex = Math.max(
+				0,
+				Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible),
+			);
 		}
 		// Enter
 		else if (kb.matches(keyData, "tui.select.confirm")) {

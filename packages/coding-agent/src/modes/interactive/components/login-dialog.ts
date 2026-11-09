@@ -224,7 +224,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
-		this.contentContainer.addChild(new TruncatedText(theme.fg("muted", "● One-time authorization response is hidden"), 1, 0));
+		this.contentContainer.addChild(
+			new TruncatedText(theme.fg("muted", "● One-time authorization response is hidden"), 1, 0),
+		);
 		this.contentContainer.addChild(this.input);
 		this.contentContainer.addChild(new Text(`(${keyHint("tui.select.cancel", "to cancel")})`, 1, 0));
 		this.tui.requestRender();
@@ -246,8 +248,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		if (secret) {
-			this.contentContainer.addChild(new TruncatedText(theme.fg("muted",
-				"● Hidden input  ·  cleared after submission"), 1, 0));
+			this.contentContainer.addChild(
+				new TruncatedText(theme.fg("muted", "● Hidden input  ·  cleared after submission"), 1, 0),
+			);
 		}
 		if (placeholder && !secret) {
 			this.contentContainer.addChild(new Text(theme.fg("dim", `e.g., ${placeholder}`), 1, 0));

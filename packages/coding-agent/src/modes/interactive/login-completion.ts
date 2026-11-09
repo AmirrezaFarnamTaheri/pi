@@ -8,9 +8,7 @@ export type LoginProviderCompletionOption = {
 	subscription?: boolean;
 };
 
-
 const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
-
 
 export function getLoginProviderCompletionOptions(
 	providerOptions: readonly AuthSelectorProvider[],
@@ -48,4 +46,3 @@ export function formatLoginProviderCompletionDescription(provider: LoginProvider
 		.join("/");
 	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
-

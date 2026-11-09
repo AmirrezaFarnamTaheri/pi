@@ -24,10 +24,17 @@ function validateProfiles(json: unknown): AccountProfile[] {
 	return value.accounts.map((item: unknown) => {
 		if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid account profile");
 		const profile = item as Record<string, unknown>;
-		if (typeof profile.id !== "string" || !ACCOUNT_ID.test(profile.id) ||
-			typeof profile.sourceProviderId !== "string" || !PROVIDER_ID.test(profile.sourceProviderId) ||
-			typeof profile.label !== "string" || profile.label.length < 1 || profile.label.length > 64 ||
-			/[\x00-\x1f\x7f]/.test(profile.label) || ids.has(profile.id)) {
+		if (
+			typeof profile.id !== "string" ||
+			!ACCOUNT_ID.test(profile.id) ||
+			typeof profile.sourceProviderId !== "string" ||
+			!PROVIDER_ID.test(profile.sourceProviderId) ||
+			typeof profile.label !== "string" ||
+			profile.label.length < 1 ||
+			profile.label.length > 64 ||
+			/[\x00-\x1f\x7f]/.test(profile.label) ||
+			ids.has(profile.id)
+		) {
 			throw new Error("Invalid or duplicate account profile");
 		}
 		ids.add(profile.id);
@@ -40,7 +47,10 @@ export function loadAccountProfiles(path: string): AccountProfile[] {
 	return validateProfiles(JSON.parse(readFileSync(path, "utf8")));
 }
 
-function withAccountFileLock<T>(path: string, edit: (current: AccountProfile[]) => { next?: AccountProfile[]; result: T }): T {
+function withAccountFileLock<T>(
+	path: string,
+	edit: (current: AccountProfile[]) => { next?: AccountProfile[]; result: T },
+): T {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	// Lock the destination name BEFORE its initial creation. Another process must
 	// never observe an empty file between open("wx") and the initial JSON write.
@@ -65,8 +75,11 @@ function withAccountFileLock<T>(path: string, edit: (current: AccountProfile[]) 
 		if (next) {
 			const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
 			try {
-				writeFileSync(temporary, JSON.stringify({ version: 1, accounts: next }, null, 2) + "\n",
-					{ encoding: "utf8", mode: 0o600, flag: "wx" });
+				writeFileSync(temporary, JSON.stringify({ version: 1, accounts: next }, null, 2) + "\n", {
+					encoding: "utf8",
+					mode: 0o600,
+					flag: "wx",
+				});
 				renameSync(temporary, path);
 			} finally {
 				rmSync(temporary, { force: true });
@@ -79,7 +92,10 @@ function withAccountFileLock<T>(path: string, edit: (current: AccountProfile[]) 
 }
 
 export function addAccountProfile(
-	path: string, sourceProviderId: string, occupiedProviderIds: readonly string[], label?: string,
+	path: string,
+	sourceProviderId: string,
+	occupiedProviderIds: readonly string[],
+	label?: string,
 ): AccountProfile {
 	if (!PROVIDER_ID.test(sourceProviderId)) throw new Error("Invalid source provider ID");
 	if (label !== undefined && (!label.trim() || label.length > 64 || /[\x00-\x1f\x7f]/.test(label))) {

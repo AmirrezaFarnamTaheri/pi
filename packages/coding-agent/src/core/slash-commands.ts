@@ -34,7 +34,11 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "fork", description: "Create a new fork from a previous user message" },
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },
-	{ name: "login", description: "Connect providers or add a separate account", argumentHint: "<provider> | add <provider>" },
+	{
+		name: "login",
+		description: "Connect providers or add a separate account",
+		argumentHint: "<provider> | add <provider>",
+	},
 	{ name: "accounts", description: "Manage independent logins, select accounts, and enable rotation" },
 	{ name: "logout", description: "Remove provider authentication" },
 	{ name: "new", description: "Start a new session" },
