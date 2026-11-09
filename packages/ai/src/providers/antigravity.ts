@@ -42,23 +42,28 @@ function gatewayFor(credential: ApiKeyCredential | undefined): string {
 const gatewayAuth: ApiKeyAuth = {
 	name: "Antigravity Manager gateway access key",
 	login: async (interaction) => {
-		const endpoint = normalizeAntigravityGatewayUrl(await interaction.prompt({
-			type: "text",
-			message: "Antigravity Manager gateway URL (default http://127.0.0.1:8045/v1)",
-			placeholder: DEFAULT_GATEWAY,
-		}));
+		const endpoint = normalizeAntigravityGatewayUrl(
+			await interaction.prompt({
+				type: "text",
+				message: "Antigravity Manager gateway URL (default http://127.0.0.1:8045/v1)",
+				placeholder: DEFAULT_GATEWAY,
+			}),
+		);
 		interaction.signal.throwIfAborted();
-		const key = (await interaction.prompt({
-			type: "secret",
-			message: "Antigravity Manager gateway access key",
-		})).trim();
+		const key = (
+			await interaction.prompt({
+				type: "secret",
+				message: "Antigravity Manager gateway access key",
+			})
+		).trim();
 		if (!key) throw new Error("Antigravity Manager gateway access key is required");
 		interaction.signal.throwIfAborted();
 		return { type: "api_key", key, env: { [GATEWAY_URL_ENV]: endpoint } };
 	},
 	check: async ({ ctx, credential, signal }) => {
 		signal.throwIfAborted();
-		if (credential?.key || (await ctx.env(GATEWAY_KEY_ENV))) return { type: "api_key", source: "Antigravity gateway" };
+		if (credential?.key || (await ctx.env(GATEWAY_KEY_ENV)))
+			return { type: "api_key", source: "Antigravity gateway" };
 		return undefined;
 	},
 	resolve: async ({ ctx, credential, signal }) => {
@@ -144,15 +149,24 @@ export async function discoverAntigravityModels(
 	const models: Model<"openai-completions">[] = [];
 	const seen = new Set<string>();
 	for (const item of json.data as GatewayModelData[]) {
-		if (!item || typeof item.id !== "string" || !item.id.trim() ||
-			item.id.length > 256 || /[\x00-\x1f\x7f]/u.test(item.id) || seen.has(item.id)) continue;
+		if (
+			!item ||
+			typeof item.id !== "string" ||
+			!item.id.trim() ||
+			item.id.length > 256 ||
+			/[\x00-\x1f\x7f]/u.test(item.id) ||
+			seen.has(item.id)
+		)
+			continue;
 		if (models.length >= MAX_MODELS) break;
 		seen.add(item.id);
 		const contextWindow = modelNumber(item.context_window ?? item.context_length, 32_768);
 		const maxTokens = Math.min(contextWindow, modelNumber(item.max_output_tokens ?? item.max_tokens, 8_192));
-		const modalities = Array.isArray(item.input_modalities) && item.input_modalities.every(
-			(value: unknown) => typeof value === "string",
-		) ? item.input_modalities as string[] : [];
+		const modalities =
+			Array.isArray(item.input_modalities) &&
+			item.input_modalities.every((value: unknown) => typeof value === "string")
+				? (item.input_modalities as string[])
+				: [];
 		const hasLimits = typeof item.context_window === "number" || typeof item.context_length === "number";
 		models.push({
 			id: item.id,
@@ -187,7 +201,14 @@ export function antigravityProvider(): Provider<"openai-completions"> {
 				const restored = context.stored.models.filter(
 					(model) => model.provider === "antigravity-manager" && model.api === "openai-completions",
 				) as Model<"openai-completions">[];
-				if (!(await context.publish({ update: () => { models = restored; } }))) return;
+				if (
+					!(await context.publish({
+						update: () => {
+							models = restored;
+						},
+					}))
+				)
+					return;
 			}
 			if (!context.allowNetwork || context.signal.aborted) return;
 			const credential = context.credential;
@@ -198,7 +219,9 @@ export function antigravityProvider(): Provider<"openai-completions"> {
 			if (context.signal.aborted) return;
 			await context.publish({
 				persist: { models: next, checkedAt: Date.now() },
-				update: () => { models = next; },
+				update: () => {
+					models = next;
+				},
 			});
 		},
 		stream: (model, context, options) => streams.stream(model, context, options),

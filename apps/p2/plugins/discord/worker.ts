@@ -150,8 +150,12 @@ export default defineFacet((host) => {
 					const context = durableContext(ctx);
 					const doc = await durable.snapshot(DiscordLinkDoc, context);
 					const main = await mainConversation(durable, context);
-					const conversations = new Set<number>([main, ...Object.keys(doc?.threads ?? {})
-						.map(Number).filter((id) => Number.isSafeInteger(id) && id >= 0)]);
+					const conversations = new Set<number>([
+						main,
+						...Object.keys(doc?.threads ?? {})
+							.map(Number)
+							.filter((id) => Number.isSafeInteger(id) && id >= 0),
+					]);
 					// Discord delivery RPCs finish before this call, but followUp submissions
 					// may still be queued or executing. Stop/await them while the session
 					// lock is installed; only then may the server lift that lock.

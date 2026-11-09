@@ -19,10 +19,7 @@ export async function collectGarbage(): Promise<void> {
  * accidentally keep a target alive across the next GC.
  * This still fails if references remain reachable after all bounded rounds.
  */
-export async function waitForCollected(
-	references: readonly WeakRef<object>[],
-	maxRounds = 20,
-): Promise<boolean> {
+export async function waitForCollected(references: readonly WeakRef<object>[], maxRounds = 20): Promise<boolean> {
 	for (let round = 0; round < maxRounds; round++) {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		gc();

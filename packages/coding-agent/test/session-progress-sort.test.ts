@@ -1,18 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { insertSessionByActivity } from "../src/core/session-manager.ts";
 import type { SessionInfo } from "../src/core/session-manager.ts";
+import { insertSessionByActivity } from "../src/core/session-manager.ts";
 
 describe("progressive session sorting", () => {
 	it("maintains descending activity order with stable ties regardless of arrival", () => {
 		const sorted: SessionInfo[] = [];
-		const make = (id: string, timestamp: number) =>
-			({ id, modified: new Date(timestamp) }) as SessionInfo;
-		for (const entry of [
-			make("old", 10),
-			make("new", 30),
-			make("same-a", 20),
-			make("same-b", 20),
-		]) {
+		const make = (id: string, timestamp: number) => ({ id, modified: new Date(timestamp) }) as SessionInfo;
+		for (const entry of [make("old", 10), make("new", 30), make("same-a", 20), make("same-b", 20)]) {
 			insertSessionByActivity(sorted, entry);
 		}
 		expect(sorted.map((s) => s.id)).toEqual(["new", "same-a", "same-b", "old"]);

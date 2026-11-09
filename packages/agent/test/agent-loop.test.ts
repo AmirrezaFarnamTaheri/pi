@@ -816,8 +816,11 @@ describe("agentLoop with AgentMessage", () => {
 						message: createAssistantMessage(
 							first
 								? Array.from({ length: 24 }, (_, i) => ({
-									type: "toolCall" as const, id: `call-${i}`, name: "bounded", arguments: { value: String(i) },
-								}))
+										type: "toolCall" as const,
+										id: `call-${i}`,
+										name: "bounded",
+										arguments: { value: String(i) },
+									}))
 								: [{ type: "text", text: "done" }],
 							first ? "toolUse" : "stop",
 						),
@@ -2309,7 +2312,6 @@ describe("runToolCall", () => {
 	});
 });
 
-
 describe("mixed tool execution performance", () => {
 	it("runs parallel groups concurrently without crossing a sequential barrier", async () => {
 		const schema = obj({ value: str() });
@@ -2355,15 +2357,19 @@ describe("mixed tool execution performance", () => {
 					output.push({
 						type: "done",
 						reason: requests++ === 0 ? "toolUse" : "stop",
-						message: requests === 1
-							? createAssistantMessage([
-								{ type: "toolCall", id: "a", name: "parallel", arguments: { value: "a" } },
-								{ type: "toolCall", id: "b", name: "parallel", arguments: { value: "b" } },
-								{ type: "toolCall", id: "c", name: "sequential", arguments: { value: "c" } },
-								{ type: "toolCall", id: "d", name: "parallel", arguments: { value: "d" } },
-								{ type: "toolCall", id: "e", name: "parallel", arguments: { value: "e" } },
-							], "toolUse")
-							: createAssistantMessage([{ type: "text", text: "done" }]),
+						message:
+							requests === 1
+								? createAssistantMessage(
+										[
+											{ type: "toolCall", id: "a", name: "parallel", arguments: { value: "a" } },
+											{ type: "toolCall", id: "b", name: "parallel", arguments: { value: "b" } },
+											{ type: "toolCall", id: "c", name: "sequential", arguments: { value: "c" } },
+											{ type: "toolCall", id: "d", name: "parallel", arguments: { value: "d" } },
+											{ type: "toolCall", id: "e", name: "parallel", arguments: { value: "e" } },
+										],
+										"toolUse",
+									)
+								: createAssistantMessage([{ type: "text", text: "done" }]),
 					});
 				});
 				return output;
@@ -2397,7 +2403,9 @@ describe("tool declaration replay allocation", () => {
 			label: "Echo",
 			description: "Echo",
 			parameters: schemaWithSerialization,
-			async execute() { return { content: [{ type: "text", text: "ok" }], details: { value: "ok" } }; },
+			async execute() {
+				return { content: [{ type: "text", text: "ok" }], details: { value: "ok" } };
+			},
 		};
 		const context: AgentContext = { messages: [], tools: [tool] };
 		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
@@ -2406,11 +2414,17 @@ describe("tool declaration replay allocation", () => {
 			const response = createAssistantMessageEventStream();
 			queueMicrotask(() => {
 				calls++;
-				response.push({ type: "done", reason: "stop", message: createAssistantMessage([{ type: "text", text: "hello" }]) });
+				response.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "hello" }]),
+				});
 			});
 			return response;
 		});
-		for await (const _event of stream) { /* drain */ }
+		for await (const _event of stream) {
+			/* drain */
+		}
 		expect(calls).toBe(1);
 		// Initial declaration plus the next-turn equality check; no upfront
 		// clone of every current tool before the comparison.

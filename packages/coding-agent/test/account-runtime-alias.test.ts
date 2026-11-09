@@ -57,11 +57,21 @@ test("offers opt-in automatic rotation only when an independent account exists",
 		assert.match(rotation?.name ?? "", /rotate|account/i);
 		const failure = {
 			role: "assistant" as const,
-			provider: account.id, model: "example", api: "openai-completions" as const,
-			stopReason: "error" as const, timestamp: Date.now(), errorMessage: "HTTP 429",
+			provider: account.id,
+			model: "example",
+			api: "openai-completions" as const,
+			stopReason: "error" as const,
+			timestamp: Date.now(),
+			errorMessage: "HTTP 429",
 			content: [{ type: "text" as const, text: "already returned" }],
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
 		};
 		assert.equal(runtime.shouldRetryVirtualFailure(rotation!, failure), false);
 		await runtime.removeAccountAlias(account.id);
@@ -78,18 +88,31 @@ test("restores an account whose extension source provider is registered after ru
 		const { addAccountProfile } = await import("../src/core/account-profiles.ts");
 		const profile = addAccountProfile(profilesPath, "late-test-provider", [], "Delayed sign-in");
 		const runtime = await ModelRuntime.create({
-			credentials: AuthStorage.inMemory(), modelsPath: null, accountProfilesPath: profilesPath,
-			allowModelNetwork: false, refreshOnCreate: false,
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
+			accountProfilesPath: profilesPath,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
 		});
 		assert.equal(runtime.getProvider(profile.id), undefined);
 		assert.equal(runtime.getAccountProfiles().length, 1);
 		runtime.registerNativeProvider({
 			id: "late-test-provider",
 			name: "Late test provider",
-			auth: { apiKey: { name: "Test", login: async () => ({ type: "api_key", key: "fixture" }), resolve: async () => ({ auth: {}, source: "test" }) } },
+			auth: {
+				apiKey: {
+					name: "Test",
+					login: async () => ({ type: "api_key", key: "fixture" }),
+					resolve: async () => ({ auth: {}, source: "test" }),
+				},
+			},
 			getModels: () => [],
-			stream: () => { throw new Error("unused"); },
-			streamSimple: () => { throw new Error("unused"); },
+			stream: () => {
+				throw new Error("unused");
+			},
+			streamSimple: () => {
+				throw new Error("unused");
+			},
 		});
 		assert.equal(runtime.getProvider(profile.id)?.name, "Delayed sign-in");
 	} finally {
@@ -103,9 +126,11 @@ test("does not reuse an original provider's ambient API key in an added account"
 	process.env.ANTIGRAVITY_MANAGER_API_KEY = "original-account-only";
 	try {
 		const runtime = await ModelRuntime.create({
-			credentials: AuthStorage.inMemory(), modelsPath: null,
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
 			accountProfilesPath: join(directory, "profiles.json"),
-			allowModelNetwork: false, refreshOnCreate: false,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
 		});
 		const profile = runtime.addAccountAlias("antigravity-manager", "Separate login");
 		assert.equal(await runtime.getAuth(profile.id), undefined);
@@ -122,13 +147,15 @@ test("two gateway logins retain distinct keys and endpoints without replacing ea
 	try {
 		const runtime = await ModelRuntime.create({
 			credentials: AuthStorage.inMemory(),
-			modelsPath: null, accountProfilesPath: join(directory, "profiles.json"),
-			allowModelNetwork: false, refreshOnCreate: false,
+			modelsPath: null,
+			accountProfilesPath: join(directory, "profiles.json"),
+			allowModelNetwork: false,
+			refreshOnCreate: false,
 		});
 		const login = (providerId: string, key: string, endpoint: string) =>
 			runtime.login(providerId, "api_key", {
 				signal: new AbortController().signal,
-				prompt: async (prompt) => prompt.type === "secret" ? key : endpoint,
+				prompt: async (prompt) => (prompt.type === "secret" ? key : endpoint),
 				notify: () => {},
 			});
 		await login("antigravity-manager", "original-gateway-key", "http://127.0.0.1:8045/v1");
@@ -140,7 +167,10 @@ test("two gateway logins retain distinct keys and endpoints without replacing ea
 		assert.equal(second?.auth.apiKey, "separate-gateway-key");
 		assert.equal(first?.auth.baseUrl, "http://127.0.0.1:8045/v1");
 		assert.equal(second?.auth.baseUrl, "https://example.test/relay/v1");
-		assert.deepEqual(runtime.getAccountProfiles().map((profile) => profile.id), [alternate.id]);
+		assert.deepEqual(
+			runtime.getAccountProfiles().map((profile) => profile.id),
+			[alternate.id],
+		);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}

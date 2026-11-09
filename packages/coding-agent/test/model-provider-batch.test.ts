@@ -49,8 +49,16 @@ describe("ModelRuntime batch provider registration", () => {
 			expect(batched.getModels(providerId).map((entry) => entry.id)).toEqual(
 				sequential.getModels(providerId).map((entry) => entry.id),
 			);
-			expect(batched.getAvailableSnapshot().filter((entry) => entry.provider === providerId).map((entry) => entry.id)).toEqual(
-				sequential.getAvailableSnapshot().filter((entry) => entry.provider === providerId).map((entry) => entry.id),
+			expect(
+				batched
+					.getAvailableSnapshot()
+					.filter((entry) => entry.provider === providerId)
+					.map((entry) => entry.id),
+			).toEqual(
+				sequential
+					.getAvailableSnapshot()
+					.filter((entry) => entry.provider === providerId)
+					.map((entry) => entry.id),
 			);
 			expect(batched.getProviderAuthStatus(providerId)).toEqual(sequential.getProviderAuthStatus(providerId));
 		}

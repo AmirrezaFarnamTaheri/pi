@@ -216,8 +216,16 @@ export class TranscriptScroll {
 				const row = rows[index];
 				return row ? estimates.estimate(row, this.#rowWidth()) : 0;
 			};
-			if (appendOnly) this.layout.appendRows(rows.slice(previous.length).map((row) => row.key), estimateRow);
-			else this.layout.setRows(rows.map((row) => row.key), estimateRow);
+			if (appendOnly)
+				this.layout.appendRows(
+					rows.slice(previous.length).map((row) => row.key),
+					estimateRow,
+				);
+			else
+				this.layout.setRows(
+					rows.map((row) => row.key),
+					estimateRow,
+				);
 			this.range = this.#computeRange();
 			// Indices of other rows: the last change says nothing about these.
 			this.#replaced = undefined;

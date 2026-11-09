@@ -88,13 +88,13 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 		const armIdleTimer = () => {
 			if (postExitTimer) clearTimeout(postExitTimer);
 			postExitTimer = setTimeout(() => {
-			// A paused pipe is waiting on the output sink, not an idle descendant.
-			if ((!stdoutEnded && child.stdout?.isPaused()) || (!stderrEnded && child.stderr?.isPaused())) {
-				armIdleTimer();
-			} else {
-				finalize(exitCode);
-			}
-		}, EXIT_STDIO_GRACE_MS);
+				// A paused pipe is waiting on the output sink, not an idle descendant.
+				if ((!stdoutEnded && child.stdout?.isPaused()) || (!stderrEnded && child.stderr?.isPaused())) {
+					armIdleTimer();
+				} else {
+					finalize(exitCode);
+				}
+			}, EXIT_STDIO_GRACE_MS);
 		};
 
 		const onData = () => {

@@ -587,7 +587,10 @@ describe("summary", () => {
 
 	it("keeps the newest 20 and stays across a restart", async () => {
 		const first = await filesOf();
-		for (let index = 0; index < 25; index++) await put(first, `f${index}`, "x");
+		// Use distinct, explicit timestamps: the production ordering is
+		// (created DESC, id DESC), and 25 fast writes can share one millisecond.
+		for (let index = 0; index < 25; index++)
+			await put(first, `f${index}`, "x", { created: 1_700_000_000_000 + index });
 		const summary = await first.summary.get("shared", context);
 		expect(summary?.newest).toHaveLength(20);
 		expect(summary?.newest[0]?.path).toBe("f24");

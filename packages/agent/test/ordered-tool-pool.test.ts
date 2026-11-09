@@ -33,8 +33,14 @@ test("uses eight workers by default and rejects invalid/out-of-bound choices", a
 test("on rejection, does not launch additional queued work", async () => {
 	let started = 0;
 	const jobs = [
-		async () => { started++; throw new Error("failure"); },
-		async () => { started++; return 2; },
+		async () => {
+			started++;
+			throw new Error("failure");
+		},
+		async () => {
+			started++;
+			return 2;
+		},
 	];
 	await assert.rejects(() => executeBoundedInOrder(jobs, 1), /failure/);
 	assert.equal(started, 1);
@@ -44,16 +50,35 @@ test("does not settle a rejected batch before other in-flight calls finish", asy
 	let release!: () => void;
 	let otherSettled = false;
 	let queuedStarted = false;
-	const barrier = new Promise<void>((resolve) => { release = resolve; });
-	const promise = executeBoundedInOrder([
-		async () => { await new Promise<void>((resolve) => setImmediate(resolve)); throw new Error("bad tool"); },
-		async () => { await barrier; otherSettled = true; return 2; },
-		async () => { queuedStarted = true; return 3; },
-	], 2);
+	const barrier = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const promise = executeBoundedInOrder(
+		[
+			async () => {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				throw new Error("bad tool");
+			},
+			async () => {
+				await barrier;
+				otherSettled = true;
+				return 2;
+			},
+			async () => {
+				queuedStarted = true;
+				return 3;
+			},
+		],
+		2,
+	);
 	let settled = false;
-	const observed = promise.then(() => ({ ok: true as const, error: undefined }),
-		(error: unknown) => ({ ok: false as const, error }));
-	void observed.then(() => { settled = true; });
+	const observed = promise.then(
+		() => ({ ok: true as const, error: undefined }),
+		(error: unknown) => ({ ok: false as const, error }),
+	);
+	void observed.then(() => {
+		settled = true;
+	});
 	await new Promise<void>((resolve) => setTimeout(resolve, 25));
 	assert.equal(settled, false, "batch should wait for other running calls");
 	release();
@@ -69,14 +94,23 @@ test("reports the first observed failure, not the first worker in Promise.allSet
 	const earlyFailure = new Error("worker one failed first");
 	let extraStarted = false;
 	await assert.rejects(
-		() => executeBoundedInOrder([
-			async () => {
-				await new Promise<void>((resolve) => setTimeout(resolve, 25));
-				throw lateFailure;
-			},
-			async () => { throw earlyFailure; },
-			async () => { extraStarted = true; return 3; },
-		], 2),
+		() =>
+			executeBoundedInOrder(
+				[
+					async () => {
+						await new Promise<void>((resolve) => setTimeout(resolve, 25));
+						throw lateFailure;
+					},
+					async () => {
+						throw earlyFailure;
+					},
+					async () => {
+						extraStarted = true;
+						return 3;
+					},
+				],
+				2,
+			),
 		(error: unknown) => error === earlyFailure,
 	);
 	assert.equal(extraStarted, false);

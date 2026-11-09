@@ -33,7 +33,11 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 	if (/content[ -]?policy|safety|moderation|context[ _-]?(length|window)|invalid request/i.test(message)) {
 		return undefined;
 	}
-	if (/\b429\b|rate[ -]?limit|usage limit reached|quota[ _-]?(exceeded|exhausted)|insufficient[ _-]?quota|resource[ _-]?exhausted|out of credits/i.test(message)) {
+	if (
+		/\b429\b|rate[ -]?limit|usage limit reached|quota[ _-]?(exceeded|exhausted)|insufficient[ _-]?quota|resource[ _-]?exhausted|out of credits/i.test(
+			message,
+		)
+	) {
 		return "rate-limit";
 	}
 	if (/\b401\b|invalid[ _-]?(api[ _-]?)?key|unauthorized|authentication (failed|error|invalid)/i.test(message)) {
@@ -55,7 +59,10 @@ const UNITS: Record<string, number> = {
 export function quotaResetDelayMs(error: string): number | undefined {
 	const numeric = /\bretry-after\s*:\s*(\d+)\b/i.exec(error);
 	if (numeric) return Math.min(MAX_COOLDOWN_MS, Number(numeric[1]) * 1_000);
-	const relative = /\b(?:limit will )?reset in ((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:\s*,\s*|\s+and\s+|\s*)?)+)/i.exec(error);
+	const relative =
+		/\b(?:limit will )?reset in ((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:\s*,\s*|\s+and\s+|\s*)?)+)/i.exec(
+			error,
+		);
 	if (!relative) return undefined;
 	let delay = 0;
 	for (const match of relative[1]!.matchAll(/(\d+)\s*(day|hour|minute|second)s?/gi)) {
@@ -113,7 +120,8 @@ export class RotationPool {
 	) {
 		if (targets.length === 0) throw new Error("Rotation pool must have at least one credential slot");
 		if (!Number.isSafeInteger(cooldownMs) || cooldownMs < 1) throw new Error("Invalid credential cooldown");
-		if (!["round-robin", "sticky", "random", "hybrid"].includes(strategy)) throw new Error("Invalid rotation strategy");
+		if (!["round-robin", "sticky", "random", "hybrid"].includes(strategy))
+			throw new Error("Invalid rotation strategy");
 		const seen = new Set<string>();
 		for (const target of targets) {
 			const key = `${target.provider}\0${target.model}`;
@@ -138,13 +146,18 @@ export class RotationPool {
 				const slot = this.#slot(failedIndex);
 				const count = (slot.failures ?? 0) + 1;
 				slot.failures = count;
-				const exponential = Math.min(MAX_COOLDOWN_MS, this.#cooldownMs * (2 ** Math.min(count - 1, 20)));
+				const exponential = Math.min(MAX_COOLDOWN_MS, this.#cooldownMs * 2 ** Math.min(count - 1, 20));
 				const authDuration = category === "auth" ? Math.max(3_600_000, exponential) : exponential;
 				const explicit = failed!.retryAfterMs;
 				const hinted = quotaResetDelayMs(failed!.errorMessage);
-				const duration = Math.min(MAX_COOLDOWN_MS, Math.max(authDuration,
-					typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0 ? explicit : 0,
-					hinted ?? 0));
+				const duration = Math.min(
+					MAX_COOLDOWN_MS,
+					Math.max(
+						authDuration,
+						typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0 ? explicit : 0,
+						hinted ?? 0,
+					),
+				);
 				slot.cooldownUntil = now + duration;
 				// A manual pin is an identity boundary, not a selection preference.
 				// Record the failed credential's cooldown, then fail closed without
@@ -178,7 +191,8 @@ export class RotationPool {
 			return this.#pick(this.#cursor, now, false, this.#strategy);
 		}
 		if (this.#strategy === "sticky") {
-			const fromRequest = this.#indexOf(input.active) >= 0 ? this.#indexOf(input.active) : this.#indexOf(input.previous);
+			const fromRequest =
+				this.#indexOf(input.active) >= 0 ? this.#indexOf(input.active) : this.#indexOf(input.previous);
 			const sticky = fromRequest >= 0 ? fromRequest : this.#sticky;
 			if (sticky >= 0 && this.#eligible(sticky, now)) return this.#choice(sticky);
 		}
@@ -216,7 +230,8 @@ export class RotationPool {
 	reportQuota(target: RotationTarget, remaining: number, resetAt?: number): void {
 		const index = this.#requireIndex(target);
 		if (!Number.isFinite(remaining) || remaining < 0 || remaining > 1) throw new Error("Invalid quota fraction");
-		if (resetAt !== undefined && (!Number.isFinite(resetAt) || resetAt < 0)) throw new Error("Invalid quota reset time");
+		if (resetAt !== undefined && (!Number.isFinite(resetAt) || resetAt < 0))
+			throw new Error("Invalid quota reset time");
 		this.#slot(index).quota = { remaining, ...(resetAt === undefined ? {} : { resetAt }) };
 	}
 
@@ -242,9 +257,12 @@ export class RotationPool {
 	status(now = Date.now()): RotationStatus[] {
 		return this.#targets.map((target, index) => {
 			const quota = this.#quotaAt(index, now);
-			const quotaWait = quota?.remaining === 0
-				? quota.resetAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, quota.resetAt - now)
-				: 0;
+			const quotaWait =
+				quota?.remaining === 0
+					? quota.resetAt === undefined
+						? Number.POSITIVE_INFINITY
+						: Math.max(0, quota.resetAt - now)
+					: 0;
 			const slot = this.#slot(index);
 			return {
 				index,
@@ -290,7 +308,9 @@ export class RotationPool {
 
 	#indexOf(target: RotationTarget | undefined): number {
 		if (!target) return -1;
-		return this.#targets.findIndex((candidate) => candidate.provider === target.provider && candidate.model === target.model);
+		return this.#targets.findIndex(
+			(candidate) => candidate.provider === target.provider && candidate.model === target.model,
+		);
 	}
 
 	#requireIndex(target: RotationTarget): number {

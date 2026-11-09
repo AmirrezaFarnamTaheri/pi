@@ -87,3 +87,26 @@ test("corrupted release assets fail checksum verification before publication", (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("fork release supports an explicit manual rerun on the verified release branch only", () => {
+  const release = readFileSync(
+    join(import.meta.dirname, "..", ".github", "workflows", "fork-github-release.yml"), "utf8",
+  );
+  assert.match(release, /^on:\s*\n(?:\s*#.*\n)*\s*workflow_dispatch:\s*\n(?:\s*#.*\n)*\s*push:/m);
+  assert.match(
+    release,
+    /if:\s*github\.repository == 'AmirrezaFarnamTaheri\/pi' && startsWith\(github\.ref, 'refs\/heads\/release\/fork-v'\)/,
+    "manual dispatch must not build or publish arbitrary branches",
+  );
+  assert.match(release, /git merge-base --is-ancestor/);
+  assert.match(release, /verify-fork-release-ci\.mjs/);
+});
+
+test("P2 CI generates provider JSON before type-checking source imports", () => {
+  const ci = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "ci.yml"), "utf8");
+  const p2 = ci.slice(ci.indexOf("  p2-check-test:"), ci.indexOf("  mcp-conformance:"));
+  const generation = p2.indexOf("run: npm run generate:models");
+  const checking = p2.indexOf("run: npm run check --workspace apps/p2");
+  assert.ok(generation >= 0 && checking > generation,
+    "the P2 type-check may not run before its generated provider JSON exists");
+});

@@ -2,7 +2,12 @@ import { Type } from "typebox";
 import { describe, expect, it, test } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
 import type { Api, AssistantMessage, Context, Message, Model, SystemMessage, Tool } from "../src/types.ts";
-import { declarationsEqual, getCurrentTools, getToolStateChanges, resolveTranscriptTools } from "../src/utils/transcript.ts";
+import {
+	declarationsEqual,
+	getCurrentTools,
+	getToolStateChanges,
+	resolveTranscriptTools,
+} from "../src/utils/transcript.ts";
 
 class PayloadCaptured extends Error {}
 
@@ -650,7 +655,6 @@ describe("transcript system messages", () => {
 	});
 });
 
-
 describe("declaration comparison avoids redundant schema copying", () => {
 	it("ignores nonenumerable schema metadata while distinguishing serialized changes", () => {
 		const schema = { type: "object", properties: { term: { type: "string" } } };
@@ -691,15 +695,25 @@ describe("tool-state comparison efficiency", () => {
 	});
 });
 
-
 describe("segmented tool-state replay", () => {
 	test("preserves delta ordering without building a combined transcript", () => {
-		const prefix = [{ role: "system", content: "", toolsAdded: [tool("first"), tool("second")], timestamp: 0 }, { role: "system", content: "", toolsRemoved: [{ name: "first" }], timestamp: 1 }] satisfies Message[];
-		const pending = [{ role: "system", content: "", toolsAdded: [tool("third"), { ...tool("second"), description: "changed" }], timestamp: 2 }, { role: "system", content: "", toolsAdded: [tool("first")], timestamp: 3 }] satisfies Message[];
+		const prefix = [
+			{ role: "system", content: "", toolsAdded: [tool("first"), tool("second")], timestamp: 0 },
+			{ role: "system", content: "", toolsRemoved: [{ name: "first" }], timestamp: 1 },
+		] satisfies Message[];
+		const pending = [
+			{
+				role: "system",
+				content: "",
+				toolsAdded: [tool("third"), { ...tool("second"), description: "changed" }],
+				timestamp: 2,
+			},
+			{ role: "system", content: "", toolsAdded: [tool("first")], timestamp: 3 },
+		] satisfies Message[];
 		expect(getCurrentTools(prefix, pending)).toEqual(getCurrentTools([...prefix, ...pending]));
 		expect(getCurrentTools(prefix, pending).map((t) => t.name)).toEqual(["second", "third", "first"]);
-		 expect(prefix).toHaveLength(2);
-		 expect(pending).toHaveLength(2);
+		expect(prefix).toHaveLength(2);
+		expect(pending).toHaveLength(2);
 	});
 });
 
@@ -709,14 +723,18 @@ describe("root-serialized declarations", () => {
 			name: "special",
 			description: "key-sensitive",
 			parameters: {
-				toJSON(key: string) { return { type: key === "" ? "string" : "object" }; },
+				toJSON(key: string) {
+					return { type: key === "" ? "string" : "object" };
+				},
 			},
 		};
 		const right = {
 			name: "special",
 			description: "key-sensitive",
 			parameters: {
-				toJSON(key: string) { return { type: key === "" ? "number" : "object" }; },
+				toJSON(key: string) {
+					return { type: key === "" ? "number" : "object" };
+				},
 			},
 		};
 		expect(declarationsEqual(left as never, right as never)).toBe(false);

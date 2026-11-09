@@ -70,10 +70,11 @@ describe("AssistantMessageComponent", () => {
 		initTheme("dark");
 		const sets = vi.spyOn(Markdown.prototype, "setText");
 		const component = new AssistantMessageComponent();
-		const make = (tail: string) => createAssistantMessage([
-			{ type: "text" as const, text: "**unchanged**" },
-			{ type: "text" as const, text: tail },
-		]);
+		const make = (tail: string) =>
+			createAssistantMessage([
+				{ type: "text" as const, text: "**unchanged**" },
+				{ type: "text" as const, text: tail },
+			]);
 		component.updateContent(make("first"), true);
 		component.render(80);
 		sets.mockClear();

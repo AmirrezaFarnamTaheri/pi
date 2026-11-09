@@ -2,30 +2,81 @@ import { strict as assert } from "node:assert";
 import { test } from "vitest";
 import { AgentPerformanceMonitor, summarizeAgentEvaluations } from "../src/performance-metrics.ts";
 
-const usage = (input: number, output: number, cacheRead: number, cacheWrite: number, reasoning: number | undefined, cost: number) => ({
-	input, output, cacheRead, cacheWrite, ...(reasoning === undefined ? {} : { reasoning }),
+const usage = (
+	input: number,
+	output: number,
+	cacheRead: number,
+	cacheWrite: number,
+	reasoning: number | undefined,
+	cost: number,
+) => ({
+	input,
+	output,
+	cacheRead,
+	cacheWrite,
+	...(reasoning === undefined ? {} : { reasoning }),
 	totalTokens: input + output + cacheRead + cacheWrite,
 	cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost, totalFromProvider: true },
 });
 const response = (u: ReturnType<typeof usage>, stopReason = "stop") => ({
-	role: "assistant" as const, content: [{ type: "text" as const, text: "all good" }],
-	api: "openai-responses" as const, provider: "openai" as const, model: "test-model",
-	usage: u, stopReason: stopReason as "stop" | "error", timestamp: 0,
+	role: "assistant" as const,
+	content: [{ type: "text" as const, text: "all good" }],
+	api: "openai-responses" as const,
+	provider: "openai" as const,
+	model: "test-model",
+	usage: u,
+	stopReason: stopReason as "stop" | "error",
+	timestamp: 0,
 });
 
 test("records provider token/cost counters without double-counting reasoning", () => {
 	let now = 0;
 	const monitor = new AgentPerformanceMonitor({ now: () => now });
 	monitor.record({ type: "agent_start" });
-	now = 5; monitor.record({ type: "turn_start" });
-	now = 10; monitor.record({ type: "message_start", message: response(usage(0, 0, 0, 0, 0, 0)) });
-	now = 24; monitor.record({ type: "message_update", message: response(usage(0, 0, 0, 0, 0, 0)), assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "t", partial: response(usage(0, 0, 0, 0, 0, 0)) } });
-	now = 40; monitor.record({ type: "message_end", message: response(usage(100, 20, 300, 50, 6, 0.052)) });
-	now = 43; monitor.record({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
-	now = 73; monitor.record({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "read", result: {}, isError: false, durationMs: 30 });
-	now = 74; monitor.record({ type: "message_end", message: { role: "toolResult", toolCallId: "tool-1", toolName: "read", content: [{ type: "text", text: "αβ" }], isError: false, timestamp: 0 } });
-	now = 80; monitor.record({ type: "turn_end", message: response(usage(100, 20, 300, 50, 6, 0.052)), toolResults: [] });
-	now = 90; monitor.record({ type: "agent_end", messages: [] });
+	now = 5;
+	monitor.record({ type: "turn_start" });
+	now = 10;
+	monitor.record({ type: "message_start", message: response(usage(0, 0, 0, 0, 0, 0)) });
+	now = 24;
+	monitor.record({
+		type: "message_update",
+		message: response(usage(0, 0, 0, 0, 0, 0)),
+		assistantMessageEvent: {
+			type: "text_delta",
+			contentIndex: 0,
+			delta: "t",
+			partial: response(usage(0, 0, 0, 0, 0, 0)),
+		},
+	});
+	now = 40;
+	monitor.record({ type: "message_end", message: response(usage(100, 20, 300, 50, 6, 0.052)) });
+	now = 43;
+	monitor.record({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
+	now = 73;
+	monitor.record({
+		type: "tool_execution_end",
+		toolCallId: "tool-1",
+		toolName: "read",
+		result: {},
+		isError: false,
+		durationMs: 30,
+	});
+	now = 74;
+	monitor.record({
+		type: "message_end",
+		message: {
+			role: "toolResult",
+			toolCallId: "tool-1",
+			toolName: "read",
+			content: [{ type: "text", text: "αβ" }],
+			isError: false,
+			timestamp: 0,
+		},
+	});
+	now = 80;
+	monitor.record({ type: "turn_end", message: response(usage(100, 20, 300, 50, 6, 0.052)), toolResults: [] });
+	now = 90;
+	monitor.record({ type: "agent_end", messages: [] });
 	const result = monitor.report();
 	assert.equal(result.status, "finished");
 	assert.equal(result.durationMs, 90);
@@ -58,9 +109,22 @@ test("accounts for retries, failed tools and nested usage independently", () => 
 	monitor.noteRetry();
 	monitor.record({ type: "tool_execution_start", toolCallId: "bad", toolName: "bash", args: {} });
 	monitor.record({ type: "tool_execution_end", toolCallId: "bad", toolName: "bash", result: {}, isError: true });
-	monitor.record({ type: "message_end", message: { role: "toolResult", toolCallId: "bad", toolName: "bash", content: [{ type: "text", text: "failure" }], isError: true, usage: usage(10, 2, 5, 0, undefined, 0.011), timestamp: 0 } });
-	now = 180; monitor.record({ type: "message_end", message: response(usage(1, 3, 0, 0, undefined, 0.005), "error") });
-	now = 200; monitor.record({ type: "agent_end", messages: [] });
+	monitor.record({
+		type: "message_end",
+		message: {
+			role: "toolResult",
+			toolCallId: "bad",
+			toolName: "bash",
+			content: [{ type: "text", text: "failure" }],
+			isError: true,
+			usage: usage(10, 2, 5, 0, undefined, 0.011),
+			timestamp: 0,
+		},
+	});
+	now = 180;
+	monitor.record({ type: "message_end", message: response(usage(1, 3, 0, 0, undefined, 0.005), "error") });
+	now = 200;
+	monitor.record({ type: "agent_end", messages: [] });
 	const result = monitor.report();
 	assert.equal(result.status, "error");
 	assert.equal(result.retryCount, 1);
@@ -74,7 +138,7 @@ test("accounts for retries, failed tools and nested usage independently", () => 
 });
 
 test("never retains conversation content or mutates prior snapshots", () => {
-	let now = 0;
+	const now = 0;
 	const monitor = new AgentPerformanceMonitor({ now: () => now });
 	monitor.record({ type: "agent_start" });
 	monitor.record({ type: "message_end", message: response(usage(1, 2, 0, 0, undefined, 0.1)) });
@@ -90,7 +154,10 @@ test("never retains conversation content or mutates prior snapshots", () => {
 test("quality metrics use an external grader and avoid division by zero", () => {
 	const one = { costUsd: 0.1, tokens: { total: 100 } };
 	const two = { costUsd: 0.2, tokens: { total: 200 } };
-	const result = summarizeAgentEvaluations([{ id: "a", passed: true, metrics: one }, { id: "b", passed: false, metrics: two }]);
+	const result = summarizeAgentEvaluations([
+		{ id: "a", passed: true, metrics: one },
+		{ id: "b", passed: false, metrics: two },
+	]);
 	assert.equal(result.cases, 2);
 	assert.equal(result.successes, 1);
 	assert.equal(result.passRate, 0.5);
@@ -107,10 +174,17 @@ test("counts UTF-8 bytes in runtimes without the Node Buffer global", () => {
 	try {
 		(globalThis as { Buffer?: typeof Buffer }).Buffer = undefined;
 		monitor.record({ type: "agent_start" });
-		monitor.record({ type: "message_end", message: {
-			role: "toolResult", toolCallId: "unicode", toolName: "read",
-			content: [{ type: "text", text: "αβ😀" }], isError: false, timestamp: 0,
-		} });
+		monitor.record({
+			type: "message_end",
+			message: {
+				role: "toolResult",
+				toolCallId: "unicode",
+				toolName: "read",
+				content: [{ type: "text", text: "αβ😀" }],
+				isError: false,
+				timestamp: 0,
+			},
+		});
 		assert.equal(monitor.report().toolResultBytes, 8);
 	} finally {
 		globalThis.Buffer = savedBuffer;

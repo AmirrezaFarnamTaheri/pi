@@ -8,14 +8,14 @@ import {
 	mkdtempSync,
 	openSync,
 	readFileSync,
-	statSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 	writeSync,
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { utimesSync } from "fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { findMostRecentSession, loadEntriesFromFile, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
@@ -533,7 +533,6 @@ describe("SessionManager session file creation", () => {
 	});
 });
 
-
 describe("session discovery stat cache", () => {
 	it("reuses unchanged JSONL summaries and invalidates them when the session grows", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-session-discovery-cache-"));
@@ -541,7 +540,10 @@ describe("session discovery stat cache", () => {
 		const initial = [
 			JSON.stringify({ type: "session", version: 3, id: "cache-id", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
 			JSON.stringify({
-				type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
+				type: "message",
+				id: "m1",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01Z",
 				message: { role: "user", content: "first", timestamp: 1 },
 			}),
 		].join("\n");
@@ -553,10 +555,16 @@ describe("session discovery stat cache", () => {
 			expect(unchanged[0]).toEqual(initialList[0]);
 			expect(unchanged[0]).not.toBe(initialList[0]);
 
-			appendFileSync(path, `${JSON.stringify({
-				type: "message", id: "m2", parentId: "m1", timestamp: "2026-01-01T00:00:02Z",
-				message: { role: "user", content: "second", timestamp: 2 },
-			})}\n`);
+			appendFileSync(
+				path,
+				`${JSON.stringify({
+					type: "message",
+					id: "m2",
+					parentId: "m1",
+					timestamp: "2026-01-01T00:00:02Z",
+					message: { role: "user", content: "second", timestamp: 2 },
+				})}\n`,
+			);
 			const modified = await SessionManager.list(dir, dir);
 			expect(modified[0]).not.toBe(initialList[0]);
 			expect(modified[0]).toMatchObject({ messageCount: 2, allMessagesText: "first second" });
@@ -571,11 +579,25 @@ describe("session summary cache ownership and rewrite safety", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-session-cache-mutation-"));
 		const path = join(dir, "editable.jsonl");
 		try {
-			writeFileSync(path, [
-				JSON.stringify({ type: "session", version: 3, id: "mutable", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
-				JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
-					message: { role: "user", content: "original", timestamp: 1 } }),
-			].join("\n") + "\n");
+			writeFileSync(
+				path,
+				[
+					JSON.stringify({
+						type: "session",
+						version: 3,
+						id: "mutable",
+						timestamp: "2026-01-01T00:00:00Z",
+						cwd: dir,
+					}),
+					JSON.stringify({
+						type: "message",
+						id: "m1",
+						parentId: null,
+						timestamp: "2026-01-01T00:00:01Z",
+						message: { role: "user", content: "original", timestamp: 1 },
+					}),
+				].join("\n") + "\n",
+			);
 			const first = (await SessionManager.list(dir, dir))[0]!;
 			first.name = "changed by caller";
 			first.created.setFullYear(2000);
@@ -594,11 +616,23 @@ describe("session summary cache ownership and rewrite safety", () => {
 		const dir = mkdtempSync(join(tmpdir(), "pi-session-cache-rewrite-"));
 		const path = join(dir, "same-size.jsonl");
 		try {
-			const firstText = [
-				JSON.stringify({ type: "session", version: 3, id: "rewrite", timestamp: "2026-01-01T00:00:00Z", cwd: dir }),
-				JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T00:00:01Z",
-					message: { role: "user", content: "alpha", timestamp: 1 } }),
-			].join("\n") + "\n";
+			const firstText =
+				[
+					JSON.stringify({
+						type: "session",
+						version: 3,
+						id: "rewrite",
+						timestamp: "2026-01-01T00:00:00Z",
+						cwd: dir,
+					}),
+					JSON.stringify({
+						type: "message",
+						id: "m1",
+						parentId: null,
+						timestamp: "2026-01-01T00:00:01Z",
+						message: { role: "user", content: "alpha", timestamp: 1 },
+					}),
+				].join("\n") + "\n";
 			writeFileSync(path, firstText);
 			expect((await SessionManager.list(dir, dir))[0]?.allMessagesText).toBe("alpha");
 			const statBefore = statSync(path);

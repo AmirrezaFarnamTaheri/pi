@@ -127,10 +127,17 @@ describe("collectCacheMisses", () => {
 
 describe("incremental cache-miss hot path", () => {
 	it("does not scan unrelated historical events when the most recent request reported cache activity", () => {
-		const history = Array.from({ length: 25_000 }, (_, i) => ({
-			type: "custom", id: `state-${i}`, parentId: null, timestamp: "",
-			customType: "unrelated",
-		}) as SessionEntry);
+		const history = Array.from(
+			{ length: 25_000 },
+			(_, i) =>
+				({
+					type: "custom",
+					id: `state-${i}`,
+					parentId: null,
+					timestamp: "",
+					customType: "unrelated",
+				}) as SessionEntry,
+		);
 		history.push(entry(turn2));
 		let lookedUp = 0;
 		const bounded = new Proxy(history, {
@@ -154,7 +161,6 @@ describe("incremental cache-miss hot path", () => {
 		expect(detectCacheMiss([entry(turn1), compact, entry(afterCold)], nextMiss, models)).toBeUndefined();
 	});
 });
-
 
 describe("branch-aware cache-miss notices", () => {
 	it("replays only misses on the selected branch, not abandoned siblings", () => {

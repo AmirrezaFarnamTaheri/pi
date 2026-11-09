@@ -25,7 +25,6 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 	};
 }
 
-
 export function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
 	return headers
 		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
@@ -55,4 +54,3 @@ export function getNextCycleIndex(
 	if (length === 1) return undefined;
 	return direction === "forward" ? (currentIndex + 1) % length : (currentIndex - 1 + length) % length;
 }
-

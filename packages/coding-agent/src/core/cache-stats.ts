@@ -211,12 +211,13 @@ function lastRequestForMiss(entries: SessionEntry[]): PreviousRequest | undefine
 		if (entry.type === "usage" && entry.kind === "cache_warm") {
 			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
 			if (promptTokens > 0) {
-				if (!latest) latest = {
-					promptTokens,
-					modelKey: `${entry.provider}/${entry.model}`,
-					timestamp: Date.parse(entry.timestamp),
-					reportedCache: true,
-				};
+				if (!latest)
+					latest = {
+						promptTokens,
+						modelKey: `${entry.provider}/${entry.model}`,
+						timestamp: Date.parse(entry.timestamp),
+						reportedCache: true,
+					};
 				reportedCache = true;
 			}
 		} else if (entry.type === "message" && entry.message.role === "assistant") {

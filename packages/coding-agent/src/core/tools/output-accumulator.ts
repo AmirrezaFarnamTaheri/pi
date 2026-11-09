@@ -77,7 +77,6 @@ export class OutputAccumulator {
 		}
 	}
 
-
 	/** Wait for a spill-file write buffer to drain before reading more subprocess output. */
 	waitForDrain(): Promise<void> | undefined {
 		const stream = this.tempFileStream;
@@ -91,14 +90,20 @@ export class OutputAccumulator {
 				stream.off("close", onClose);
 				stream.off("error", onError);
 			};
-			const onDrain = () => { cleanup(); resolve(); };
+			const onDrain = () => {
+				cleanup();
+				resolve();
+			};
 			const onClose = () => {
 				cleanup();
 				if (stream.errored) reject(stream.errored);
 				else if (stream.writableFinished) resolve();
 				else reject(new Error("Output file closed before write completed"));
 			};
-			const onError = (error: Error) => { cleanup(); reject(error); };
+			const onError = (error: Error) => {
+				cleanup();
+				reject(error);
+			};
 			stream.once("drain", onDrain);
 			stream.once("finish", onDrain);
 			stream.once("close", onClose);

@@ -35,7 +35,9 @@ describe("recovering from temporary Bash output failures", () => {
 		expect(result.truncated).toBe(true);
 		expect(result.output).toContain("last useful output");
 		expect(result.fullOutputPath).toBeUndefined();
-		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain("Full output unavailable");
+		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain(
+			"Full output unavailable",
+		);
 		expect(createSpool).toHaveBeenCalledTimes(1);
 	});
 
@@ -71,7 +73,9 @@ describe("recovering from temporary Bash output failures", () => {
 		expect(result.truncated).toBe(true);
 		expect(result.output).toContain("last useful output");
 		expect(result.fullOutputPath).toBeUndefined();
-		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain("Full output unavailable");
+		expect(bashExecutionToText({ role: "bashExecution", command: "echo", timestamp: 0, ...result })).toContain(
+			"Full output unavailable",
+		);
 		expect(createSpool).toHaveBeenCalledTimes(1);
 	});
 });

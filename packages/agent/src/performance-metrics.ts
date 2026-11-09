@@ -1,7 +1,8 @@
 /** Opt-in, content-free telemetry for a single agent run. */
-import type { AgentEvent } from "./types.ts";
-import type { Agent } from "./agent.ts";
+
 import type { Usage } from "@earendil-works/pi-ai/compat";
+import type { Agent } from "./agent.ts";
+import type { AgentEvent } from "./types.ts";
 
 export interface AgentTurnMetrics {
 	index: number;
@@ -85,7 +86,20 @@ export class AgentPerformanceMonitor {
 	private lastStopReason: string | undefined;
 	private requestCount = 0;
 	private turnCount = 0;
-	private activeTurn: { at: number; requests: number; calls: number; errors: number; input: number; output: number; read: number; write: number; reasoning: number; cost: number } | undefined;
+	private activeTurn:
+		| {
+				at: number;
+				requests: number;
+				calls: number;
+				errors: number;
+				input: number;
+				output: number;
+				read: number;
+				write: number;
+				reasoning: number;
+				cost: number;
+		  }
+		| undefined;
 	private readonly finishedTurns: AgentTurnMetrics[] = [];
 	private toolCalls = 0;
 	private toolErrors = 0;
@@ -123,9 +137,18 @@ export class AgentPerformanceMonitor {
 		const now = this.now();
 		switch (event.type) {
 			case "turn_start":
-				this.activeTurn = { at: now, requests: this.requestCount, calls: this.toolCalls, errors: this.toolErrors,
-					input: this.input, output: this.output, read: this.cacheRead, write: this.cacheWrite,
-					reasoning: this.reasoning, cost: this.costUsd };
+				this.activeTurn = {
+					at: now,
+					requests: this.requestCount,
+					calls: this.toolCalls,
+					errors: this.toolErrors,
+					input: this.input,
+					output: this.output,
+					read: this.cacheRead,
+					write: this.cacheWrite,
+					reasoning: this.reasoning,
+					cost: this.costUsd,
+				};
 				break;
 			case "message_update": {
 				const delta = event.assistantMessageEvent;
@@ -169,16 +192,27 @@ export class AgentPerformanceMonitor {
 				const started = this.activeTurn;
 				if (started) {
 					const tokens = {
-						input: this.input - started.input, output: this.output - started.output,
-						cacheRead: this.cacheRead - started.read, cacheWrite: this.cacheWrite - started.write,
+						input: this.input - started.input,
+						output: this.output - started.output,
+						cacheRead: this.cacheRead - started.read,
+						cacheWrite: this.cacheWrite - started.write,
 						reasoning: this.reasoning - started.reasoning,
-						total: (this.input - started.input) + (this.output - started.output) +
-							(this.cacheRead - started.read) + (this.cacheWrite - started.write),
+						total:
+							this.input -
+							started.input +
+							(this.output - started.output) +
+							(this.cacheRead - started.read) +
+							(this.cacheWrite - started.write),
 					};
-					this.finishedTurns.push({ index: this.turnCount, durationMs: Math.max(0, now - started.at),
-						requests: this.requestCount - started.requests, toolCalls: this.toolCalls - started.calls,
+					this.finishedTurns.push({
+						index: this.turnCount,
+						durationMs: Math.max(0, now - started.at),
+						requests: this.requestCount - started.requests,
+						toolCalls: this.toolCalls - started.calls,
 						toolErrors: this.toolErrors - started.errors,
-						costUsd: Math.round((this.costUsd - started.cost) * 1e12) / 1e12, tokens });
+						costUsd: Math.round((this.costUsd - started.cost) * 1e12) / 1e12,
+						tokens,
+					});
 					this.activeTurn = undefined;
 				}
 				break;
@@ -191,9 +225,16 @@ export class AgentPerformanceMonitor {
 	}
 
 	report(): AgentRunMetrics {
-		const status = this.startedAt === undefined ? "idle" : this.endedAt === undefined ? "running"
-			: this.lastStopReason === "aborted" ? "aborted"
-			: this.lastStopReason === "error" ? "error" : "finished";
+		const status =
+			this.startedAt === undefined
+				? "idle"
+				: this.endedAt === undefined
+					? "running"
+					: this.lastStopReason === "aborted"
+						? "aborted"
+						: this.lastStopReason === "error"
+							? "error"
+							: "finished";
 		const tokens = {
 			input: this.input,
 			output: this.output,
@@ -208,7 +249,8 @@ export class AgentPerformanceMonitor {
 			status,
 			durationMs: this.startedAt === undefined ? 0 : Math.max(0, (this.endedAt ?? this.now()) - this.startedAt),
 			...(this.firstTextAt === undefined || this.startedAt === undefined
-				? {} : { timeToFirstTextMs: Math.max(0, this.firstTextAt - this.startedAt) }),
+				? {}
+				: { timeToFirstTextMs: Math.max(0, this.firstTextAt - this.startedAt) }),
 			requestCount: this.requestCount,
 			turnCount: this.turnCount,
 			turns: this.finishedTurns.map((turn) => ({ ...turn, tokens: { ...turn.tokens } })),
@@ -266,7 +308,10 @@ export class AgentPerformanceMonitor {
 }
 
 /** Subscribe only when profiling is requested; the normal Agent path is unaffected. */
-export function monitorAgent(agent: Pick<Agent, "subscribe">, options: { now?: () => number } = {}): {
+export function monitorAgent(
+	agent: Pick<Agent, "subscribe">,
+	options: { now?: () => number } = {},
+): {
 	monitor: AgentPerformanceMonitor;
 	unsubscribe: () => void;
 } {

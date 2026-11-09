@@ -17,9 +17,9 @@ import {
 	type ToolStateChanges,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
+import { configuredParallelToolLimit, executeBoundedInOrder } from "./ordered-tool-pool.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import { ToolUpdateTracker } from "./tool-update-tracker.ts";
-import { configuredParallelToolLimit, executeBoundedInOrder } from "./ordered-tool-pool.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -709,10 +709,7 @@ async function executeToolCallsParallel(
 
 	// Preparation remains ordered (especially permission hooks), but execution
 	// only runs a bounded number of independent tools at once.
-	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(
-		finalizedCalls,
-		concurrency,
-	);
+	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(finalizedCalls, concurrency);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);

@@ -37,8 +37,25 @@ test("abbreviates old successful results, preserving their head and tail within 
 
 test("leaves errors, image payloads and multi-block tool results unchanged", () => {
 	const error = tool("bad", "ERROR " + "x".repeat(900), true);
-	const image = { role: "toolResult" as const, toolCallId: "image", toolName: "read", content: [{ type: "image" as const, data: "abc", mimeType: "image/png" }], isError: false, timestamp: 0 };
-	const multi = { role: "toolResult" as const, toolCallId: "multi", toolName: "read", content: [{ type: "text" as const, text: "x".repeat(700) }, { type: "text" as const, text: "y".repeat(700) }], isError: false, timestamp: 0 };
+	const image = {
+		role: "toolResult" as const,
+		toolCallId: "image",
+		toolName: "read",
+		content: [{ type: "image" as const, data: "abc", mimeType: "image/png" }],
+		isError: false,
+		timestamp: 0,
+	};
+	const multi = {
+		role: "toolResult" as const,
+		toolCallId: "multi",
+		toolName: "read",
+		content: [
+			{ type: "text" as const, text: "x".repeat(700) },
+			{ type: "text" as const, text: "y".repeat(700) },
+		],
+		isError: false,
+		timestamp: 0,
+	};
 	const messages = [error, image, multi];
 	const result = compactHistoricalToolResults(messages, { maxCharsPerToolResult: 128, keepRecentResults: 0 });
 	assert.equal(result.trimmedResults, 0);
@@ -52,5 +69,8 @@ test("preserves original arrays when there are no changes and validates settings
 	const result = compactHistoricalToolResults(messages, { maxCharsPerToolResult: 128, keepRecentResults: 0 });
 	assert.equal(result.messages, messages);
 	assert.throws(() => compactHistoricalToolResults(messages, { maxCharsPerToolResult: 0 }), RangeError);
-	assert.throws(() => compactHistoricalToolResults(messages, { maxCharsPerToolResult: 128, keepRecentResults: -1 }), RangeError);
+	assert.throws(
+		() => compactHistoricalToolResults(messages, { maxCharsPerToolResult: 128, keepRecentResults: -1 }),
+		RangeError,
+	);
 });

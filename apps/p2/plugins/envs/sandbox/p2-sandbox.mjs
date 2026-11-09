@@ -201,7 +201,9 @@ function hostPath(path, readonly) {
 	const within = (parent, child) => child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`);
 	const overlaps = (first, second) => within(first, second) || within(second, first);
 	const failProtected = () => {
-		throw new Error(`A writable folder must not contain or be inside ${protectedPath} (p2's launcher runs from there): ${path}`);
+		throw new Error(
+			`A writable folder must not contain or be inside ${protectedPath} (p2's launcher runs from there): ${path}`,
+		);
 	};
 	// The lexical check protects direct ~/.pi paths even before they exist.
 	if (!readonly && overlaps(requested, protectedPath)) failProtected();

@@ -6,7 +6,9 @@ import { afterEach, test } from "vitest";
 import { addAccountProfile, loadAccountProfiles, removeAccountProfile } from "../src/core/account-profiles.ts";
 
 const directories: string[] = [];
-afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => {
+	for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 test("creates independent, persistent alias IDs without overwriting existing accounts", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-accounts-"));
