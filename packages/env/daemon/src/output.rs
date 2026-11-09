@@ -74,10 +74,7 @@ impl Output {
     /// blocked forever.
     pub fn wait_until_sent(&self, unsent: &AtomicUsize, stop: &AtomicBool) {
         let mut queues = self.queues.lock().unwrap();
-        while unsent.load(Ordering::SeqCst) > 0
-            && !queues.closed
-            && !stop.load(Ordering::SeqCst)
-        {
+        while unsent.load(Ordering::SeqCst) > 0 && !queues.closed && !stop.load(Ordering::SeqCst) {
             queues = self
                 .drained
                 .wait_timeout(queues, Duration::from_millis(100))
