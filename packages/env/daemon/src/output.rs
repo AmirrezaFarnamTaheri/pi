@@ -67,6 +67,25 @@ impl Output {
         self.drained.notify_all();
     }
 
+    /// A request's final result must never overtake its own bulk output.
+    /// The writer decrements `unsent` only after a whole frame has been
+    /// written, so waiting here keeps every output event before the result.
+    /// A dead output stream or cancelled reader must not keep the request
+    /// blocked forever.
+    pub fn wait_until_sent(&self, unsent: &AtomicUsize, stop: &AtomicBool) {
+        let mut queues = self.queues.lock().unwrap();
+        while unsent.load(Ordering::SeqCst) > 0
+            && !queues.closed
+            && !stop.load(Ordering::SeqCst)
+        {
+            queues = self
+                .drained
+                .wait_timeout(queues, Duration::from_millis(100))
+                .unwrap()
+                .0;
+        }
+    }
+
     /// Write frames to `writer` until closed or a write fails.
     pub fn run(&self, writer: &mut impl Write) {
         loop {
