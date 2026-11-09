@@ -244,7 +244,16 @@ describe("Discord fleet persistence and identity isolation", () => {
 			created[1]!.emit(control);
 			let duplicates = 0;
 			for (;;) {
-				const event = await fleet.next(AbortSignal.timeout(25));
+				// AbortSignal.timeout uses an unref'ed timer: without another handle
+				// Node can cancel this test with a pending promise before it fires.
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), 25);
+				let event: Awaited<ReturnType<typeof fleet.next>>;
+				try {
+					event = await fleet.next(controller.signal);
+				} finally {
+					clearTimeout(timeout);
+				}
 				if (!event) break;
 				if (event.event.kind === "message" && event.event.message.id === "777") duplicates++;
 			}
