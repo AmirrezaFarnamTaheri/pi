@@ -87,3 +87,17 @@ test("corrupted release assets fail checksum verification before publication", (
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("fork release supports an explicit manual rerun on the verified release branch only", () => {
+  const release = readFileSync(
+    join(import.meta.dirname, "..", ".github", "workflows", "fork-github-release.yml"), "utf8",
+  );
+  assert.match(release, /^on:\s*\n\s+workflow_dispatch:\s*\n\s+push:/m);
+  assert.match(
+    release,
+    /if:\s*github\.repository == 'AmirrezaFarnamTaheri\/pi' && startsWith\(github\.ref, 'refs\/heads\/release\/fork-v'\)/,
+    "manual dispatch must not build or publish arbitrary branches",
+  );
+  assert.match(release, /git merge-base --is-ancestor/);
+  assert.match(release, /verify-fork-release-ci\.mjs/);
+});
