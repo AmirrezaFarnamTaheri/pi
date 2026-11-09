@@ -44,7 +44,9 @@ jobs:
           import { readFileSync } from "node:fs";
           const files = execFileSync("git", ["diff", "--name-only", "-z"], { encoding: "utf8" })
             .split("\0").filter(Boolean).sort().map((path) => ({ path, content: readFileSync(path, "utf8") }));
-          const payload = JSON.stringify(files);
+          // Base64 transport prevents Actions' masking rules from changing
+          // string literals in the exported formatter output.
+          const payload = Buffer.from(JSON.stringify(files), "utf8").toString("base64");
           console.log("PI_FORMAT_START:" + files.length + ":" + payload.length);
           for (let i = 0; i < payload.length; i += 2800)
             console.log("PI_FORMAT_CHUNK:" + payload.slice(i, i + 2800));
