@@ -190,6 +190,10 @@ pub fn run(
     ));
 
     let names = ["stdout", "stderr"];
+    // The result travels in the priority control lane. Track the physical
+    // writes for this process, or its exit result can overtake a pending 64KiB
+    // output chunk and the client will drop that event on request completion.
+    let unsent = Arc::new(AtomicUsize::new(0));
     let mut ended = [false, false];
     let mut status: Option<Result<ExitStatus, String>> = None;
     let mut idle_until: Option<Instant> = None;
@@ -232,7 +236,7 @@ pub fn run(
                         json!({ "kind": "output", "stream": names[stream] }),
                         bytes,
                     ),
-                    None,
+                    Some(unsent.clone()),
                 );
                 if status.is_some() {
                     idle_until = Some(Instant::now() + EXIT_STDIO_GRACE);
@@ -257,6 +261,12 @@ pub fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
+    }
+    // All received output frames must be *written to the connection* before
+    // the daemon emits the final control result. Otherwise the priority
+    // control lane can close this request while its last output is pending.
+    if !aborted {
+        output.wait_until_sent(&unsent, &stop);
     }
     // Readers and the writer stop within 100 ms, also when a descendant still holds a pipe; removing the program
     // drops its input channel, which ends a writer waiting for input.
