@@ -16,43 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Temporary, branch-scoped, read-only extraction of native Biome fixes.
-  # This job never pushes to GitHub or changes the required check behavior.
-  format-export:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/ci/enable-manual-fork-release-v151'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-      - name: Install exact locked Biome
-        run: npm ci --ignore-scripts
-      - name: Export complete native Biome formatting results
-        shell: bash
-        run: |
-          npm run format --workspace apps/p2 || true
-          node --input-type=module <<'NODE'
-          import { execFileSync } from "node:child_process";
-          import { readFileSync } from "node:fs";
-          const files = execFileSync("git", ["diff", "--name-only", "-z"], { encoding: "utf8" })
-            .split("\0").filter(Boolean).sort().map((path) => ({ path, content: readFileSync(path, "utf8") }));
-          // Base64 transport prevents Actions' masking rules from changing
-          // string literals in the exported formatter output.
-          const payload = Buffer.from(JSON.stringify(files), "utf8").toString("base64");
-          console.log("PI_FORMAT_START:" + files.length + ":" + payload.length);
-          for (let i = 0; i < payload.length; i += 2800)
-            console.log("PI_FORMAT_CHUNK:" + payload.slice(i, i + 2800));
-          console.log("PI_FORMAT_END");
-          NODE
-
   build-check:
     runs-on: ubuntu-latest
     steps:

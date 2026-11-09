@@ -45,9 +45,12 @@ export class DiscordScheduler {
 		maxPriority = 16,
 		maxPendingPriority = 256,
 	) {
-		if (![maxNormal, maxPending, maxPriority, maxPendingPriority].every(
-			(value) => Number.isSafeInteger(value) && value > 0,
-		)) throw new Error("Discord scheduler limits must be positive integers");
+		if (
+			![maxNormal, maxPending, maxPriority, maxPendingPriority].every(
+				(value) => Number.isSafeInteger(value) && value > 0,
+			)
+		)
+			throw new Error("Discord scheduler limits must be positive integers");
 		this.#overflow = overflow;
 		this.#error = error;
 		this.#maxNormal = maxNormal;
@@ -62,12 +65,26 @@ export class DiscordScheduler {
 		const limit = event.stop ? 128 : event.priority ? this.#maxPendingPriority : this.#maxPending;
 		if (queue.length >= limit) {
 			if (event.priority) {
-				try { this.#error(new Error("Discord control command backlog saturated")); } catch { /* Continue to rejection notice. */ }
+				try {
+					this.#error(new Error("Discord control command backlog saturated"));
+				} catch {
+					/* Continue to rejection notice. */
+				}
 				if (event.onRejected && this.#rejectionNotices < this.#maxRejectionNotices) {
 					this.#rejectionNotices++;
-					void Promise.resolve().then(() => event.onRejected?.()).catch((error: unknown) => {
-						try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
-					}).finally(() => { this.#rejectionNotices--; this.#notifyIdle(); });
+					void Promise.resolve()
+						.then(() => event.onRejected?.())
+						.catch((error: unknown) => {
+							try {
+								this.#error(error);
+							} catch {
+								/* Logging must not halt the dispatcher. */
+							}
+						})
+						.finally(() => {
+							this.#rejectionNotices--;
+							this.#notifyIdle();
+						});
 				}
 			} else if (event.catchUp) {
 				// A ready event rejected while full must not request another ready event
@@ -98,8 +115,15 @@ export class DiscordScheduler {
 	}
 
 	#isIdle(): boolean {
-		return this.#normal.length === 0 && this.#priority.length === 0 && this.#stopQueue.length === 0 &&
-			this.#normalActive.size === 0 && this.#priorityActive.size === 0 && this.#stopActive.size === 0 && this.#rejectionNotices === 0;
+		return (
+			this.#normal.length === 0 &&
+			this.#priority.length === 0 &&
+			this.#stopQueue.length === 0 &&
+			this.#normalActive.size === 0 &&
+			this.#priorityActive.size === 0 &&
+			this.#stopActive.size === 0 &&
+			this.#rejectionNotices === 0
+		);
 	}
 
 	#notifyIdle(): void {
@@ -118,7 +142,11 @@ export class DiscordScheduler {
 			void Promise.resolve()
 				.then(() => event.run())
 				.catch((error: unknown) => {
-					try { this.#error(error); } catch { /* Logging must not halt the dispatcher. */ }
+					try {
+						this.#error(error);
+					} catch {
+						/* Logging must not halt the dispatcher. */
+					}
 				})
 				.finally(() => {
 					active.delete(event.key);
@@ -138,7 +166,11 @@ export class DiscordScheduler {
 				const bot = this.#deferredCatchUps.values().next().value;
 				if (bot !== undefined) {
 					this.#deferredCatchUps.delete(bot);
-					try { this.#overflow(bot); } catch (error) { this.#error(error); }
+					try {
+						this.#overflow(bot);
+					} catch (error) {
+						this.#error(error);
+					}
 				}
 			}
 		}

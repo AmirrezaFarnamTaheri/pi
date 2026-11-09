@@ -2,8 +2,8 @@
 // by the link's bot, delivers the messages since the link's cursor (a thread's: to its forked subagent) as one input; a
 // pending reply is posted once its turn ended. Plain logic over ports, so tests run it with fake bots and sessions.
 import type { SessionLock } from "@p2/app/v1";
-import { replyNonce } from "./reply-nonce.ts";
 import { type Binding, COMMANDS, type Command, type OfferedFile, type Pending, type Wake } from "./contract.ts";
+import { replyNonce } from "./reply-nonce.ts";
 
 /** A Discord message as the relay reads it. */
 export type DiscordMessage = {
@@ -165,7 +165,6 @@ export class Relay {
 		}
 	}
 
-
 	/** `discord`: bot `bot` while it is connected. */
 	constructor(
 		discord: (bot: string) => DiscordPort | undefined,
@@ -206,8 +205,13 @@ export class Relay {
 		if (binding.botId !== bot || !mayWake(binding.wake, message.author.id, message.roles)) return;
 		// Invalidate an in-flight channel lookup if unlink/relink completed during that await.
 		const current = this.#state.value().bindings[binding.channelId];
-		if (!current || current.session !== binding.session || current.generation !== binding.generation ||
-			!mayWake(current.wake, message.author.id, message.roles)) return;
+		if (
+			!current ||
+			current.session !== binding.session ||
+			current.generation !== binding.generation ||
+			!mayWake(current.wake, message.author.id, message.roles)
+		)
+			return;
 		// A command runs now, never behind the delivery under way (a stop must reach the running turn).
 		const command = commandOf(message.text, port.botId);
 		if (command) await this.#trackSession(binding.session, this.#command(binding, thread, message, command));
@@ -277,18 +281,30 @@ export class Relay {
 	 * then advances the cursor and records the pending reply. A session that cannot take it gets a notice instead. One
 	 * delivery at a time per channel or thread: a later one starts from the cursor the earlier one left.
 	 */
-	deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
+	deliver(
+		channelId: string,
+		trigger: DiscordMessage,
+		thread: DiscordChannel | undefined,
+		historyBudget?: { remaining: number },
+	): Promise<void> {
 		const session = this.#state.value().bindings[channelId]?.session;
 		const task = this.#deliverQueued(channelId, trigger, thread, historyBudget);
 		return session ? this.#trackSession(session, task) : task;
 	}
 
-	async #deliverQueued(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
+	async #deliverQueued(
+		channelId: string,
+		trigger: DiscordMessage,
+		thread: DiscordChannel | undefined,
+		historyBudget?: { remaining: number },
+	): Promise<void> {
 		const target = thread?.id ?? channelId;
 		// "Typing" at once, before the wait for an earlier delivery and the history's pages: `typing()` refreshes it
 		// until the delivery ends, then the pending reply keeps it on.
 		const stopTyping = this.#typingWhile(channelId, target, trigger);
-		const run = (this.#lanes.get(target) ?? Promise.resolve()).then(() => this.#deliver(channelId, trigger, thread, historyBudget));
+		const run = (this.#lanes.get(target) ?? Promise.resolve()).then(() =>
+			this.#deliver(channelId, trigger, thread, historyBudget),
+		);
 		// The lane goes on whether this delivery failed or not; the caller still learns it failed.
 		const lane = run.catch(() => {});
 		this.#lanes.set(target, lane);
@@ -318,7 +334,12 @@ export class Relay {
 		};
 	}
 
-	async #deliver(channelId: string, trigger: DiscordMessage, thread: DiscordChannel | undefined, historyBudget?: { remaining: number }): Promise<void> {
+	async #deliver(
+		channelId: string,
+		trigger: DiscordMessage,
+		thread: DiscordChannel | undefined,
+		historyBudget?: { remaining: number },
+	): Promise<void> {
 		const binding = this.#state.value().bindings[channelId];
 		if (!binding) return;
 		const port = this.#port(binding.botId);
@@ -353,15 +374,19 @@ export class Relay {
 		let window = new BatchWindow(BATCH_CAP);
 		const before = thread?.thread && cursor === null ? thread.thread.createdId : undefined;
 		let truncated = false;
-		const markTruncated = () => { truncated = true; };
-		const historicalPort: Pick<DiscordPort, "messages"> = historyBudget ? {
-			messages: async (id, query) => {
-				if (historyBudget.remaining <= 0)
-					throw new Error("Discord catch-up context history budget exhausted; delivery not checkpointed");
-				historyBudget.remaining--;
-				return port.messages(id, query);
-			},
-		} : port;
+		const markTruncated = () => {
+			truncated = true;
+		};
+		const historicalPort: Pick<DiscordPort, "messages"> = historyBudget
+			? {
+					messages: async (id, query) => {
+						if (historyBudget.remaining <= 0)
+							throw new Error("Discord catch-up context history budget exhausted; delivery not checkpointed");
+						historyBudget.remaining--;
+						return port.messages(id, query);
+					},
+				}
+			: port;
 		if (before !== undefined)
 			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
@@ -372,9 +397,24 @@ export class Relay {
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
 			window = new BatchWindow(BATCH_CAP);
 			if (before !== undefined)
-				for (const message of await recentHistory(historicalPort, channelId, binding.cursor, before, true, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
-					if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
-			for (const message of await recentHistory(historicalPort, where, cursor, trigger.id, false, (message) => !message.author.bot && !this.#isCommand(binding, message, port.botId)))
+				for (const message of await recentHistory(
+					historicalPort,
+					channelId,
+					binding.cursor,
+					before,
+					true,
+					(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+				))
+					if (!message.author.bot && !this.#isCommand(binding, message, port.botId))
+						window.add("channel", message);
+			for (const message of await recentHistory(
+				historicalPort,
+				where,
+				cursor,
+				trigger.id,
+				false,
+				(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+			))
 				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
@@ -402,8 +442,13 @@ export class Relay {
 		try {
 			// A channel may be unlinked while its history is being fetched.
 			const latest = this.#state.value().bindings[channelId];
-			if (!latest || latest.session !== binding.session || latest.generation !== binding.generation ||
-				!mayWake(latest.wake, trigger.author.id, trigger.roles)) return;
+			if (
+				!latest ||
+				latest.session !== binding.session ||
+				latest.generation !== binding.generation ||
+				!mayWake(latest.wake, trigger.author.id, trigger.roles)
+			)
+				return;
 			delivered = await this.#sessions.deliver(binding.session, {
 				...(conversation === undefined ? {} : { conversation }),
 				requestId: `discord:${trigger.id}`,
@@ -457,10 +502,20 @@ export class Relay {
 		const places = Object.values(this.#state.value().bindings)
 			.filter((binding) => binding.botId === bot)
 			.flatMap((binding) => [
-				{ binding, id: binding.channelId, cursor: binding.cursor, scan: binding.catchUpScan,
-					thread: false, key: `${bot}:${binding.channelId}:${binding.generation ?? ""}` },
+				{
+					binding,
+					id: binding.channelId,
+					cursor: binding.cursor,
+					scan: binding.catchUpScan,
+					thread: false,
+					key: `${bot}:${binding.channelId}:${binding.generation ?? ""}`,
+				},
 				...Object.entries(binding.threads).map(([id, known]) => ({
-					binding, id, cursor: known.cursor, scan: known.catchUpScan, thread: true,
+					binding,
+					id,
+					cursor: known.cursor,
+					scan: known.catchUpScan,
+					thread: true,
 					key: `${bot}:${binding.channelId}:${id}:${binding.generation ?? ""}`,
 				})),
 			]);
@@ -483,8 +538,10 @@ export class Relay {
 			try {
 				// Scan progress is separate from delivery's cursor; a later mention still
 				// includes all required context since the last successful delivery.
-				let after = place.scan && (place.cursor === null || BigInt(place.scan) > BigInt(place.cursor))
-					? place.scan : place.cursor ?? "0";
+				let after =
+					place.scan && (place.cursor === null || BigInt(place.scan) > BigInt(place.cursor))
+						? place.scan
+						: (place.cursor ?? "0");
 				let newest: DiscordMessage | undefined;
 				let more = false;
 				let scanned = false;
@@ -503,7 +560,8 @@ export class Relay {
 							message.mentionsBot &&
 							mayWake(binding.wake, message.author.id, message.roles) &&
 							!this.#isCommand(binding, message, port.botId)
-						) newest = message;
+						)
+							newest = message;
 					after = page.at(-1)!.id;
 					more = page.length === PAGE;
 				} while (more && remaining > 0);
@@ -512,28 +570,36 @@ export class Relay {
 					const thread = place.thread ? await port.channel(place.id) : undefined;
 					// A link or wake policy can change while the Discord API is awaited.
 					const current = this.#state.value().bindings[binding.channelId];
-					if (!current || current.session !== binding.session ||
+					if (
+						!current ||
+						current.session !== binding.session ||
 						current.generation !== binding.generation ||
 						(place.thread && !current.threads[place.id]) ||
-						!mayWake(current.wake, newest.author.id, newest.roles)) continue;
+						!mayWake(current.wake, newest.author.id, newest.roles)
+					)
+						continue;
 					await this.deliver(binding.channelId, newest, thread, historyBudget);
 					const updated = this.#state.value().bindings[binding.channelId];
 					const cursor = place.thread ? updated?.threads[place.id]?.cursor : updated?.cursor;
-					if (updated?.session === binding.session && (cursor === undefined || cursor === null || BigInt(cursor) < BigInt(newest.id))) {
+					if (
+						updated?.session === binding.session &&
+						(cursor === undefined || cursor === null || BigInt(cursor) < BigInt(newest.id))
+					) {
 						// A refused/failed worker RPC must not consume its trigger.
 						after = (BigInt(newest.id) - 1n).toString();
 						refused = true;
 					}
 				}
-				if (scanned) await this.#state.change((draft) => {
-					const current = draft.bindings[binding.channelId];
-					if (!current || current.session !== binding.session || current.generation !== binding.generation) return;
-					const target = place.thread ? current.threads[place.id] : current;
-					if (!target) return;
-					if (target.cursor !== null && BigInt(after) <= BigInt(target.cursor))
-						delete target.catchUpScan;
-					else target.catchUpScan = after;
-				});
+				if (scanned)
+					await this.#state.change((draft) => {
+						const current = draft.bindings[binding.channelId];
+						if (!current || current.session !== binding.session || current.generation !== binding.generation)
+							return;
+						const target = place.thread ? current.threads[place.id] : current;
+						if (!target) return;
+						if (target.cursor !== null && BigInt(after) <= BigInt(target.cursor)) delete target.catchUpScan;
+						else target.catchUpScan = after;
+					});
 				if (refused) {
 					this.#catchUpRetries.set(place.key, { bot, after: Date.now() + 8_000 });
 					continue;
@@ -573,18 +639,27 @@ export class Relay {
 
 	/** Ensure a pending reply still belongs to the exact live channel link. */
 	#pendingMatches(current: Pending | undefined, pending: Pending): boolean {
-		return current !== undefined && current.messageId === pending.messageId &&
-			current.submissionId === pending.submissionId && current.session === pending.session &&
-			current.channelId === pending.channelId && current.botId === pending.botId &&
-			current.linkGeneration === pending.linkGeneration;
+		return (
+			current !== undefined &&
+			current.messageId === pending.messageId &&
+			current.submissionId === pending.submissionId &&
+			current.session === pending.session &&
+			current.channelId === pending.channelId &&
+			current.botId === pending.botId &&
+			current.linkGeneration === pending.linkGeneration
+		);
 	}
 
 	#pendingIsCurrent(pending: Pending): boolean {
 		const state = this.#state.value();
 		const binding = state.bindings[pending.channelId];
-		return this.#pendingMatches(state.pending[pending.messageId], pending) &&
-			binding !== undefined && binding.session === pending.session && binding.botId === pending.botId &&
-			binding.generation === pending.linkGeneration;
+		return (
+			this.#pendingMatches(state.pending[pending.messageId], pending) &&
+			binding !== undefined &&
+			binding.session === pending.session &&
+			binding.botId === pending.botId &&
+			binding.generation === pending.linkGeneration
+		);
 	}
 
 	async #forget(pending: Pending): Promise<void> {
@@ -658,8 +733,14 @@ export class Relay {
 		const tooLarge = turn.files.filter((file) => file.size > limit);
 		if (tooLarge.length)
 			text += `${text ? "\n\n" : ""}Too large for Discord: ${tooLarge.map((file) => `${file.name} (${megabytes(file.size)})`).join(", ")}`;
-		const groups = attachmentGroups(turn.files.filter((file) => file.size <= limit), limit);
-		const posts: { text: string; files: OfferedFile[] }[] = chunkText(text).map((chunk) => ({ text: chunk, files: [] }));
+		const groups = attachmentGroups(
+			turn.files.filter((file) => file.size <= limit),
+			limit,
+		);
+		const posts: { text: string; files: OfferedFile[] }[] = chunkText(text).map((chunk) => ({
+			text: chunk,
+			files: [],
+		}));
 		for (const [index, group] of groups.entries()) {
 			const last = posts.at(-1);
 			if (index === 0 && last) last.files = group;
@@ -675,8 +756,13 @@ export class Relay {
 			if (post.text || files.length)
 				// Discord enforces this stable nonce for a short deduplication window, covering
 				// an HTTP success whose reply was lost before our local checkpoint.
-				await port.reply(pending.replyChannelId, index === 0 ? pending.messageId : undefined,
-					post.text, files, replyNonce(pending.messageId, index));
+				await port.reply(
+					pending.replyChannelId,
+					index === 0 ? pending.messageId : undefined,
+					post.text,
+					files,
+					replyNonce(pending.messageId, index),
+				);
 			// Checkpoint each posted chunk so a later HTTP 429 never duplicates earlier successful chunks.
 			await this.#state.change((draft) => {
 				const current = draft.pending[pending.messageId];
@@ -725,8 +811,9 @@ function isPermanentReplyFailure(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	const failure = error as { code?: unknown; rawError?: { code?: unknown } };
 	const code = failure.code ?? failure.rawError?.code;
-	return code === 10003 || code === "10003" || code === 50001 || code === "50001" ||
-		code === 50013 || code === "50013";
+	return (
+		code === 10003 || code === "10003" || code === 50001 || code === "50001" || code === 50013 || code === "50013"
+	);
 }
 
 /**
@@ -773,13 +860,18 @@ async function recentHistory(
 	for (let pages = 0; pages < 32; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
 		if (!page.length) return recent.slice(-BATCH_CAP);
-		const inRange = page.filter((message) =>
-			(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
-			BigInt(message.id) <= BigInt(until) && eligible(message),
+		const inRange = page.filter(
+			(message) =>
+				(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
+				BigInt(message.id) <= BigInt(until) &&
+				eligible(message),
 		);
 		recent.unshift(...inRange);
-		if (recent.length >= BATCH_CAP || page.length < PAGE ||
-			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor)))
+		if (
+			recent.length >= BATCH_CAP ||
+			page.length < PAGE ||
+			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))
+		)
 			return recent.slice(-BATCH_CAP);
 		before = page[0]!.id;
 	}

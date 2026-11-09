@@ -39,7 +39,10 @@ export class Fleet {
 	readonly #beforeSave?: () => Promise<void>;
 	readonly #seenMessages = new Set<string>();
 	#activeNotices = 0;
-	#controlRejectionHandler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>;
+	#controlRejectionHandler?: (
+		bot: string,
+		message: Extract<BotEvent, { kind: "message" }>["message"],
+	) => Promise<void>;
 	readonly #makeBot: BotFactory;
 	#mutation: Promise<void> = Promise.resolve();
 	#saveTail: Promise<void> = Promise.resolve();
@@ -54,12 +57,19 @@ export class Fleet {
 	/** Serialize administrative changes through network calls and disk commits. */
 	#mutate<T>(action: () => Promise<T>): Promise<T> {
 		const result = this.#mutation.then(action, action);
-		this.#mutation = result.then(() => {}, () => {});
+		this.#mutation = result.then(
+			() => {},
+			() => {},
+		);
 		return result;
 	}
 
 	/** The fleet of `dataDir`'s discord.json, each bot connecting in the background. */
-	static async open(dataDir: string, makeBot: BotFactory = (onEvent) => new Bot(onEvent), beforeSave?: () => Promise<void>): Promise<Fleet> {
+	static async open(
+		dataDir: string,
+		makeBot: BotFactory = (onEvent) => new Bot(onEvent),
+		beforeSave?: () => Promise<void>,
+	): Promise<Fleet> {
 		const path = join(dataDir, "discord.json");
 		const { file, migrated } = parseBots(await optionalText(path));
 		const fleet = new Fleet(path, file, makeBot, beforeSave);
@@ -107,7 +117,9 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`${status.user} is added already`);
 			}
-			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: Date.now(), applicationId: status.applicationId } } };
+			const next: BotsFile = {
+				bots: { ...this.#file.bots, [id]: { token, addedAt: Date.now(), applicationId: status.applicationId } },
+			};
 			try {
 				await this.#save(next);
 			} catch (error) {
@@ -127,10 +139,12 @@ export class Fleet {
 			const current = this.#bots.get(id);
 			const old = this.#file.bots[id];
 			if (!current || !old) throw new Error("No such bot");
-			const identity = old.applicationId ??
-				(current.status.state === "connected" ? current.status.applicationId : undefined);
+			const identity =
+				old.applicationId ?? (current.status.state === "connected" ? current.status.applicationId : undefined);
 			if (!identity)
-				throw new Error("Original bot identity is not verified while offline; reconnect it before replacing the token");
+				throw new Error(
+					"Original bot identity is not verified while offline; reconnect it before replacing the token",
+				);
 			const bot = this.#candidate(id);
 			const status = await bot.connect(token);
 			if (status.state !== "connected") {
@@ -141,7 +155,9 @@ export class Fleet {
 				await bot.close();
 				throw new Error(`This token is for ${status.user}, another bot: add it as a new bot`);
 			}
-			const next: BotsFile = { bots: { ...this.#file.bots, [id]: { token, addedAt: old.addedAt, applicationId: identity } } };
+			const next: BotsFile = {
+				bots: { ...this.#file.bots, [id]: { token, addedAt: old.addedAt, applicationId: identity } },
+			};
 			try {
 				await this.#save(next);
 			} catch (error) {
@@ -150,8 +166,11 @@ export class Fleet {
 			}
 			this.#file = next;
 			this.#adopt(id, bot);
-			await current.close().catch((error: unknown) =>
-				console.error("p2 discord: old bot disconnect failed after token replacement:", error));
+			await current
+				.close()
+				.catch((error: unknown) =>
+					console.error("p2 discord: old bot disconnect failed after token replacement:", error),
+				);
 			this.#changed();
 		});
 	}
@@ -166,8 +185,9 @@ export class Fleet {
 			this.#file = next;
 			const removed = this.#bots.get(id);
 			this.#bots.delete(id);
-			await removed?.close().catch((error: unknown) =>
-				console.error("p2 discord: removed bot disconnect failed:", error));
+			await removed
+				?.close()
+				.catch((error: unknown) => console.error("p2 discord: removed bot disconnect failed:", error));
 			this.#changed();
 		});
 	}
@@ -212,14 +232,14 @@ export class Fleet {
 				this.#push({ bot: id, event });
 			} else if (event.kind === "message" && event.message.mentionsBot) {
 				const isStop = (item: BotEvent): boolean =>
-					item.kind === "message" && !!bot.client?.user?.id &&
+					item.kind === "message" &&
+					!!bot.client?.user?.id &&
 					commandOf(item.message.text, bot.client.user.id) === "stop";
 				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) {
 					// Reserve candidate space for stop. Drop an older non-stop
 					// first; never silently discard a stop under a status flood.
 					const index = pending.findIndex((item) => !isStop(item));
-					const displaced = index < 0 ? (isStop(event) ? pending.shift() : event)
-						: pending.splice(index, 1)[0];
+					const displaced = index < 0 ? (isStop(event) ? pending.shift() : event) : pending.splice(index, 1)[0];
 					if (displaced && dropped.length < MAX_EARLY_CANDIDATE_MENTIONS) dropped.push(displaced);
 					if (displaced === event) return;
 				}
@@ -240,8 +260,7 @@ export class Fleet {
 		const discordBotId = bot.client?.user?.id;
 		if (discordBotId) {
 			for (const event of early) {
-				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
-					this.#push({ bot: id, event });
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId)) this.#push({ bot: id, event });
 			}
 			for (const event of dropped)
 				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
@@ -257,7 +276,8 @@ export class Fleet {
 					// Upgrade the first release's token-only configuration after a verified connection.
 					saved.applicationId = bot.status.applicationId;
 					void this.#save().catch((error: unknown) =>
-						console.error("p2 discord: could not persist original bot identity:", error));
+						console.error("p2 discord: could not persist original bot identity:", error),
+					);
 				}
 			}
 			this.#changed();
@@ -280,9 +300,12 @@ export class Fleet {
 		const handler = this.#controlRejectionHandler;
 		if (!handler || this.#activeNotices >= MAX_REJECTION_NOTICES) return;
 		this.#activeNotices++;
-		void Promise.resolve().then(() => handler(bot, message)).catch((error: unknown) =>
-			console.error("p2 discord: could not notify rejected command:", error),
-		).finally(() => { this.#activeNotices--; });
+		void Promise.resolve()
+			.then(() => handler(bot, message))
+			.catch((error: unknown) => console.error("p2 discord: could not notify rejected command:", error))
+			.finally(() => {
+				this.#activeNotices--;
+			});
 	}
 
 	/** A dropped non-command message is recovered by a history catch-up, not silently forgotten. */
@@ -301,30 +324,31 @@ export class Fleet {
 				this.#seenMessages.delete(this.#seenMessages.values().next().value!);
 		}
 		const botId = this.#bots.get(received.bot)?.client?.user?.id;
-		const command = event.kind === "message" && event.message.mentionsBot && botId !== undefined
-			? commandOf(event.message.text, botId) : undefined;
+		const command =
+			event.kind === "message" && event.message.mentionsBot && botId !== undefined
+				? commandOf(event.message.text, botId)
+				: undefined;
 		const urgent = command !== undefined;
 		if (command === "stop") {
 			if (this.#stops.length >= MAX_STOPS) {
 				const rejected = this.#stops.shift();
-				if (rejected?.event.kind === "message")
-					this.notifyControlRejected(rejected.bot, rejected.event.message);
+				if (rejected?.event.kind === "message") this.notifyControlRejected(rejected.bot, rejected.event.message);
 			}
 			this.#stops.push(received);
 		} else if (urgent) {
 			if (this.#urgent.length === MAX_URGENT) {
 				console.error("p2 discord: control queue saturated; rejecting oldest command");
 				const dropped = this.#urgent.shift();
-				if (dropped?.event.kind === "message")
-					this.notifyControlRejected(dropped.bot, dropped.event.message);
+				if (dropped?.event.kind === "message") this.notifyControlRejected(dropped.bot, dropped.event.message);
 			}
 			this.#urgent.push(received);
 		} else if (this.#queue.length >= MAX_QUEUED) {
 			this.requestCatchUp(received.bot);
 			return;
-		} else if (event.kind === "ready" && this.#queue.some((queued) =>
-			queued.bot === received.bot && queued.event.kind === "ready"
-		)) {
+		} else if (
+			event.kind === "ready" &&
+			this.#queue.some((queued) => queued.bot === received.bot && queued.event.kind === "ready")
+		) {
 			return;
 		} else {
 			this.#queue.push(received);
@@ -353,7 +377,10 @@ export class Fleet {
 			}
 		};
 		const saved = this.#saveTail.then(persist, persist);
-		this.#saveTail = saved.then(() => {}, () => {});
+		this.#saveTail = saved.then(
+			() => {},
+			() => {},
+		);
 		await saved;
 	}
 }
@@ -382,7 +409,8 @@ function parseBots(text: string | undefined): { file: BotsFile; migrated: boolea
 				token: entry.token,
 				addedAt: typeof entry.addedAt === "number" ? entry.addedAt : 0,
 				...(typeof entry.applicationId === "string" && entry.applicationId
-					? { applicationId: entry.applicationId } : {}),
+					? { applicationId: entry.applicationId }
+					: {}),
 			};
 	return { file: { bots }, migrated: false };
 }

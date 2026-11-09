@@ -1,7 +1,8 @@
 // Session locks (server): every locked session's picked resources, persisted, and the remote view the owner sets them
 // through and each session's worker follows its own lock with.
-import { obj, str } from "@earendil-works/pi-schema";
+
 import { randomUUID } from "node:crypto";
+import { obj, str } from "@earendil-works/pi-schema";
 import {
 	defineState,
 	deriveTyped,

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { type BotEvent, Bot } from "../../plugins/discord/bot.ts";
+import type { Bot, BotEvent } from "../../plugins/discord/bot.ts";
 import type { BotStatus } from "../../plugins/discord/contract.ts";
 import { Fleet } from "../../plugins/discord/fleet.ts";
 
@@ -34,13 +34,19 @@ class FakeBot {
 		this.client = { isReady: () => true, user: { id: "999" } };
 		this.status = { state: "connected", applicationId: app, user: app, inviteUrl: "", guilds: [] };
 		for (const listener of this.#listeners) listener();
-		if (token.includes("early-command")) this.emit({
-			kind: "message",
-			message: {
-				id: "777", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
-				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
-			},
-		});
+		if (token.includes("early-command"))
+			this.emit({
+				kind: "message",
+				message: {
+					id: "777",
+					channelId: "channel",
+					author: { id: "owner", name: "owner", bot: false },
+					roles: [],
+					text: "<@999> stop",
+					mentionsBot: true,
+					attachments: [],
+				},
+			});
 		return this.status;
 	}
 	async close(): Promise<void> {
@@ -82,7 +88,6 @@ describe("Discord fleet persistence and identity isolation", () => {
 		}
 	});
 
-
 	it("keeps failed add, replace and removal operations consistent with persisted state", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-disk-failure-"));
 		try {
@@ -93,11 +98,19 @@ describe("Discord fleet persistence and identity isolation", () => {
 			await rename(persistedPath, backupPath);
 			await mkdir(persistedPath);
 			await assert.rejects(fleet.add("app-two:key"));
-			assert.deepEqual(fleet.views().map((view) => view.id), [id], "failed add is not adopted");
+			assert.deepEqual(
+				fleet.views().map((view) => view.id),
+				[id],
+				"failed add is not adopted",
+			);
 			await assert.rejects(fleet.setToken(id, "app-one:replacement"));
 			assert.equal(fleet.connected(id)?.status.state, "connected", "old bot remains connected");
 			await assert.rejects(fleet.remove(id));
-			assert.deepEqual(fleet.views().map((view) => view.id), [id], "failed removal keeps the bot");
+			assert.deepEqual(
+				fleet.views().map((view) => view.id),
+				[id],
+				"failed removal keeps the bot",
+			);
 			await rm(persistedPath, { recursive: true });
 			await rename(backupPath, persistedPath);
 			assert.equal(JSON.parse(await readFile(persistedPath, "utf8")).bots[id].token, "app-one:original");
@@ -124,7 +137,6 @@ describe("Discord fleet persistence and identity isolation", () => {
 		}
 	});
 
-
 	it("acknowledges discarded commands when the urgent ingress buffer is saturated", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-overflow-"));
 		const created: FakeBot[] = [];
@@ -136,17 +148,28 @@ describe("Discord fleet persistence and identity isolation", () => {
 			});
 			await fleet.add("app-one:key");
 			fleet.setControlRejectionHandler(async (id, message) => {
-				await fleet.connected(id)?.reply(message.channelId, message.id,
-					"Pi control backlog is full; your command was not executed. Please retry.");
+				await fleet
+					.connected(id)
+					?.reply(
+						message.channelId,
+						message.id,
+						"Pi control backlog is full; your command was not executed. Please retry.",
+					);
 			});
 			const bot = created[0]!;
-			for (let i = 0; i <= 128; i++) bot.emit({
-				kind: "message",
-				message: {
-					id: String(i + 1), channelId: "channel", author: { id: "user", name: "user", bot: false },
-					roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
-				},
-			});
+			for (let i = 0; i <= 128; i++)
+				bot.emit({
+					kind: "message",
+					message: {
+						id: String(i + 1),
+						channelId: "channel",
+						author: { id: "user", name: "user", bot: false },
+						roles: [],
+						text: "<@999> stop",
+						mentionsBot: true,
+						attachments: [],
+					},
+				});
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			assert.equal(bot.replies.length, 1);
 			assert.equal(bot.replies[0]!.channelId, "channel");
@@ -158,35 +181,61 @@ describe("Discord fleet persistence and identity isolation", () => {
 		}
 	});
 
-
 	it("preserves candidate stop during blocked disk save, even with offline prior bot and duplicate gateway traffic", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-discord-candidate-"));
 		const created: FakeBot[] = [];
 		let blockSave = false;
 		let release!: () => void;
-		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		let signalSaving!: () => void;
-		const saving = new Promise<void>((resolve) => { signalSaving = resolve; });
+		const saving = new Promise<void>((resolve) => {
+			signalSaving = resolve;
+		});
 		try {
-			const fleet = await Fleet.open(dir, (onEvent) => {
-				const bot = new FakeBot(onEvent);
-				created.push(bot);
-				return bot as unknown as Bot;
-			}, async () => { if (blockSave) { signalSaving(); await gate; } });
+			const fleet = await Fleet.open(
+				dir,
+				(onEvent) => {
+					const bot = new FakeBot(onEvent);
+					created.push(bot);
+					return bot as unknown as Bot;
+				},
+				async () => {
+					if (blockSave) {
+						signalSaving();
+						await gate;
+					}
+				},
+			);
 			const id = await fleet.add("app-one:original");
 			await fleet.next(new AbortController().signal);
 			blockSave = true;
 			const changing = fleet.setToken(id, "app-one:replacement");
 			await saving;
 			created[0]!.client = undefined; // simulate old gateway offline
-			const control: BotEvent = { kind: "message", message: {
-				id: "777", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
-				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
-			} };
+			const control: BotEvent = {
+				kind: "message",
+				message: {
+					id: "777",
+					channelId: "channel",
+					author: { id: "owner", name: "owner", bot: false },
+					roles: [],
+					text: "<@999> stop",
+					mentionsBot: true,
+					attachments: [],
+				},
+			};
 			created[1]!.emit(control);
-			for (let i = 0; i < 160; i++) created[1]!.emit({ kind: "message", message: {
-				...control.message, id: String(10_000 + i), text: "<@999> status",
-			} });
+			for (let i = 0; i < 160; i++)
+				created[1]!.emit({
+					kind: "message",
+					message: {
+						...control.message,
+						id: String(10_000 + i),
+						text: "<@999> status",
+					},
+				});
 			release();
 			await changing;
 			const first = await fleet.next(AbortSignal.timeout(1_000));
@@ -219,14 +268,31 @@ describe("Discord fleet persistence and identity isolation", () => {
 			await fleet.add("app-one:key");
 			await fleet.next(new AbortController().signal);
 			const bot = created[0]!;
-			for (let i = 0; i < 256; i++) bot.emit({ kind: "message", message: {
-				id: String(i + 1), channelId: "channel", author: { id: "owner", name: "owner", bot: false },
-				roles: [], text: "<@999> status", mentionsBot: true, attachments: [],
-			} });
-			bot.emit({ kind: "message", message: {
-				id: "99999", channelId: "channel", author: { id: "owner", name: "owner", bot: false },
-				roles: [], text: "<@999> stop", mentionsBot: true, attachments: [],
-			} });
+			for (let i = 0; i < 256; i++)
+				bot.emit({
+					kind: "message",
+					message: {
+						id: String(i + 1),
+						channelId: "channel",
+						author: { id: "owner", name: "owner", bot: false },
+						roles: [],
+						text: "<@999> status",
+						mentionsBot: true,
+						attachments: [],
+					},
+				});
+			bot.emit({
+				kind: "message",
+				message: {
+					id: "99999",
+					channelId: "channel",
+					author: { id: "owner", name: "owner", bot: false },
+					roles: [],
+					text: "<@999> stop",
+					mentionsBot: true,
+					attachments: [],
+				},
+			});
 			const received = await fleet.next(new AbortController().signal);
 			assert(received?.event.kind === "message");
 			assert.equal(received.event.message.text, "<@999> stop");

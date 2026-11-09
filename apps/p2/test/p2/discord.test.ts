@@ -13,8 +13,8 @@ import type { ConversationView } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT, type SessionLock } from "@p2/app/v1";
 import { Chat, ChatCosts } from "../../plugins/chat/contract.ts";
 import type { Binding } from "../../plugins/discord/contract.ts";
-import { resumeLinkRepairs, type LinkRepairState } from "../../plugins/discord/link-recovery.ts";
 import { DISCORD_BATCH, Discord, DiscordIngress, DiscordV2 } from "../../plugins/discord/contract.ts";
+import { type LinkRepairState, resumeLinkRepairs } from "../../plugins/discord/link-recovery.ts";
 import {
 	batchOf,
 	chunkText,
@@ -84,12 +84,18 @@ class FakeDiscord implements DiscordPort {
 		channelId: string,
 		query: { after?: string; before?: string; limit: number },
 	): Promise<DiscordMessage[]> {
-		this.requests.push({ channel: channelId, ...(query.after ? { after: query.after } : {}), ...(query.before ? { before: query.before } : {}) });
+		this.requests.push({
+			channel: channelId,
+			...(query.after ? { after: query.after } : {}),
+			...(query.before ? { before: query.before } : {}),
+		});
 		this.events.push(`messages:${channelId}`);
 		const all = this.history.get(channelId) ?? [];
-		const matching = all.filter((entry) => query.after !== undefined
-			? BigInt(entry.id) > BigInt(query.after)
-			: query.before !== undefined && BigInt(entry.id) < BigInt(query.before));
+		const matching = all.filter((entry) =>
+			query.after !== undefined
+				? BigInt(entry.id) > BigInt(query.after)
+				: query.before !== undefined && BigInt(entry.id) < BigInt(query.before),
+		);
 		return query.before === undefined
 			? matching.slice(0, Math.min(query.limit, 100))
 			: matching.slice(-Math.min(query.limit, 100));
@@ -205,27 +211,34 @@ function setup(initial: Binding = binding(), onCatchUpPending?: (bot: string) =>
 	let state: RelayState = { bindings: { [initial.channelId]: initial }, pending: {} };
 	// Bot "bot-a" is the link's; "bot-b" another bot in the same server; `offline` bots are not connected.
 	const offline = new Set<string>();
-	const relay = new Relay((bot) => (offline.has(bot) ? undefined : discord), sessions, {
-		value: () => state,
-		change: async (update) => {
-			const draft = structuredClone(state);
-			update(draft);
-			state = draft;
+	const relay = new Relay(
+		(bot) => (offline.has(bot) ? undefined : discord),
+		sessions,
+		{
+			value: () => state,
+			change: async (update) => {
+				const draft = structuredClone(state);
+				update(draft);
+				state = draft;
+			},
 		},
-	}, onCatchUpPending);
+		onCatchUpPending,
+	);
 	return { discord, sessions, relay, offline, state: () => state };
 }
 
 describe("discord relay", () => {
-
-
 	it("revokes ingress, drains submitted delivery, cancels worker turns and only then unlocks during recovery", async () => {
 		const { discord, sessions, relay, state } = setup();
 		const order: string[] = [];
 		let unblock!: () => void;
-		const deliveryGate = new Promise<void>((resolve) => { unblock = resolve; });
+		const deliveryGate = new Promise<void>((resolve) => {
+			unblock = resolve;
+		});
 		let entered!: () => void;
-		const started = new Promise<void>((resolve) => { entered = resolve; });
+		const started = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
 		const originalDeliver = sessions.deliver.bind(sessions);
 		sessions.deliver = async (session, input) => {
 			order.push("delivery-started");
@@ -237,8 +250,7 @@ describe("discord relay", () => {
 		const triggered = relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> important`)));
 		await started;
 		let repairs: LinkRepairState["repairs"] = {
-			s1: { session: "s1", kind: "unlink", lock: null,
-				expectedWriteId: "locked", writeId: "unlocked" },
+			s1: { session: "s1", kind: "unlink", lock: null, expectedWriteId: "locked", writeId: "unlocked" },
 		};
 		const store = {
 			value: (): LinkRepairState => ({ ...state(), repairs }),
@@ -249,27 +261,36 @@ describe("discord relay", () => {
 				repairs = draft.repairs;
 			},
 		};
-		const recovery = resumeLinkRepairs(store, async () => {
-			order.push("unlocked"); return true;
-		}, {
-			readLock: async () => ({ lock: null, writeId: "locked" }),
-			beforeUnlock: async (session) => {
-				order.push("drain-start");
-				await relay.waitForSession(session);
-				order.push("drain-finished");
+		const recovery = resumeLinkRepairs(
+			store,
+			async () => {
+				order.push("unlocked");
+				return true;
 			},
-			notifyUnlinked: async () => {
-				order.push("turns-cancelled");
+			{
+				readLock: async () => ({ lock: null, writeId: "locked" }),
+				beforeUnlock: async (session) => {
+					order.push("drain-start");
+					await relay.waitForSession(session);
+					order.push("drain-finished");
+				},
+				notifyUnlinked: async () => {
+					order.push("turns-cancelled");
+				},
 			},
-		});
+		);
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		assert.equal(state().bindings.c1, undefined, "unlink revokes ingress immediately");
 		assert.equal(order.includes("unlocked"), false, "active admission must retain the lock");
 		unblock();
 		await Promise.all([triggered, recovery]);
 		assert.deepEqual(order, [
-			"delivery-started", "drain-start", "delivery-finished", "drain-finished",
-			"turns-cancelled", "unlocked",
+			"delivery-started",
+			"drain-start",
+			"delivery-finished",
+			"drain-finished",
+			"turns-cancelled",
+			"unlocked",
 		]);
 		assert.equal(state().bindings.c1, undefined);
 	});
@@ -279,7 +300,9 @@ describe("discord relay", () => {
 		const trigger = discord.say("c1", message(`<@${BOT}> send`));
 		const work = relay.onMessage("bot-a", trigger);
 		let drained = false;
-		const drain = relay.waitForSession("s1").then(() => { drained = true; });
+		const drain = relay.waitForSession("s1").then(() => {
+			drained = true;
+		});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		assert.equal(drained, false, "drain does not release lock while the worker is active");
 		await work;
@@ -288,14 +311,20 @@ describe("discord relay", () => {
 	});
 
 	it("authorizes overflow notices only for the bound bot and permitted channel/thread members", async () => {
-		const { discord, relay, state } = setup();
+		const { relay, state } = setup();
 		const allowed = message(`<@${BOT}> stop`);
 		assert.equal(await relay.mayNotifyControlRejected("bot-a", allowed), true);
 		assert.equal(await relay.mayNotifyControlRejected("bot-b", allowed), false);
 		assert.equal(await relay.mayNotifyControlRejected("bot-a", message("no command")), false);
-		assert.equal(await relay.mayNotifyControlRejected("bot-a", message(`<@${BOT}> stop`, {
-			author: { id: "stranger", name: "stranger", bot: false },
-		})), false);
+		assert.equal(
+			await relay.mayNotifyControlRejected(
+				"bot-a",
+				message(`<@${BOT}> stop`, {
+					author: { id: "stranger", name: "stranger", bot: false },
+				}),
+			),
+			false,
+		);
 		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "unlinked" }), false);
 		assert.equal(await relay.mayNotifyControlRejected("bot-a", { ...allowed, channelId: "t1" }), true);
 		delete state().bindings.c1;
@@ -723,8 +752,6 @@ describe("discord relay", () => {
 		assert.equal(lines.at(-1), "Ada: @Pi what happened?");
 	});
 
-
-
 	it("reaches later threads instead of repeatedly rescanning the first four idle places", async () => {
 		const continued: string[] = [];
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }), (bot) => continued.push(bot));
@@ -732,8 +759,12 @@ describe("discord relay", () => {
 		for (let index = 2; index <= 6; index++) {
 			const id = `t${index}`;
 			discord.add({
-				id, name: id, guildId: "g1", guildName: "Guild",
-				thread: { parentId: "c1", createdAt: 1_000, createdId: "1" }, lastMessageId: null,
+				id,
+				name: id,
+				guildId: "g1",
+				guildName: "Guild",
+				thread: { parentId: "c1", createdAt: 1_000, createdId: "1" },
+				lastMessageId: null,
 			});
 			row.threads[id] = { conversation: index, name: id, cursor: "1" };
 		}
@@ -764,7 +795,6 @@ describe("discord relay", () => {
 		assert.equal(state().bindings.c1?.cursor, trigger.id);
 	});
 
-
 	it("bounds extremely long delivery history while retaining the latest prompt context", async () => {
 		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
 		for (let index = 0; index < 5_000; index++) discord.say("c1", message(`line ${index}`));
@@ -779,22 +809,22 @@ describe("discord relay", () => {
 		assert.doesNotMatch(input.text, /line 0\n/);
 	});
 
-
 	it("keeps older human messages when latest history pages contain only bot posts", async () => {
 		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
 		for (let index = 0; index < 3_350; index++) discord.say("c1", message(`human ${index}`));
 		for (let index = 0; index < 270; index++) {
-			discord.say("c1", message(`bot output ${index}`, {
-				author: { id: "other-bot", name: "Other bot", bot: true },
-			}));
+			discord.say(
+				"c1",
+				message(`bot output ${index}`, {
+					author: { id: "other-bot", name: "Other bot", bot: true },
+				}),
+			);
 		}
 		await relay.onMessage("bot-a", discord.say("c1", message(`<@${BOT}> summarize`)));
 		const prompt = sessions.delivered[0]?.text ?? "";
 		assert.match(prompt, /human 3349/, "truncated history must seek eligible people, not only recent bot posts");
 		assert.doesNotMatch(prompt, /Other bot: bot output/);
 	});
-
-
 
 	it("preserves context behind 1600 bot posts instead of delivering just the mention", async () => {
 		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
@@ -910,7 +940,6 @@ describe("discord relay", () => {
 		assert.deepEqual(chunkText(`${"a".repeat(8)}\n${"b".repeat(8)}`, 10), ["a".repeat(8), "b".repeat(8)]);
 		assert.deepEqual(chunkText("x".repeat(25), 10), ["x".repeat(10), "x".repeat(10), "x".repeat(5)]);
 	});
-
 
 	it("does not duplicate Discord reply chunks when the API accepted a post but the HTTP result was lost", async () => {
 		const { discord, sessions, relay, state } = setup();
