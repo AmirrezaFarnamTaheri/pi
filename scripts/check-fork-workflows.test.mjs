@@ -102,11 +102,19 @@ test("fork release supports an explicit manual rerun on the verified release bra
   assert.match(release, /verify-fork-release-ci\.mjs/);
 });
 
-test("P2 CI generates provider JSON before type-checking source imports", () => {
-  const ci = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "ci.yml"), "utf8");
-  const p2 = ci.slice(ci.indexOf("  p2-check-test:"), ci.indexOf("  mcp-conformance:"));
-  const generation = p2.indexOf("run: npm run generate:models");
-  const checking = p2.indexOf("run: npm run check --workspace apps/p2");
-  assert.ok(generation >= 0 && checking > generation,
-    "the P2 type-check may not run before its generated provider JSON exists");
+test("P2 CI remains visible but is isolated from the core fork release gate", () => {
+  const workflows = join(import.meta.dirname, "..", ".github", "workflows");
+  const core = readFileSync(join(workflows, "ci.yml"), "utf8");
+  assert.doesNotMatch(core, /^  p2-(?:virtual-list|check-test):/m,
+    "the slow P2 matrix must not gate the binary release");
+
+  const p2 = readFileSync(join(workflows, "p2-ci.yml"), "utf8");
+  assert.match(p2, /^  p2-virtual-list:/m, "retain P2 virtual-list tests in independent CI");
+  assert.match(p2, /^  p2-check-test:/m, "retain P2 full browser suite in independent CI");
+  const full = p2.slice(p2.indexOf("  p2-check-test:"));
+  const generation = full.indexOf("run: npm run generate:models");
+  const checking = full.indexOf("run: npm run check --workspace apps/p2");
+  const testing = full.indexOf("run: npm run test --workspace apps/p2");
+  assert.ok(generation >= 0 && checking > generation && testing > checking,
+    "the P2 test workflow must generate providers before checking and running tests");
 });
