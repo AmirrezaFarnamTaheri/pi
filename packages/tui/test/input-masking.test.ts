@@ -14,7 +14,10 @@ test("secret input never renders the credential or exposes it via cursor movemen
 test("secret-to-plain transition clears the value rather than revealing it", () => {
 	const input = new Input();
 	input.setValue("public endpoint");
-	assert.ok(input.render(60).join("\n").includes("public endpoint"));
+	// The fake cursor wraps its current character in zero-width APC markers.
+	// Compare terminal-visible text, not raw cursor control sequences.
+	const visible = input.render(60).join("\n").replace(/\x1b_[^\x07]*\x07/g, "");
+	assert.ok(visible.includes("public endpoint"));
 	input.setMask(true);
 	input.setValue("sensitive-secret");
 	assert.ok(!input.render(60).join("\n").includes("sensitive-secret"));
