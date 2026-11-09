@@ -44,7 +44,19 @@ function withAccountFileLock<T>(path: string, edit: (current: AccountProfile[]) 
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	// Lock the destination name BEFORE its initial creation. Another process must
 	// never observe an empty file between open("wx") and the initial JSON write.
-	const unlock = lockfile.lockSync(path, { realpath: false, retries: 6 });
+	// proper-lockfile deliberately rejects the `retries` option on its
+	// synchronous API. Retry only contention explicitly, without ever
+	// bypassing the lock or changing the atomic rename protocol below.
+	let unlock: () => void;
+	for (let attempt = 0; ; attempt++) {
+		try {
+			unlock = lockfile.lockSync(path, { realpath: false });
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt >= 5) throw error;
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+		}
+	}
 	try {
 		if (!existsSync(path)) {
 			writeFileSync(path, INITIAL, { encoding: "utf8", mode: 0o600, flag: "wx" });
