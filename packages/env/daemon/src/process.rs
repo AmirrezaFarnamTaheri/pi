@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Child, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
