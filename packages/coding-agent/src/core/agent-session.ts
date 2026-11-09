@@ -2666,9 +2666,12 @@ export class AgentSession {
 		);
 		const consent =
 			options.accountRotationConsent === true || this._rotationConsentSessionId === this.sessionManager.getSessionId();
-		const scopedModels = allowedCycleModels(
-			this._scopedModels.filter((scoped) => availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`)),
-			consent,
+		// Scoped entries wrap the model, so filter their provider through
+		// scoped.model rather than treating the entry itself as a Model.
+		const scopedModels = this._scopedModels.filter(
+			(scoped) =>
+				availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`) &&
+				(consent || scoped.model.provider !== "account-profiles"),
 		);
 		const currentModel = this.model;
 		const currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
