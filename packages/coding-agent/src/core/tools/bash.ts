@@ -40,7 +40,11 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
-	background: Type.Optional(Type.Boolean({ description: "Run the command detached, returning a PID and output log path immediately (local bash only)" })),
+	background: Type.Optional(
+		Type.Boolean({
+			description: "Run the command detached, returning a PID and output log path immediately (local bash only)",
+		}),
+	),
 });
 
 export const bashToolSystemPromptContribution = {
