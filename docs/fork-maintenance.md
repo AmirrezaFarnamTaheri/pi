@@ -18,7 +18,7 @@ Upstream-only npm publication, model-catalog upload, R2/cloud UI publication, Ni
 
 The weekly sync workflow fetches upstream main, merges into a dedicated \`sync/upstream-main\` branch and opens or updates a PR. Review differences and CI results before merging. If either merge encounters a conflict, the job fails and lists conflicted files in its Actions summary; no remote branch or fork main overwrite occurs. Resolve those conflicts manually on a new integration branch, preserving fork-specific fixes.
 
-When upstream changes conflict, leave the integration proposal as a draft until fork-specific behavior and the complete CI matrix are reviewed. Do not force-push or auto-merge across divergent histories.
+The workflow proposes a draft PR only when no other PR is open. When upstream changes conflict, keep the integration proposal in draft until fork-specific behavior and the complete CI matrix are reviewed. Do not force-push or auto-merge across divergent histories.
 
 GitHub repository Actions permissions must permit pull-request creation for the scheduled workflow. No upstream write access or upstream credentials are required.
 

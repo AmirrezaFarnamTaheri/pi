@@ -23,10 +23,12 @@ describe("background shell runs", () => {
 			background: true,
 		});
 		const data = result.structuredContent as BashToolOutput;
+		if (data.background_pid && data.background_output_path) {
+			started.push({ pid: data.background_pid, outputPath: data.background_output_path });
+		}
 		expect(data.exit_code).toBeUndefined();
 		expect(data.background_pid).toBeGreaterThan(0);
 		expect(data.background_output_path).toBeTruthy();
-		started.push({ pid: data.background_pid!, outputPath: data.background_output_path! });
 		expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(`PID ${data.background_pid}`) }]);
 		await vi.waitFor(async () => {
 			const content = await readFile(data.background_output_path!, "utf8");

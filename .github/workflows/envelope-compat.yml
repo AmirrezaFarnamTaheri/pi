@@ -53,7 +53,7 @@ jobs:
       - name: Run Envelope regression suite with pinned dependencies
         working-directory: .ci-envelope
         run: |
-          npm install --include=optional --no-audit --no-fund
+          npm ci --include=optional --no-audit --no-fund
           npm run doctor:bundle
           npm run check
       - name: Verify real Envelope and Tersio RPC command registration

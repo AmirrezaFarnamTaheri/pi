@@ -133,6 +133,11 @@ jobs:
             echo "Existing upstream sync PR has been updated and verified." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          gh pr create --base main --head sync/upstream-main \
+          # Do not create a second open PR while a feature PR is under review.
+          if [ "$(gh pr list --state open --json number --jq length)" -ne 0 ]; then
+            echo "Existing open PR takes priority; sync proposal remains on its branch." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh pr create --draft --base main --head sync/upstream-main \
             --title "chore(sync): review incoming upstream main changes" \
             --body "Automated upstream merge proposal. Tests passed in a separate read-only job. Review the full diff and fork-specific changes before merging. **This workflow never auto-merges into main.**"

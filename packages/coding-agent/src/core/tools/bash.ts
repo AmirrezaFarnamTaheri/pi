@@ -409,7 +409,7 @@ export function createShellToolDefinition(
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
-				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. The command continues after this tool call and after Pi exits; check the log and stop the process explicitly when needed.`;
+				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The log is currently not size-capped, so monitor disk usage and stop the process explicitly when needed.`;
 				return {
 					content: [{ type: "text", text }],
 					details: undefined,
