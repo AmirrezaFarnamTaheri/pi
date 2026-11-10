@@ -24,7 +24,7 @@ GitHub repository Actions permissions must permit pull-request creation for the 
 
 ## Building and releasing
 
-Merge a tested PR into \`main\`, choose a new version that matches the coding-agent package, and push \`release/fork-v<version>\` at the tested commit. The workflow builds from that commit, checks platform binaries and publishes only to this fork's GitHub Releases. Never reuse an existing tag; use the next version.
+Merge a tested PR into \`main\`, choose a new version that matches the coding-agent package, and push \`release/fork-v<version>\` at the tested commit. The workflow builds from that commit, checks platform binaries and publishes only to this fork's GitHub Releases. Never reuse an existing tag; use the next version. If the fork binaries change but the unpublished upstream-namespaced package is still version 1.5.1, a distinct GitHub-only snapshot `v1.5.1-fork.N` is also accepted. The CLI still reports its actual package version (1.5.1); the suffix identifies the GitHub binary build, not an npm release.
 
 Windows standalone users should unpack \`pi-windows-x64.zip\` or \`pi-windows-arm64.zip\` under a directory in their user \`PATH\`. This fork's release updater is not the upstream \`pi.dev\` installer or upstream npm package.
 

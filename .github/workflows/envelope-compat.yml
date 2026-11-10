@@ -30,7 +30,7 @@ jobs:
         with:
           repository: AmirrezaFarnamTaheri/pi-envelope
           # Exercise both in-flight PRs without depending on feature refs after merge.
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref == 'feat/background-shell-runs' && 'feat/managed-jobs-and-agent-sessions' || 'main' }}
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref == 'feat/background-shell-runs' && '26513a25ae3afac62c18bffc094b3bc926907cad' || 'main' }}
           path: .ci-envelope
           persist-credentials: false
       - name: Install Node.js 22.19
