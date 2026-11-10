@@ -47,7 +47,8 @@ jobs:
           npm ci --ignore-scripts
           npm run build
           npm run check
-          npm run test --workspace packages/coding-agent
+          # Dedicated CI jobs run the full coding-agent tests with rg/fd available.
+          # This job is the independent fork + Envelope integration gate.
       - name: Run Envelope regression suite with pinned dependencies
         working-directory: .ci-envelope
         run: |
