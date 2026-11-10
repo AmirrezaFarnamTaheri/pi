@@ -408,6 +408,7 @@ export function createShellToolDefinition(
 				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. The command continues after this tool call and after Pi exits; check the log and stop the process explicitly when needed.`;
 				return {
 					content: [{ type: "text", text }],
+					details: undefined,
 					structuredContent: {
 						output: "",
 						truncated: false,
