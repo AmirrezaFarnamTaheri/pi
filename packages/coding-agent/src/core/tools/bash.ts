@@ -13,6 +13,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { startBackgroundShell } from "./background-shell.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -39,10 +40,11 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	background: Type.Optional(Type.Boolean({ description: "Run the command detached, returning a PID and output log path immediately (local bash only)" })),
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.)",
+	snippet: "Execute bash commands (ls, grep, find, etc.); use background: true for long-running local commands",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
 } as const;
 
@@ -56,7 +58,9 @@ const bashOutputSchema = Type.Object({
 	output: Type.String({ description: "Combined stdout and stderr, possibly truncated" }),
 	truncated: Type.Boolean(),
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
-	exit_code: Type.Number(),
+	exit_code: Type.Optional(Type.Number()),
+	background_pid: Type.Optional(Type.Number()),
+	background_output_path: Type.Optional(Type.String()),
 	wall_time_seconds: Type.Number(),
 });
 
@@ -363,7 +367,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns immediately with a process ID and log path; inspect the log with read/bash and stop the PID explicitly when finished.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -371,7 +375,7 @@ export function createShellToolDefinition(
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		async execute(
 			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
+			{ command, timeout, background }: { command: string; timeout?: number; background?: boolean },
 			signal?: AbortSignal,
 			onUpdate?,
 			ctx?: ExtensionContext,
@@ -384,6 +388,35 @@ export function createShellToolDefinition(
 				exposeSessionEnvironment,
 				ctx,
 			);
+
+			if (background) {
+				if (options?.operations || config.name !== "bash") {
+					throw new Error("Background execution is not supported by this shell backend");
+				}
+				if (timeout !== undefined) {
+					throw new Error("Cannot set a timeout for a background command");
+				}
+				if (signal?.aborted) throw new Error("aborted");
+				const startedAt = performance.now();
+				const { pid, outputPath } = await startBackgroundShell(
+					spawnContext.command,
+					spawnContext.cwd,
+					getShellConfig(options?.shellPath),
+					spawnContext.env,
+					config.tempFilePrefix,
+				);
+				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. The command continues after this tool call and after Pi exits; check the log and stop the process explicitly when needed.`;
+				return {
+					content: [{ type: "text", text }],
+					structuredContent: {
+						output: "",
+						truncated: false,
+						wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+						background_pid: pid,
+						background_output_path: outputPath,
+					},
+				};
+			}
 			const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
