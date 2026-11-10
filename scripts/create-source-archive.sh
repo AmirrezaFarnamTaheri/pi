@@ -68,9 +68,16 @@ cd "$repo_root"
 commit="$(git rev-parse --verify --end-of-options "${source_ref}^{commit}")"
 
 package_version="$(git show "${commit}:packages/coding-agent/package.json" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+# A distinct fork-only prerelease tag can identify a binary snapshot without
+# claiming that the upstream npm namespace was released at that version.
 if [[ "$package_version" != "$version" ]]; then
-    echo "Version ${version} does not match package version ${package_version} at ${source_ref}" >&2
-    exit 1
+    if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-fork\.([1-9][0-9]*)$ ]] &&
+       [[ "${BASH_REMATCH[1]}" == "$package_version" ]]; then
+        :
+    else
+        echo "Version ${version} does not match package version ${package_version} or a fork-only snapshot at ${source_ref}" >&2
+        exit 1
+    fi
 fi
 
 if [[ "$output" != /* ]]; then
