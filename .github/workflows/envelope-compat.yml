@@ -53,7 +53,13 @@ jobs:
       - name: Run Envelope regression suite with pinned dependencies
         working-directory: .ci-envelope
         run: |
-          npm ci --include=optional --no-audit --no-fund
+          # Envelope currently checks in exact direct dependency versions but no lockfile.
+          # Use npm ci when a lockfile exists; otherwise never generate a dirty lock.
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci --include=optional --no-audit --no-fund
+          else
+            npm install --include=optional --no-save --package-lock=false --no-audit --no-fund
+          fi
           npm run doctor:bundle
           npm run check
       - name: Verify real Envelope and Tersio RPC command registration
