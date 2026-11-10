@@ -25,11 +25,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check out Envelope source
+      - name: Check out Envelope for compatibility
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: AmirrezaFarnamTaheri/pi-envelope
-          ref: main
+          # Exercise both in-flight PRs without depending on feature refs after merge.
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref == 'feat/background-shell-runs' && 'feat/managed-jobs-and-agent-sessions' || 'main' }}
           path: .ci-envelope
           persist-credentials: false
       - name: Install Node.js 22.19
