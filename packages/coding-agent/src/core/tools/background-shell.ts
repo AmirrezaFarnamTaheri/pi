@@ -1,8 +1,7 @@
 /** Launch local shell commands independently of Pi, capturing output in a private log. */
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, constants, openSync } from "node:fs";
 import { access, mkdtemp, rm } from "node:fs/promises";
-import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ShellConfig } from "../../utils/shell.ts";
