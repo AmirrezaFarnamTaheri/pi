@@ -566,9 +566,12 @@ describe("caps", () => {
 describe("summary", () => {
 	it("counts a space's files, versions and bytes and keeps its newest versions", async () => {
 		const files = await filesOf();
-		const a1 = await put(files, "docs/a.txt", "1");
-		const a2 = await put(files, "docs/a.txt", "22");
-		const b = await put(files, "b.txt", "333");
+		// File writes can share a millisecond in CI. Supply ordered times instead of
+		// assuming their timestamps differ; ties use an ID tiebreaker, not insertion order.
+		const created = 1_700_000_000_000;
+		const a1 = await put(files, "docs/a.txt", "1", { created });
+		const a2 = await put(files, "docs/a.txt", "22", { created: created + 1 });
+		const b = await put(files, "b.txt", "333", { created: created + 2 });
 		expect(await files.summary.get("shared", context)).toEqual({
 			files: 2,
 			versions: 3,
