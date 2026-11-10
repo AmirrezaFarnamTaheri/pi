@@ -7,6 +7,7 @@ This repository is a fork of [earendil-works/pi](https://github.com/earendil-wor
 - \`ci.yml\`: builds, type checks, linting and tests on main and pull requests.
 - \`fork-github-release.yml\`: builds six binary archives, a source tarball and SHA256SUMS. Runs smoke tests on Linux, Windows and macOS, then publishes a GitHub prerelease on this fork only.
 - \`sync-upstream.yml\`: weekly/manual proposal for merging upstream main into the fork via a pull request, never an automatic merge.
+- `envelope-compat.yml`: runs the Envelope source regression suite against this fork's built Pi CLI and verifies actual RPC extension registration.
 - \`npm-audit.yml\`: dependency checks on demand and daily.
 - \`env.yml\` and \`env-daemons.yml\`: cross-platform execution-environment tests.
 - \`bench-runtime.yml\` (once included): manual/scheduled benchmark results saved as an artifact.
@@ -16,6 +17,8 @@ Upstream-only npm publication, model-catalog upload, R2/cloud UI publication, Ni
 ## Updating from upstream
 
 The weekly sync workflow fetches upstream main, merges into a dedicated \`sync/upstream-main\` branch and opens or updates a PR. Review differences and CI results before merging. If either merge encounters a conflict, the job fails and lists conflicted files in its Actions summary; no remote branch or fork main overwrite occurs. Resolve those conflicts manually on a new integration branch, preserving fork-specific fixes.
+
+When upstream changes conflict, leave the integration proposal as a draft until fork-specific behavior and the complete CI matrix are reviewed. Do not force-push or auto-merge across divergent histories.
 
 GitHub repository Actions permissions must permit pull-request creation for the scheduled workflow. No upstream write access or upstream credentials are required.
 
