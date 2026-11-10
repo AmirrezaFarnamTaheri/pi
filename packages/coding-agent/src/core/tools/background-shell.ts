@@ -100,43 +100,43 @@ export async function startBackgroundShell(
   tempFilePrefix: string,
 ): Promise<BackgroundShellResult> {
   await access(cwd, constants.F_OK);
-  const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
-  let worker: ReturnType<typeof spawn> | undefined;
-  try {
-    await writeFile(join(folder, "request.json"),JSON.stringify({
-      command,cwd,shellConfig,maxLogBytes:BACKGROUND_LOG_MAX_BYTES
-    }),{flag:"wx",mode:0o600});
-    // The supervisor's own cwd must not lock the user's project on Windows.
-    worker=spawn(process.execPath,["-e",SUPERVISOR,folder],{
-      cwd:tmpdir(),detached:true,env,stdio:"ignore",windowsHide:true
-    });
-    await new Promise<void>((resolve,reject)=>{
-      worker!.once("spawn",()=>resolve());
-      worker!.once("error",reject);
-    });
-    worker.unref();
-    const deadline=Date.now()+5000;
-    while(Date.now()<deadline){
-      try {
-        const state=JSON.parse(await readFile(join(folder,"state.json"),"utf8")) as {
-          childPid?:number|null;status?:string;error?:string
-        };
-        if(typeof state.childPid==="number"&&state.childPid>0){
-          return {pid:state.childPid,outputPath:join(folder,"output.log")};
-        }
-        if(state.status==="failed")throw new Error(`Background command failed: ${state.error||"spawn error"}`);
-      }catch(error){
-        if((error as NodeJS.ErrnoException).code!=="ENOENT"&&
-          !(error instanceof SyntaxError)&&
-          !(error instanceof Error&&error.message.startsWith("Background command failed:")))throw error;
-        if(error instanceof Error&&error.message.startsWith("Background command failed:"))throw error;
-      }
-      await new Promise(resolve=>setTimeout(resolve,25));
-    }
-    throw new Error("Background process did not report a startup PID");
-  }catch(error){
-    if(worker?.pid)killProcessTree(worker.pid);
-    await rm(folder,{recursive:true,force:true,maxRetries:5,retryDelay:50});
-    throw error;
-  }
+	const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
+	let worker: ReturnType<typeof spawn> | undefined;
+	try {
+		await writeFile(join(folder, "request.json"),JSON.stringify({
+			command,cwd,shellConfig,maxLogBytes:BACKGROUND_LOG_MAX_BYTES
+		}),{flag:"wx",mode:0o600});
+		// The supervisor's own cwd must not lock the user's project on Windows.
+		worker=spawn(process.execPath,["-e",SUPERVISOR,folder],{
+			cwd:tmpdir(),detached:true,env,stdio:"ignore",windowsHide:true
+		});
+		await new Promise<void>((resolve,reject)=>{
+			worker!.once("spawn",()=>resolve());
+			worker!.once("error",reject);
+		});
+		worker.unref();
+		const deadline=Date.now()+5000;
+		while(Date.now()<deadline){
+			try {
+				const state=JSON.parse(await readFile(join(folder,"state.json"),"utf8")) as {
+					childPid?:number|null;status?:string;error?:string
+				};
+				if(typeof state.childPid==="number"&&state.childPid>0){
+					return {pid:state.childPid,outputPath:join(folder,"output.log")};
+				}
+				if(state.status==="failed")throw new Error(`Background command failed: ${state.error||"spawn error"}`);
+			}catch(error){
+				if((error as NodeJS.ErrnoException).code!=="ENOENT"&&
+					!(error instanceof SyntaxError)&&
+					!(error instanceof Error&&error.message.startsWith("Background command failed:")))throw error;
+				if(error instanceof Error&&error.message.startsWith("Background command failed:"))throw error;
+			}
+			await new Promise(resolve=>setTimeout(resolve,25));
+		}
+		throw new Error("Background process did not report a startup PID");
+	}catch(error){
+		if(worker?.pid)killProcessTree(worker.pid);
+		await rm(folder,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+		throw error;
+	}
 }

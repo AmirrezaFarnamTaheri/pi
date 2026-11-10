@@ -13,7 +13,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { startBackgroundShell } from "./background-shell.ts";
+import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -371,7 +371,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns immediately with a process ID and log path; inspect the log with read/bash and stop the PID explicitly when finished.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -394,7 +394,7 @@ export function createShellToolDefinition(
 			);
 
 			if (background) {
-				if (options?.operations || config.name !== "bash") {
+				if (options?.operations || config.name !== "bash" || config.shellName !== "bash") {
 					throw new Error("Background execution is not supported by this shell backend");
 				}
 				if (timeout !== undefined) {
@@ -409,7 +409,7 @@ export function createShellToolDefinition(
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
-				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The log is currently not size-capped, so monitor disk usage and stop the process explicitly when needed.`;
+				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The supervisor caps captured output at ${BACKGROUND_LOG_MAX_BYTES} bytes. Monitor and stop the process explicitly when needed.`;
 				return {
 					content: [{ type: "text", text }],
 					details: undefined,

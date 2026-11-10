@@ -1,7 +1,8 @@
-import { readFile, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile, rm, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type BashOperations, type BashToolOutput, createBashTool } from "../src/core/tools/bash.ts";
+import { BACKGROUND_LOG_MAX_BYTES } from "../src/core/tools/background-shell.ts";
 import { killProcessTree } from "../src/utils/shell.ts";
 
 const started: Array<{ pid: number; outputPath: string }> = [];
@@ -60,5 +61,28 @@ describe("background shell runs", () => {
 		await expect(
 			tool.execute("bg-aborted", { command: "echo unwanted", background: true }, controller.signal),
 		).rejects.toThrow(/aborted/);
+	});
+});
+
+describe("bounded background output", () => {
+	it.skipIf(process.platform === "win32")("never writes beyond the fixed cap and records completion", async () => {
+		const tool = createBashTool(process.cwd());
+		const script = 'process.stdout.write("x".repeat(2500000))';
+		const result = await tool.execute("bg-cap", {
+			command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+			background: true,
+		});
+		const data = result.structuredContent as BashToolOutput;
+		if (data.background_pid && data.background_output_path) {
+			started.push({ pid: data.background_pid, outputPath: data.background_output_path });
+		}
+		expect(data.background_pid).toBeGreaterThan(0);
+		const path = data.background_output_path!;
+		await vi.waitFor(async () => {
+			const state = JSON.parse(await readFile(join(dirname(path), "state.json"), "utf8"));
+			expect(state.status).toBe("completed");
+			expect(state.outputTruncated).toBe(true);
+		}, { timeout: 10000 });
+		expect((await stat(path)).size).toBe(BACKGROUND_LOG_MAX_BYTES);
 	});
 });
