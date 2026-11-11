@@ -352,43 +352,6 @@ function createFuzzyAutocompleteItems<T>(
 	return filtered.map(toAutocompleteItem);
 }
 
-function getLoginProviderCompletionOptions(
-	providerOptions: readonly AuthSelectorProvider[],
-): LoginProviderCompletionOption[] {
-	const byId = new Map<string, LoginProviderCompletionOption>();
-	for (const provider of providerOptions) {
-		const existing = byId.get(provider.id);
-		if (existing) {
-			if (!existing.authTypes.includes(provider.authType)) {
-				existing.authTypes.push(provider.authType);
-				existing.authTypes.sort((a, b) => AUTH_TYPE_ORDER[a] - AUTH_TYPE_ORDER[b]);
-			}
-			continue;
-		}
-		byId.set(provider.id, {
-			id: provider.id,
-			name: provider.name,
-			authTypes: [provider.authType],
-			subscription: provider.subscription,
-		});
-	}
-	return Array.from(byId.values()).sort(compareProviders);
-}
-
-function getLoginProviderSearchText(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes
-		.map((authType) => `${authType} ${formatAuthSelectorProviderType(authType, provider.subscription)}`)
-		.join(" ");
-	return `${provider.id} ${provider.name} ${authTypes}`;
-}
-
-function formatLoginProviderCompletionDescription(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes
-		.map((authType) => formatAuthSelectorProviderType(authType, provider.subscription))
-		.join("/");
-	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
-}
-
 /**
  * Options for InteractiveMode initialization.
  */
