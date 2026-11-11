@@ -1,5 +1,8 @@
 {
 	"name": "chat",
 	"private": true,
-	"type": "module"
+	"type": "module",
+	"dependencies": {
+		"react-dom": "19.3.0"
+	}
 }
