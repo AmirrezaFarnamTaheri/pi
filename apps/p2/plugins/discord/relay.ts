@@ -54,7 +54,7 @@ export type DiscordPort = {
 
 export type TurnState =
 	| { state: "pending" }
-	| { state: "answered"; text: string; files: OfferedFile[]; answer: number }
+	| { state: "answered"; text: string; files: OfferedFile[]; answer?: number }
 	| { state: "stopped" }
 	| { state: "unanswered"; reason: string; files: OfferedFile[] };
 
@@ -109,6 +109,7 @@ const MAX_FILES = 20;
 
 /** A pending reply older than this is dropped with a notice: its turn is not going to end on its own. */
 export const PENDING_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+export const MAX_BOT_TURNS = 3;
 
 export class Relay {
 	readonly #discord: (bot: string) => DiscordPort | undefined;
@@ -121,10 +122,7 @@ export class Relay {
 	readonly #lanes = new Map<string, Promise<void>>();
 	/** Channels and threads with deliveries under way (how many), and their bots: "typing" from the first moment. */
 	readonly #delivering = new Map<string, { bot: string; count: number }>();
-	/** Per channel or thread, the turns bots started in a row since a person last wrote there (in memory). */
 	readonly #botStreaks = new Map<string, { turns: number; noticed: boolean }>();
-	/** Answers posted lately (session and entry): a run's other inputs, settled later, post nothing. */
-	readonly #posted: string[] = [];
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
 	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
@@ -190,7 +188,7 @@ export class Relay {
 
 	/**
 	 * A message bot `bot` received: a mention of it by someone allowed to wake Pi, in a channel linked through it (or a
-	 * thread of one), delivers. Other bots count as people, within the loop guard; the bot's own messages never count.
+	 * thread of one), delivers.
 	 */
 	async onMessage(bot: string, message: DiscordMessage): Promise<void> {
 		const port = this.#port(bot);
@@ -430,8 +428,7 @@ export class Relay {
 			: port;
 		if (before !== undefined)
 			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
-				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
-					window.add("channel", message);
+				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
 		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
 			if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		if (truncated) {
@@ -598,6 +595,7 @@ export class Relay {
 					scanned = true;
 					for (const message of page)
 						if (
+							!message.author.bot &&
 							message.mentionsBot &&
 							mayWake(binding.wake, message.author.id, message.roles) &&
 							!this.#isCommand(binding, message, port.botId)
@@ -660,11 +658,7 @@ export class Relay {
 		else if (visited.size === places.length) this.#catchUpVisited.delete(bot);
 	}
 
-	/**
-	 * Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. Inputs
-	 * steered into one turn share its answer: it is posted once, as the reply to the newest of their mentions, with the
-	 * files of the whole turn; the others' replies go without a post.
-	 */
+	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
 	async checkPending(sessions?: ReadonlySet<string>): Promise<void> {
 		const now = Date.now();
 		for (const pending of Object.values(this.#state.value().pending)) {
@@ -679,17 +673,6 @@ export class Relay {
 			} finally {
 				this.#checking.delete(pending.messageId);
 			}
-			const runs = new Map<string, { pending: Pending; turn: TurnState }[]>();
-			for (const entry of settled) {
-				const key =
-					entry.turn.state === "answered"
-						? `${entry.pending.session}:${entry.turn.answer}`
-						: entry.pending.messageId;
-				runs.set(key, [...(runs.get(key) ?? []), entry]);
-			}
-			for (const [key, run] of runs) await this.#post(key, run);
-		} finally {
-			for (const { pending } of settled) this.#checking.delete(pending.messageId);
 		}
 	}
 
@@ -734,8 +717,8 @@ export class Relay {
 			turn = await this.#sessions.turn(pending.session, pending.submissionId);
 		} catch (error) {
 			console.error("p2 discord: reading a turn failed:", error instanceof Error ? error.message : error);
-			if (now - pending.since < PENDING_TIMEOUT_MS) return undefined;
-			return { state: "unanswered", reason: "the session did not answer in time.", files: [] };
+			if (now - pending.since < PENDING_TIMEOUT_MS) return;
+			turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
 		}
 		if (turn.state === "pending") {
 			if (now - pending.since < PENDING_TIMEOUT_MS) return;
@@ -765,11 +748,6 @@ export class Relay {
 				current!.retryAt = now + delay;
 			});
 		}
-	}
-
-	#remember(key: string): void {
-		this.#posted.push(key);
-		if (this.#posted.length > REMEMBERED_ANSWERS) this.#posted.shift();
 	}
 
 	/**
@@ -955,11 +933,6 @@ export function commandOf(text: string, botId: string): Command | undefined {
 	return COMMANDS.find((command) => command === rest);
 }
 
-/** Turns bots may start in a row in one channel or thread before a person writes there. */
-export const MAX_BOT_TURNS = 3;
-/** Answers kept in mind as posted, to post a run's answer once however its inputs settle. */
-const REMEMBERED_ANSWERS = 200;
-
 /** Bytes one read of an offered file asks for. */
 const READ_CHUNK = 4 * 1024 * 1024;
 /** Attachments one Discord message carries at most. */
@@ -1047,8 +1020,8 @@ class BatchWindow {
 }
 
 /**
- * A batch's text: under the header, each section's title (if any), then one `Name (<@id>): text` line (or paragraph) per
- * message, bots marked `Name (bot, <@id>)`, oldest first, the bot's mention written `@Pi`, and attachments too large to download listed as links. The
+ * A batch's text: under the header, each section's title (if any), then one `Name: text` line (or paragraph) per
+ * message, oldest first, the bot's mention written `@Pi`, and attachments too large to download listed as links. The
  * attachments to download, keyed by message and position.
  */
 export function batchOf(
@@ -1071,8 +1044,7 @@ export function batchOf(
 				});
 			else links.push(`[attachment ${attachment.name} (${attachment.size} bytes): ${attachment.url}]`);
 		});
-		const who = `${message.author.bot ? "bot, " : ""}<@${message.author.id}>`;
-		return `${message.author.name} (${who}): ${[text, ...links].filter(Boolean).join("\n")}`;
+		return `${message.author.name}: ${[text, ...links].filter(Boolean).join("\n")}`;
 	};
 	const lines = sections.flatMap(({ title, messages }) => [
 		...(title === undefined ? [] : [title]),
