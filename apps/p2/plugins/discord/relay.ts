@@ -690,7 +690,7 @@ export class Relay {
 			for (const item of candidates) {
 				const key =
 					item.turn?.state === "answered" && typeof item.turn.answer === "number"
-						? item.pending.session + ":" + item.turn.answer
+						? `${item.pending.session}:${item.turn.answer}`
 						: undefined;
 				if (!key) {
 					individual.push(item);
@@ -711,8 +711,7 @@ export class Relay {
 				if (newest.turn?.state !== "answered") continue;
 				const offered = new Map<string, OfferedFile>();
 				for (const { turn } of group)
-					if (turn?.state === "answered")
-						for (const file of turn.files) offered.set(file.id, file);
+					if (turn?.state === "answered") for (const file of turn.files) offered.set(file.id, file);
 				await this.#check(newest.port, newest.pending, now, {
 					...newest.turn,
 					files: Array.from(offered.values()),
