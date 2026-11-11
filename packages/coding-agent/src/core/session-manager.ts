@@ -923,11 +923,18 @@ async function buildSessionInfo(
 			hash.update(bytes);
 		});
 		const rl = createInterface({ input, crlfDelay: Infinity });
+
 		try {
 			for await (const line of rl) {
 				signal?.throwIfAborted();
-			const entry = parseSessionEntryLine(line);
-			if (!entry) continue;
+				const entry = parseSessionEntryLine(line);
+				if (!entry) continue;
+
+				if (!header) {
+					if (entry.type !== "session") return null;
+					header = entry;
+					continue;
+				}
 
 				// Extract session name (use latest, including explicit clears)
 				if (entry.type === "session_info") {
@@ -953,7 +960,6 @@ async function buildSessionInfo(
 				if (!firstMessage && message.role === "user") {
 					firstMessage = textContent;
 				}
-			}
 			}
 		} finally {
 			input.destroy();
