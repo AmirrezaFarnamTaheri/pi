@@ -1,14 +1,15 @@
 // The owner's Discord bots (server, a native of `DiscordStore`): their tokens in `<data>/discord.json` (0600), one
 // connected `Bot` each, their views, and what they all receive in one queue (oldest first) for the store's routine.
 import { randomBytes } from "node:crypto";
-import { chmod, rename, writeFile } from "node:fs/promises";
+import { chmod, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { optionalText } from "@p2/app/v1/node";
 import { Bot, type BotEvent } from "./bot.ts";
 import type { BotView } from "./contract.ts";
+import { commandOf } from "./relay.ts";
 
 /** discord.json: each bot's token by p2's ID for it. */
-type BotsFile = { bots: Record<string, { token: string; addedAt: number }> };
+type BotsFile = { bots: Record<string, { token: string; addedAt: number; applicationId?: string }> };
 
 /** The ID the one bot of the first release (`{ "token": … }`) gets; its links name it too (server.ts migrates them). */
 export const FIRST_BOT = "bot1";
@@ -16,24 +17,62 @@ export const FIRST_BOT = "bot1";
 /** What a bot of the fleet received (a message, or its (re)connection), and which bot. */
 export type Received = { bot: string; event: BotEvent };
 
+const MAX_QUEUED = 2_048;
+const MAX_URGENT = 256;
+const MAX_STOPS = 128;
+const MAX_EARLY_CANDIDATE_MENTIONS = 128;
+const MAX_DEDUPLICATED_MESSAGES = 8_192;
+const MAX_REJECTION_NOTICES = 8;
+type BotFactory = (onEvent: (event: BotEvent) => void) => Bot;
+
 export class Fleet {
 	readonly #path: string;
 	#file: BotsFile;
 	readonly #bots = new Map<string, Bot>();
 	readonly #listeners = new Set<() => void>();
 	readonly #queue: Received[] = [];
+	readonly #urgent: Received[] = [];
+	readonly #stops: Received[] = [];
+	readonly #missed = new Set<string>();
 	readonly #waiters = new Set<() => void>();
+	readonly #candidateMentions = new WeakMap<Bot, { pending: BotEvent[]; dropped: BotEvent[] }>();
+	readonly #beforeSave?: () => Promise<void>;
+	readonly #seenMessages = new Set<string>();
+	#activeNotices = 0;
+	#controlRejectionHandler?: (
+		bot: string,
+		message: Extract<BotEvent, { kind: "message" }>["message"],
+	) => Promise<void>;
+	readonly #makeBot: BotFactory;
+	#mutation: Promise<void> = Promise.resolve();
+	#saveTail: Promise<void> = Promise.resolve();
 
-	private constructor(path: string, file: BotsFile) {
+	private constructor(path: string, file: BotsFile, makeBot: BotFactory, beforeSave?: () => Promise<void>) {
 		this.#path = path;
 		this.#file = file;
+		this.#makeBot = makeBot;
+		this.#beforeSave = beforeSave;
+	}
+
+	/** Serialize administrative changes through network calls and disk commits. */
+	#mutate<T>(action: () => Promise<T>): Promise<T> {
+		const result = this.#mutation.then(action, action);
+		this.#mutation = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
 	}
 
 	/** The fleet of `dataDir`'s discord.json, each bot connecting in the background. */
-	static async open(dataDir: string): Promise<Fleet> {
+	static async open(
+		dataDir: string,
+		makeBot: BotFactory = (onEvent) => new Bot(onEvent),
+		beforeSave?: () => Promise<void>,
+	): Promise<Fleet> {
 		const path = join(dataDir, "discord.json");
 		const { file, migrated } = parseBots(await optionalText(path));
-		const fleet = new Fleet(path, file);
+		const fleet = new Fleet(path, file, makeBot, beforeSave);
 		if (migrated) await fleet.#save();
 		for (const [id, { token }] of Object.entries(file.bots)) void fleet.#start(id).connect(token);
 		return fleet;
@@ -63,62 +102,107 @@ export class Fleet {
 
 	/** Connects a new bot with `token` and keeps it once Discord accepted it: its ID. */
 	async add(token: string): Promise<string> {
-		const id = `b${randomBytes(4).toString("hex")}`;
-		const bot = this.#candidate(id);
-		const status = await bot.connect(token);
-		if (status.state !== "connected") {
-			await bot.close();
-			throw new Error(status.state === "error" ? status.error : "Discord did not answer");
-		}
-		const same = this.views().find(
-			(view) => view.status.state === "connected" && view.status.applicationId === status.applicationId,
-		);
-		if (same) {
-			await bot.close();
-			throw new Error(`${status.user} is added already`);
-		}
-		this.#adopt(id, bot);
-		this.#file.bots[id] = { token, addedAt: Date.now() };
-		await this.#save();
-		this.#changed();
-		return id;
+		return this.#mutate(async () => {
+			const id = `b${randomBytes(4).toString("hex")}`;
+			const bot = this.#candidate(id);
+			const status = await bot.connect(token);
+			if (status.state !== "connected") {
+				await bot.close();
+				throw new Error(status.state === "error" ? status.error : "Discord did not answer");
+			}
+			const same = this.views().find(
+				(view) => view.status.state === "connected" && view.status.applicationId === status.applicationId,
+			);
+			if (same || Object.values(this.#file.bots).some((saved) => saved.applicationId === status.applicationId)) {
+				await bot.close();
+				throw new Error(`${status.user} is added already`);
+			}
+			const next: BotsFile = {
+				bots: { ...this.#file.bots, [id]: { token, addedAt: Date.now(), applicationId: status.applicationId } },
+			};
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
+			this.#adopt(id, bot);
+			this.#changed();
+			return id;
+		});
 	}
 
-	/** Connects bot `id` with a new token of the same Discord application, kept once Discord accepted it. */
+	/** A replacement must always belong to the persisted application, including when the old bot is offline. */
 	async setToken(id: string, token: string): Promise<void> {
-		const current = this.#bots.get(id);
-		if (!current || !this.#file.bots[id]) throw new Error("No such bot");
-		const bot = this.#candidate(id);
-		const status = await bot.connect(token);
-		if (status.state !== "connected") {
-			await bot.close();
-			throw new Error(status.state === "error" ? status.error : "Discord did not answer");
-		}
-		if (current.status.state === "connected" && current.status.applicationId !== status.applicationId) {
-			await bot.close();
-			throw new Error(`This token is for ${status.user}, another bot: add it as a new bot`);
-		}
-		await current.close();
-		this.#adopt(id, bot);
-		this.#file.bots[id] = { token, addedAt: this.#file.bots[id].addedAt };
-		await this.#save();
-		this.#changed();
+		return this.#mutate(async () => {
+			const current = this.#bots.get(id);
+			const old = this.#file.bots[id];
+			if (!current || !old) throw new Error("No such bot");
+			const identity =
+				old.applicationId ?? (current.status.state === "connected" ? current.status.applicationId : undefined);
+			if (!identity)
+				throw new Error(
+					"Original bot identity is not verified while offline; reconnect it before replacing the token",
+				);
+			const bot = this.#candidate(id);
+			const status = await bot.connect(token);
+			if (status.state !== "connected") {
+				await bot.close();
+				throw new Error(status.state === "error" ? status.error : "Discord did not answer");
+			}
+			if (status.applicationId !== identity) {
+				await bot.close();
+				throw new Error(`This token is for ${status.user}, another bot: add it as a new bot`);
+			}
+			const next: BotsFile = {
+				bots: { ...this.#file.bots, [id]: { token, addedAt: old.addedAt, applicationId: identity } },
+			};
+			try {
+				await this.#save(next);
+			} catch (error) {
+				await bot.close().catch(() => {});
+				throw error;
+			}
+			this.#file = next;
+			this.#adopt(id, bot);
+			await current
+				.close()
+				.catch((error: unknown) =>
+					console.error("p2 discord: old bot disconnect failed after token replacement:", error),
+				);
+			this.#changed();
+		});
 	}
 
 	/** Disconnects and forgets bot `id`. */
 	async remove(id: string): Promise<void> {
-		await this.#bots.get(id)?.close();
-		this.#bots.delete(id);
-		delete this.#file.bots[id];
-		await this.#save();
-		this.#changed();
+		return this.#mutate(async () => {
+			if (!this.#file.bots[id]) return;
+			const next: BotsFile = { bots: { ...this.#file.bots } };
+			delete next.bots[id];
+			await this.#save(next);
+			this.#file = next;
+			const removed = this.#bots.get(id);
+			this.#bots.delete(id);
+			await removed
+				?.close()
+				.catch((error: unknown) => console.error("p2 discord: removed bot disconnect failed:", error));
+			this.#changed();
+		});
 	}
 
 	/** The next received event, or undefined when `signal` aborts. */
 	async next(signal: AbortSignal): Promise<Received | undefined> {
 		while (!signal.aborted) {
-			const received = this.#queue.shift();
+			// Emergency stop has its own ingress capacity, unaffected by status floods.
+			const received = this.#stops.shift() ?? this.#urgent.shift() ?? this.#queue.shift();
 			if (received) return received;
+			const bot = this.#missed.values().next().value;
+			if (bot !== undefined) {
+				this.#missed.delete(bot);
+				return { bot, event: { kind: "ready" } };
+			}
 			await new Promise<void>((resolve) => {
 				const wake = () => {
 					this.#waiters.delete(wake);
@@ -133,27 +217,142 @@ export class Fleet {
 	}
 
 	async close(): Promise<void> {
+		await this.#mutation;
+		await this.#saveTail;
 		await Promise.all([...this.#bots.values()].map((bot) => bot.close()));
 		this.#bots.clear();
 	}
 
-	/** A bot `id` that is not one of the fleet's yet (a token being tried); it delivers messages once adopted. */
+	/** A candidate may receive commands while its token is being durably persisted. */
 	#candidate(id: string): Bot {
-		const bot: Bot = new Bot((event) => {
-			if (this.#bots.get(id) === bot) this.#push({ bot: id, event });
+		const pending: BotEvent[] = [];
+		const dropped: BotEvent[] = [];
+		const bot: Bot = this.#makeBot((event) => {
+			if (this.#bots.get(id) === bot) {
+				this.#push({ bot: id, event });
+			} else if (event.kind === "message" && event.message.mentionsBot) {
+				const isStop = (item: BotEvent): boolean =>
+					item.kind === "message" &&
+					!!bot.client?.user?.id &&
+					commandOf(item.message.text, bot.client.user.id) === "stop";
+				if (pending.length >= MAX_EARLY_CANDIDATE_MENTIONS) {
+					// Reserve candidate space for stop. Drop an older non-stop
+					// first; never silently discard a stop under a status flood.
+					const index = pending.findIndex((item) => !isStop(item));
+					const displaced = index < 0 ? (isStop(event) ? pending.shift() : event) : pending.splice(index, 1)[0];
+					if (displaced && dropped.length < MAX_EARLY_CANDIDATE_MENTIONS) dropped.push(displaced);
+					if (displaced === event) return;
+				}
+				pending.push(event);
+			}
 		});
+		this.#candidateMentions.set(bot, { pending, dropped });
 		return bot;
 	}
 
 	/** Makes `bot` the fleet's bot `id`; one connected already (a new token) catches up at once. */
 	#adopt(id: string, bot: Bot): void {
 		this.#bots.set(id, bot);
-		bot.subscribe(() => this.#changed());
+		// Replay commands received between candidate connection and persistence.
+		// Duplicate old/new gateway events are deduplicated by their Discord IDs.
+		const { pending: early, dropped } = this.#candidateMentions.get(bot) ?? { pending: [], dropped: [] };
+		this.#candidateMentions.delete(bot);
+		const discordBotId = bot.client?.user?.id;
+		if (discordBotId) {
+			for (const event of early) {
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId)) this.#push({ bot: id, event });
+			}
+			for (const event of dropped)
+				if (event.kind === "message" && commandOf(event.message.text, discordBotId))
+					this.notifyControlRejected(id, event.message);
+		}
+		bot.subscribe(() => {
+			const saved = this.#file.bots[id];
+			if (saved && bot.status.state === "connected") {
+				if (saved.applicationId && saved.applicationId !== bot.status.applicationId) {
+					console.error("p2 discord: saved bot identity mismatch; disconnecting");
+					void bot.close();
+				} else if (!saved.applicationId) {
+					// Upgrade the first release's token-only configuration after a verified connection.
+					saved.applicationId = bot.status.applicationId;
+					void this.#save().catch((error: unknown) =>
+						console.error("p2 discord: could not persist original bot identity:", error),
+					);
+				}
+			}
+			this.#changed();
+		});
 		if (bot.client?.isReady()) this.#push({ bot: id, event: { kind: "ready" } });
 	}
 
+	/**
+	 * The store owns authorization against bindings, thread membership and wake
+	 * policy; Fleet must never reply to an arbitrary mentioned command by itself.
+	 */
+	setControlRejectionHandler(
+		handler?: (bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]) => Promise<void>,
+	): void {
+		this.#controlRejectionHandler = handler;
+	}
+
+	/** Shared bounded notice path for ingress and scheduler rejection. */
+	notifyControlRejected(bot: string, message: Extract<BotEvent, { kind: "message" }>["message"]): void {
+		const handler = this.#controlRejectionHandler;
+		if (!handler || this.#activeNotices >= MAX_REJECTION_NOTICES) return;
+		this.#activeNotices++;
+		void Promise.resolve()
+			.then(() => handler(bot, message))
+			.catch((error: unknown) => console.error("p2 discord: could not notify rejected command:", error))
+			.finally(() => {
+				this.#activeNotices--;
+			});
+	}
+
+	/** A dropped non-command message is recovered by a history catch-up, not silently forgotten. */
+	requestCatchUp(bot: string): void {
+		this.#missed.add(bot);
+		for (const wake of [...this.#waiters]) wake();
+	}
+
 	#push(received: Received): void {
-		this.#queue.push(received);
+		const event = received.event;
+		if (event.kind === "message") {
+			const key = `${received.bot}:${event.message.channelId}:${event.message.id}`;
+			if (this.#seenMessages.has(key)) return;
+			this.#seenMessages.add(key);
+			if (this.#seenMessages.size > MAX_DEDUPLICATED_MESSAGES)
+				this.#seenMessages.delete(this.#seenMessages.values().next().value!);
+		}
+		const botId = this.#bots.get(received.bot)?.client?.user?.id;
+		const command =
+			event.kind === "message" && event.message.mentionsBot && botId !== undefined
+				? commandOf(event.message.text, botId)
+				: undefined;
+		const urgent = command !== undefined;
+		if (command === "stop") {
+			if (this.#stops.length >= MAX_STOPS) {
+				const rejected = this.#stops.shift();
+				if (rejected?.event.kind === "message") this.notifyControlRejected(rejected.bot, rejected.event.message);
+			}
+			this.#stops.push(received);
+		} else if (urgent) {
+			if (this.#urgent.length === MAX_URGENT) {
+				console.error("p2 discord: control queue saturated; rejecting oldest command");
+				const dropped = this.#urgent.shift();
+				if (dropped?.event.kind === "message") this.notifyControlRejected(dropped.bot, dropped.event.message);
+			}
+			this.#urgent.push(received);
+		} else if (this.#queue.length >= MAX_QUEUED) {
+			this.requestCatchUp(received.bot);
+			return;
+		} else if (
+			event.kind === "ready" &&
+			this.#queue.some((queued) => queued.bot === received.bot && queued.event.kind === "ready")
+		) {
+			return;
+		} else {
+			this.#queue.push(received);
+		}
 		for (const wake of [...this.#waiters]) wake();
 	}
 
@@ -163,11 +362,26 @@ export class Fleet {
 		return bot;
 	}
 
-	async #save(): Promise<void> {
-		const temporary = `${this.#path}.${process.pid}.tmp`;
-		await writeFile(temporary, `${JSON.stringify(this.#file, null, "\t")}\n`, { mode: 0o600 });
-		await chmod(temporary, 0o600);
-		await rename(temporary, this.#path);
+	async #save(file: BotsFile = this.#file): Promise<void> {
+		const snapshot = `${JSON.stringify(file, null, "\t")}\n`;
+		const persist = async () => {
+			await this.#beforeSave?.();
+			// Each attempt has its own temp file; the queue also prevents stale snapshots from winning.
+			const temporary = `${this.#path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+			try {
+				await writeFile(temporary, snapshot, { mode: 0o600 });
+				await chmod(temporary, 0o600);
+				await rename(temporary, this.#path);
+			} finally {
+				await rm(temporary, { force: true });
+			}
+		};
+		const saved = this.#saveTail.then(persist, persist);
+		this.#saveTail = saved.then(
+			() => {},
+			() => {},
+		);
+		await saved;
 	}
 }
 
@@ -191,6 +405,12 @@ function parseBots(text: string | undefined): { file: BotsFile; migrated: boolea
 	const listed = "bots" in value && value.bots && typeof value.bots === "object" ? value.bots : {};
 	for (const [id, entry] of Object.entries(listed))
 		if (entry && typeof entry === "object" && typeof entry.token === "string" && entry.token)
-			bots[id] = { token: entry.token, addedAt: typeof entry.addedAt === "number" ? entry.addedAt : 0 };
+			bots[id] = {
+				token: entry.token,
+				addedAt: typeof entry.addedAt === "number" ? entry.addedAt : 0,
+				...(typeof entry.applicationId === "string" && entry.applicationId
+					? { applicationId: entry.applicationId }
+					: {}),
+			};
 	return { file: { bots }, migrated: false };
 }

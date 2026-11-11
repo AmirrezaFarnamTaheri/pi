@@ -767,9 +767,9 @@ describe("Coding Agent Tools", () => {
 			const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
 			const bash = createBashTool(testDir, { operations });
 
-			const result = await bash.execute("test-call-chatty-updates", { command: "chatty" }, undefined, (update) =>
-				updates.push(update),
-			);
+			const result = await bash.execute("test-call-chatty-updates", { command: "chatty" }, undefined, (update) => {
+				updates.push(update);
+			});
 
 			expect(updates.length).toBeLessThan(25);
 			expect(getTextOutput(result)).toContain("line 4999");

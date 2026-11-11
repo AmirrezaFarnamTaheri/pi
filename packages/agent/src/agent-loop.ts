@@ -15,10 +15,11 @@ import {
 	type SystemMessage,
 	type ToolResultMessage,
 	type ToolStateChanges,
-	toToolDeclaration,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
+import { configuredParallelToolLimit, executeBoundedInOrder } from "./ordered-tool-pool.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
+import { ToolUpdateTracker } from "./tool-update-tracker.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -58,13 +59,14 @@ export function agentLoop(
 		context,
 		config,
 		async (event) => {
-			stream.push(event);
+			await stream.pushWithBackpressure(event, 128, signal);
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	).then(
+		(messages) => stream.end(messages),
+		(error: unknown) => stream.fail(error),
+	);
 
 	return stream;
 }
@@ -97,13 +99,14 @@ export function agentLoopContinue(
 		context,
 		config,
 		async (event) => {
-			stream.push(event);
+			await stream.pushWithBackpressure(event, 128, signal);
 		},
 		signal,
 		streamFn,
-	).then((messages) => {
-		stream.end(messages);
-	});
+	).then(
+		(messages) => stream.end(messages),
+		(error: unknown) => stream.fail(error),
+	);
 
 	return stream;
 }
@@ -353,10 +356,9 @@ function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage
 				index === systemIndex ? withToolChanges(pending, NO_CHANGES) : message,
 			)
 		: pendingMessages;
-	const changes = getToolStateChanges(
-		getCurrentTools([...context.messages, ...baseline]),
-		(context.tools ?? []).map(toToolDeclaration),
-	);
+	// getToolStateChanges materializes declarations only for added/changed tools.
+	// Cloning every executable schema on every turn was unnecessary work.
+	const changes = getToolStateChanges(getCurrentTools(context.messages, baseline), context.tools ?? []);
 	const unchanged = changes.toolsAdded.length === 0 && changes.toolsRemoved.length === 0;
 
 	if (pending) {
@@ -526,8 +528,11 @@ async function executeToolCalls(
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);
-	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
+	if (config.toolExecution === "sequential") {
 		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
+	}
+	if (hasSequentialToolCall) {
+		return executeToolCallsMixed(currentContext, assistantMessage, toolCalls, config, signal, emit);
 	}
 	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
 }
@@ -537,6 +542,52 @@ type ExecutedToolCallBatch = {
 	terminate: boolean;
 };
 
+/**
+ * A sequential tool is a barrier, not a reason to serialize unrelated parallel calls.
+ * Run adjacent parallel calls together, but never overlap them with a sequential tool
+ * or reorder calls across a sequential barrier.
+ */
+async function executeToolCallsMixed(
+	context: AgentContext,
+	assistantMessage: AssistantMessage,
+	toolCalls: AgentToolCall[],
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+): Promise<ExecutedToolCallBatch> {
+	const messages: ToolResultMessage[] = [];
+	const batches: ExecutedToolCallBatch[] = [];
+	let parallel: AgentToolCall[] = [];
+
+	const flushParallel = async () => {
+		if (parallel.length === 0) return;
+		const batch = await executeToolCallsParallel(context, assistantMessage, parallel, config, signal, emit);
+		batches.push(batch);
+		messages.push(...batch.messages);
+		parallel = [];
+	};
+
+	for (const call of toolCalls) {
+		const sequential = context.tools?.find((tool) => tool.name === call.name)?.executionMode === "sequential";
+		if (!sequential) {
+			parallel.push(call);
+			continue;
+		}
+		await flushParallel();
+		if (signal?.aborted) break;
+		const batch = await executeToolCallsSequential(context, assistantMessage, [call], config, signal, emit);
+		batches.push(batch);
+		messages.push(...batch.messages);
+		if (signal?.aborted) break;
+	}
+	if (!signal?.aborted) await flushParallel();
+	return {
+		messages,
+		terminate: batches.length > 0 && batches.every((batch) => batch.terminate),
+	};
+}
+
+/** Run tool calls one after another, stopping early if the signal aborts. */
 async function executeToolCallsSequential(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -593,6 +644,7 @@ async function executeToolCallsSequential(
 	};
 }
 
+/** Prepare calls in order, run the allowed ones concurrently, and emit results in call order. */
 async function executeToolCallsParallel(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -601,6 +653,8 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
+	// Reject unsafe configuration before firing start events or permission hooks.
+	const concurrency = configuredParallelToolLimit(config.maxParallelToolExecutions);
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
@@ -653,9 +707,9 @@ async function executeToolCallsParallel(
 		}
 	}
 
-	const orderedFinalizedCalls = await Promise.all(
-		finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))),
-	);
+	// Preparation remains ordered (especially permission hooks), but execution
+	// only runs a bounded number of independent tools at once.
+	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(finalizedCalls, concurrency);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);
@@ -786,6 +840,7 @@ async function prepareToolCall(
 	}
 }
 
+/** Create the progress sink that emits tool_execution_update events for one call. */
 function emitToolExecutionUpdate(toolCall: AgentToolCall, emit: AgentEventSink): ToolUpdateSink {
 	return (partialResult) =>
 		emit({
@@ -828,12 +883,13 @@ export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallO
 	return finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
 }
 
+/** Execute one prepared tool, delivering progress through a bounded tracker and turning rejections into error results. */
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
 	onUpdate: ToolUpdateSink,
 ): Promise<ExecutedToolCallOutcome> {
-	const updateEvents: Promise<void>[] = [];
+	const updates = new ToolUpdateTracker();
 	let acceptingUpdates = true;
 	const startedAt = performance.now();
 	const elapsed = () => Math.round(performance.now() - startedAt);
@@ -845,17 +901,19 @@ async function executePreparedToolCall(
 			signal,
 			(partialResult) => {
 				if (!acceptingUpdates) return;
-				updateEvents.push(Promise.resolve(onUpdate(partialResult)));
+				return updates.track(() => onUpdate(partialResult));
 			},
 		);
 		const durationMs = elapsed();
 		acceptingUpdates = false;
-		await Promise.all(updateEvents);
+		await updates.drain();
 		return { result, isError: result.isError === true, durationMs };
 	} catch (error) {
 		const durationMs = elapsed();
 		acceptingUpdates = false;
-		await Promise.all(updateEvents);
+		// A tool can reject while an unrelated notification remains pending
+		// forever. Do not mask or delay its original error waiting for progress.
+		updates.cancel();
 		return {
 			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
 			isError: true,

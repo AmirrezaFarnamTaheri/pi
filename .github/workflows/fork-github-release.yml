@@ -1,0 +1,222 @@
+# Build and publish a GitHub-only binary release of this fork.
+# Run by creating release/fork-v<package-version> from the verified main commit.
+# This intentionally does NOT publish @earendil-works npm packages or pi.dev assets.
+name: Fork GitHub Release
+
+on:
+  # An opt-in rerun from Actions after the exact source SHA has passed main CI.
+  # Select release/fork-v<version> as the branch; the build job rejects other refs.
+  workflow_dispatch:
+  push:
+    branches:
+      - "release/fork-v*"
+
+permissions: {}
+
+concurrency:
+  group: fork-github-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'AmirrezaFarnamTaheri/pi' && startsWith(github.ref, 'refs/heads/release/fork-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source commit passed the complete CI matrix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release SHA must be on the fork's main history"
+            exit 1
+          fi
+          # GitHub paginates workflow runs; never mistake a later-page success for absence.
+          gh api --paginate --jq '.workflow_runs[]' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            | jq -s '{workflow_runs: .}' \
+            | node scripts/verify-fork-release-ci.mjs "$GITHUB_SHA"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Hydrate immutable, SHA-256-verified model data
+        run: npm run hydrate:fork-model-data
+
+      - name: Create deterministic source and cross-platform binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s' "$GITHUB_REF_NAME" | sed 's|^release/fork-||')"
+          version="$(printf '%s' "$tag" | sed 's/^v//')"
+          mkdir -p release-assets
+          ./scripts/create-source-archive.sh --version "$version" --ref HEAD --out "release-assets/pi-$version-source.tar.gz"
+          ./scripts/create-source-archive.sh --version "$version" --ref HEAD --out "release-assets/pi-$version-source-check.tar.gz"
+          cmp "release-assets/pi-$version-source.tar.gz" "release-assets/pi-$version-source-check.tar.gz"
+          rm "release-assets/pi-$version-source-check.tar.gz"
+          build_root="$(mktemp -d)"
+          trap 'rm -rf "$build_root"' EXIT
+          tar -xzf "release-assets/pi-$version-source.tar.gz" -C "$build_root"
+          "$build_root/pi-$version/scripts/build-binaries.sh" \
+            --offline-model-data --out "$GITHUB_WORKSPACE/packages/coding-agent/binaries"
+          cp packages/coding-agent/binaries/pi-*.tar.gz release-assets/
+          cp packages/coding-agent/binaries/pi-*.zip release-assets/
+          node scripts/generate-coding-agent-install-lock.mjs --check
+          cp packages/coding-agent/install-lock/package.json release-assets/pi-coding-agent-install-package.json
+          cp packages/coding-agent/install-lock/package-lock.json release-assets/pi-coding-agent-install-package-lock.json
+          cp nix/model-catalog.json release-assets/MODEL_CATALOG_PIN.json
+          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          node scripts/create-fork-sbom.mjs package-lock.json release-assets/SBOM.binary.cdx.json packages/coding-agent
+          node scripts/create-fork-sbom.mjs packages/coding-agent/install-lock/package-lock.json release-assets/SBOM.installer.cdx.json ""
+          node -e '
+            const fs = require("node:fs");
+            const catalog = JSON.parse(fs.readFileSync("nix/model-catalog.json", "utf8"));
+            const manifest = {
+              sourceCommit: process.env.GITHUB_SHA,
+              sourceTimestamp: Number(process.env.SOURCE_DATE_EPOCH),
+              modelCatalogRevision: catalog.revision,
+              releaseTag: process.env.GITHUB_REF_NAME.slice("release/fork-".length),
+              modelDataPolicy: "immutable-sha256-pin",
+              releaseChannel: "github-fork-only"
+            };
+            fs.writeFileSync("release-assets/BUILD_MANIFEST.json", JSON.stringify(manifest, null, 2) + String.fromCharCode(10));
+          '
+          (
+            cd release-assets
+            sha256sum pi-*.tar.gz pi-*.zip pi-coding-agent-install-*.json MODEL_CATALOG_PIN.json SBOM.*.cdx.json BUILD_MANIFEST.json > SHA256SUMS
+          )
+          cat > release-assets/RELEASE_NOTES.md <<EOF
+          Fork-only binary release of Pi $tag (source commit $GITHUB_SHA).
+
+          Six platform archives, the reproducible source archive, installer lockfiles, artifact-scoped CycloneDX SBOMs, immutable model-catalog pin, build manifest and SHA256SUMS are attached.
+          See the commit history and the fork changelog for included fixes.
+
+          This release is published on the fork only. It does not publish the upstream @earendil-works npm packages.
+          EOF
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fork-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  smoke-test:
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout smoke tests
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fork-release-assets
+          path: release-assets
+
+      - name: Extract and smoke-test native binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          platform="$(node -p "process.platform+'-'+process.arch")"
+          mkdir -p extracted
+          case "$platform" in
+            darwin-arm64|darwin-x64|linux-arm64|linux-x64)
+              archive="release-assets/pi-$platform.tar.gz"
+              binary="extracted/pi/pi"
+              tar -xf "$archive" -C extracted
+              ;;
+            win32-arm64)
+              archive="release-assets/pi-windows-arm64.zip"
+              binary="extracted/pi.exe"
+              export ARCHIVE_PATH="$(cygpath -w "$archive")"
+              export DESTINATION_PATH="$(cygpath -w extracted)"
+              powershell.exe -NoProfile -NonInteractive -Command \
+                'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DESTINATION_PATH -Force'
+              ;;
+            win32-x64)
+              archive="release-assets/pi-windows-x64.zip"
+              binary="extracted/pi.exe"
+              export ARCHIVE_PATH="$(cygpath -w "$archive")"
+              export DESTINATION_PATH="$(cygpath -w extracted)"
+              powershell.exe -NoProfile -NonInteractive -Command \
+                'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DESTINATION_PATH -Force'
+              ;;
+            *)
+              echo "::error::Unsupported platform: $platform"
+              exit 1
+              ;;
+          esac
+          "$binary" --help
+          "$binary" --version
+          node scripts/smoke-test-codemode-binary.mjs "$binary"
+
+  publish-github-release:
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fork-release-assets
+          path: release-assets
+
+      - name: Verify and publish fork GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GH_REPO="$GITHUB_REPOSITORY"
+          tag="$(printf '%s' "$GITHUB_REF_NAME" | sed 's|^release/fork-||')"
+          (cd release-assets && sha256sum -c SHA256SUMS)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release already exists: $tag"
+            exit 1
+          fi
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent >/dev/null 2>&1; then
+            echo "::error::Tag already exists: $tag"
+            exit 1
+          fi
+          assets=(release-assets/pi-*.tar.gz release-assets/pi-*.zip release-assets/pi-coding-agent-install-*.json release-assets/MODEL_CATALOG_PIN.json release-assets/SBOM.*.cdx.json release-assets/BUILD_MANIFEST.json release-assets/SHA256SUMS)
+          test "${#assets[@]}" -eq 14
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Pi fork $tag" \
+            --notes-file release-assets/RELEASE_NOTES.md \
+            "${assets[@]}"
+          gh release view "$tag" --json url,isDraft,assets \
+            --jq '{url,isDraft,assetCount:(.assets|length)}'

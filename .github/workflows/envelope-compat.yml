@@ -1,0 +1,74 @@
+name: Envelope compatibility
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/coding-agent/**"
+      - ".github/workflows/envelope-compat.yml"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: envelope-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-extension-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out Pi fork candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out Envelope for compatibility
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AmirrezaFarnamTaheri/pi-envelope
+          # Exercise both in-flight PRs without depending on feature refs after merge.
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref == 'feat/background-shell-runs' && '26513a25ae3afac62c18bffc094b3bc926907cad' || 'main' }}
+          path: .ci-envelope
+          persist-credentials: false
+      - name: Install Node.js 22.19
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - name: Record immutable commits for review
+        shell: bash
+        run: |
+          printf 'Fork SHA: %s\n' "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Envelope SHA: %s\n' "$(git -C .ci-envelope rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build and verify fork CLI
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+          # Dedicated CI jobs run the full coding-agent tests with rg/fd available.
+          # This job is the independent fork + Envelope integration gate.
+      - name: Run Envelope regression suite with pinned dependencies
+        working-directory: .ci-envelope
+        run: |
+          # Envelope currently checks in exact direct dependency versions but no lockfile.
+          # Use npm ci when a lockfile exists; otherwise never generate a dirty lock.
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci --include=optional --no-audit --no-fund
+          else
+            npm install --include=optional --no-save --package-lock=false --no-audit --no-fund
+          fi
+          npm run doctor:bundle
+          npm run check
+      - name: Verify real Envelope and Tersio RPC command registration
+        shell: bash
+        working-directory: .ci-envelope
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pi-bin" "$RUNNER_TEMP/envelope-home/.tersio"
+          printf '{"comboSetupComplete":true,"comboDefault":"off"}\n' > "$RUNNER_TEMP/envelope-home/.tersio/settings.json"
+          printf '#!/bin/sh\nexec node "%s/packages/coding-agent/dist/bundle/cli.js" "$@"\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pi-bin/pi"
+          chmod 700 "$RUNNER_TEMP/pi-bin/pi"
+          HOME="$RUNNER_TEMP/envelope-home" PATH="$RUNNER_TEMP/pi-bin:$PATH" npm run smoke:runtime

@@ -132,9 +132,16 @@ export class Bot implements DiscordPort {
 		};
 	}
 
-	async messages(channelId: string, query: { after: string; limit: number }): Promise<DiscordMessage[]> {
+	async messages(
+		channelId: string,
+		query: { after?: string; before?: string; limit: number },
+	): Promise<DiscordMessage[]> {
 		const channel = await this.#text(channelId);
-		const found = await channel.messages.fetch({ after: query.after, limit: query.limit, cache: false });
+		const found = await channel.messages.fetch({
+			...(query.before === undefined ? { after: query.after ?? "0" } : { before: query.before }),
+			limit: query.limit,
+			cache: false,
+		});
 		const botId = this.botId;
 		return [...found.values()]
 			.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
@@ -146,6 +153,7 @@ export class Bot implements DiscordPort {
 		messageId: string | undefined,
 		text: string,
 		files: readonly { name: string; data: Uint8Array }[] = [],
+		nonce?: string,
 	): Promise<void> {
 		const channel = await this.#text(channelId);
 		if (!("send" in channel)) throw new Error("The channel takes no messages");
@@ -156,8 +164,9 @@ export class Bot implements DiscordPort {
 				? { files: files.map((file) => ({ attachment: Buffer.from(file.data), name: file.name })) }
 				: {}),
 			...(messageId ? { reply: { messageReference: messageId, failIfNotExists: false } } : {}),
-			// The agent's `<@id>` mentions ping their users; roles and @everyone never do.
+			// User mentions ping their users, while roles and @everyone remain disabled.
 			allowedMentions: { parse: ["users"] },
+			...(nonce === undefined ? {} : { nonce, enforceNonce: true }),
 		});
 	}
 

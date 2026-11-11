@@ -193,7 +193,7 @@ async function signInHost(
 			],
 			[Catalog, { sessions: constant([SESSION]), get: UNUSED, create: UNUSED, activity: UNUSED, update: UNUSED }],
 			[ChildStore, { children: constant({}), report: UNUSED }],
-			[SessionLocks, { locks: constant({}), set: UNUSED }],
+			[SessionLocks, { locks: constant({}), writeIds: constant({}), set: UNUSED, compareAndSet: UNUSED }],
 			[
 				Server,
 				{

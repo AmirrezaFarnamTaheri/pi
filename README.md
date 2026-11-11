@@ -8,7 +8,9 @@
   <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
 </p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+> **Fork build:** Download this fork's standalone CLI from [GitHub Releases](https://github.com/AmirrezaFarnamTaheri/pi/releases). On Windows, unpack `pi-windows-x64.zip` (or `pi-windows-arm64.zip`), put `pi.exe` in `$HOME\\Apps\\pi`, and add that directory to your user `PATH`. Verify with `pi --version`. This fork does **not** publish to the upstream npm namespace. See [fork maintenance](docs/fork-maintenance.md).
+
+> **Note:** The upstream `pi.dev` installer and `@earendil-works/*` npm packages in the guide below install upstream Pi, **not this fork**.
 
 # Pi
 

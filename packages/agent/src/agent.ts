@@ -13,6 +13,7 @@ import {
 	toToolDeclaration,
 } from "@earendil-works/pi-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { PendingMessageQueue } from "./pending-message-queue.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AfterToolCallContext,
@@ -139,44 +140,13 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	/** Optional bounded tool worker concurrency; default eight. */
+	maxParallelToolExecutions?: number;
 	/**
 	 * How requests identify the app to providers, merged field by field over `DEFAULT_AGENT_IDENTITY`
 	 * (`{ attribution: PI_ATTRIBUTION }`). Pass `{ attribution: null }` to send no attribution headers.
 	 */
 	identity?: ClientIdentity;
-}
-
-class PendingMessageQueue {
-	private messages: AgentMessage[] = [];
-	public mode: QueueMode;
-
-	constructor(mode: QueueMode) {
-		this.mode = mode;
-	}
-
-	enqueue(message: AgentMessage): void {
-		this.messages.push(message);
-	}
-
-	hasItems(): boolean {
-		return this.messages.length > 0;
-	}
-
-	peek(): AgentMessage[] {
-		if (this.mode === "all") return this.messages.slice();
-		const first = this.messages[0];
-		return first ? [first] : [];
-	}
-
-	drain(): AgentMessage[] {
-		const drained = this.peek();
-		this.messages = this.messages.slice(drained.length);
-		return drained;
-	}
-
-	clear(): void {
-		this.messages = [];
-	}
 }
 
 type ActiveRun = {
@@ -194,8 +164,8 @@ type ActiveRun = {
 export class Agent {
 	private _state: MutableAgentState;
 	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
-	private readonly steeringQueue: PendingMessageQueue;
-	private readonly followUpQueue: PendingMessageQueue;
+	private readonly steeringQueue: PendingMessageQueue<AgentMessage>;
+	private readonly followUpQueue: PendingMessageQueue<AgentMessage>;
 
 	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
@@ -232,6 +202,7 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	public maxParallelToolExecutions?: number;
 	/** Request identity forwarded to the stream function, over `DEFAULT_AGENT_IDENTITY`. */
 	public identity?: ClientIdentity;
 
@@ -252,13 +223,14 @@ export class Agent {
 		this.prepareRequest = runtimeOptions.prepareRequest;
 		this.prepareNextTurn = runtimeOptions.prepareNextTurn;
 		this.prepareNextTurnWithContext = runtimeOptions.prepareNextTurnWithContext;
-		this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time");
-		this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time");
+		this.steeringQueue = new PendingMessageQueue<AgentMessage>(runtimeOptions.steeringMode ?? "one-at-a-time");
+		this.followUpQueue = new PendingMessageQueue<AgentMessage>(runtimeOptions.followUpMode ?? "one-at-a-time");
 		this.sessionId = runtimeOptions.sessionId;
 		this.thinkingBudgets = runtimeOptions.thinkingBudgets;
 		this.transport = runtimeOptions.transport ?? "auto";
 		this.maxRetryDelayMs = runtimeOptions.maxRetryDelayMs;
 		this.toolExecution = runtimeOptions.toolExecution ?? "parallel";
+		this.maxParallelToolExecutions = runtimeOptions.maxParallelToolExecutions;
 		this.identity = runtimeOptions.identity;
 	}
 
@@ -487,6 +459,7 @@ export class Agent {
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			identity: this.identity,
 			toolExecution: this.toolExecution,
+			maxParallelToolExecutions: this.maxParallelToolExecutions,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			finishTurn: this.finishTurn,

@@ -198,6 +198,26 @@ describe("paths and folders", () => {
 	});
 });
 
+describe("bulk file-index operations", () => {
+	it("moves multiple marked paths and reclaims only unreferenced blobs in a batch", async () => {
+		const files = await filesOf();
+		const shared = await put(files, "keep.txt", "common");
+		await files.copy({ id: shared.id, space: "shared", path: "group/shared.txt" }, context);
+		for (let index = 0; index < 25; index++) {
+			await put(files, `group/sub/file-${index}.txt`, `unique-${index}`);
+		}
+		const oldBlobCount = (await blobFiles(files)).length;
+		await files.move({ space: "shared", from: "group", to: "archive" }, context);
+		expect(await names(files, "archive")).toContain("archive/shared.txt");
+		expect((await names(files, "archive/sub")).length).toBe(25);
+		await files.removePath({ space: "shared", path: "archive" }, context);
+		expect(await names(files, "")).toEqual(["keep.txt"]);
+		expect((await blobFiles(files)).length).toBe(1);
+		expect(oldBlobCount).toBe(26);
+		await files.close();
+	});
+});
+
 describe("versions and blob references", () => {
 	it("adds a version per write; the path names the newest; older ones stay readable", async () => {
 		const files = await filesOf();
@@ -572,9 +592,12 @@ describe("caps", () => {
 describe("summary", () => {
 	it("counts a space's files, versions and bytes and keeps its newest versions", async () => {
 		const files = await filesOf();
-		const a1 = await put(files, "docs/a.txt", "1", { created: 1_000 });
-		const a2 = await put(files, "docs/a.txt", "22", { created: 2_000 });
-		const b = await put(files, "b.txt", "333", { created: 3_000 });
+		// File writes can share a millisecond in CI. Supply ordered times instead of
+		// assuming their timestamps differ; ties use an ID tiebreaker, not insertion order.
+		const created = 1_700_000_000_000;
+		const a1 = await put(files, "docs/a.txt", "1", { created });
+		const a2 = await put(files, "docs/a.txt", "22", { created: created + 1 });
+		const b = await put(files, "b.txt", "333", { created: created + 2 });
 		expect(await files.summary.get("shared", context)).toEqual({
 			files: 2,
 			versions: 3,
@@ -593,7 +616,10 @@ describe("summary", () => {
 
 	it("keeps the newest 20 and stays across a restart", async () => {
 		const first = await filesOf();
-		for (let index = 0; index < 25; index++) await put(first, `f${index}`, "x", { created: index });
+		// Use distinct, explicit timestamps: the production ordering is
+		// (created DESC, id DESC), and 25 fast writes can share one millisecond.
+		for (let index = 0; index < 25; index++)
+			await put(first, `f${index}`, "x", { created: 1_700_000_000_000 + index });
 		const summary = await first.summary.get("shared", context);
 		expect(summary?.newest).toHaveLength(20);
 		expect(summary?.newest[0]?.path).toBe("f24");

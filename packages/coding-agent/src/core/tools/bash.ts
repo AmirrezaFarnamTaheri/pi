@@ -13,6 +13,7 @@ import {
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -39,10 +40,15 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Shell command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
+	background: Type.Optional(
+		Type.Boolean({
+			description: "Run the command detached, returning a PID and output log path immediately (local bash only)",
+		}),
+	),
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.)",
+	snippet: "Execute bash commands (ls, grep, find, etc.); use background: true for long-running local commands",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
 } as const;
 
@@ -56,7 +62,9 @@ const bashOutputSchema = Type.Object({
 	output: Type.String({ description: "Combined stdout and stderr, possibly truncated" }),
 	truncated: Type.Boolean(),
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
-	exit_code: Type.Number(),
+	exit_code: Type.Optional(Type.Number()),
+	background_pid: Type.Optional(Type.Number()),
+	background_output_path: Type.Optional(Type.String()),
 	wall_time_seconds: Type.Number(),
 });
 
@@ -84,7 +92,7 @@ export interface BashOperations {
 		command: string,
 		cwd: string,
 		options: {
-			onData: (data: Buffer) => void;
+			onData: (data: Buffer) => unknown;
 			signal?: AbortSignal;
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
@@ -142,7 +150,17 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			let timedOut = false;
 			let exitedBeforeDeadlineAfterMs: number | undefined;
 			let timeoutHandle: NodeJS.Timeout | undefined;
+			let cancelOutputWait: ((error: Error) => void) | undefined;
+			const cancelOutput = new Promise<never>((_resolve, reject) => {
+				cancelOutputWait = reject;
+			});
+			// A fast cancellation can predate the first pending wait. Observe it now
+			// without hiding the rejection from the later Promise.race.
+			void cancelOutput.catch(() => {});
 			const onAbort = () => {
+				cancelOutputWait?.(new Error("aborted"));
+				child.stdout?.resume();
+				child.stderr?.resume();
 				if (child.pid) killProcessTree(child.pid);
 			};
 
@@ -152,14 +170,75 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
 						exitedBeforeDeadlineAfterMs = shellExitedAfterMs;
+						cancelOutputWait?.(
+							new ShellTimeoutError(
+								timeout,
+								shellExitedAfterMs !== undefined
+									? { exitCode: child.exitCode ?? 1, afterSeconds: Math.round(shellExitedAfterMs / 100) / 10 }
+									: undefined,
+							),
+						);
+						child.stdout?.resume();
+						child.stderr?.resume();
 						// Also when the shell already exited: on Unix the group kill still reaches background
 						// processes holding the pipes. Windows cannot find them once the shell pid is gone.
 						if (child.pid) killProcessTree(child.pid);
 					}, timeoutMs);
 				}
-				// Stream stdout and stderr.
-				child.stdout?.on("data", onData);
-				child.stderr?.on("data", onData);
+
+				// Both pipes feed one spill file; pause both when its write buffer fills.
+				const pendingOutput = new Set<Promise<void>>();
+				let outputFailure: unknown;
+				let hasOutputFailure = false;
+				const failOutput = (error: unknown) => {
+					hasOutputFailure = true;
+					outputFailure = error;
+					cancelOutputWait?.(error instanceof Error ? error : new Error(String(error)));
+					child.stdout?.resume();
+					child.stderr?.resume();
+					onAbort();
+				};
+				// A chunk queued before pause() can arrive while its predecessor still drains.
+				const queuedChunks: Buffer[] = [];
+				const deliverChunk = (data: Buffer): void => {
+					if (hasOutputFailure) return;
+					let result: unknown;
+					try {
+						result = onData(data);
+					} catch (error) {
+						failOutput(error);
+						return;
+					}
+					// Synchronous callbacks do not need throttling.
+					if (!result || typeof (result as PromiseLike<unknown>).then !== "function") return;
+					child.stdout?.pause();
+					child.stderr?.pause();
+					let pending!: Promise<void>;
+					pending = Promise.resolve(result)
+						.then(
+							() => {},
+							(error: unknown) => failOutput(error),
+						)
+						.finally(() => {
+							pendingOutput.delete(pending);
+							if (pendingOutput.size === 0 && !hasOutputFailure) {
+								while (queuedChunks.length > 0 && pendingOutput.size === 0 && !hasOutputFailure) {
+									deliverChunk(queuedChunks.shift()!);
+								}
+								if (pendingOutput.size === 0 && !hasOutputFailure) {
+									child.stdout?.resume();
+									child.stderr?.resume();
+								}
+							}
+						});
+					pendingOutput.add(pending);
+				};
+				const onChunk = (data: Buffer) => {
+					if (pendingOutput.size > 0) queuedChunks.push(data);
+					else deliverChunk(data);
+				};
+				child.stdout?.on("data", onChunk);
+				child.stderr?.on("data", onChunk);
 				// Handle abort signal by killing the entire process tree.
 				if (signal) {
 					if (signal.aborted) onAbort();
@@ -167,7 +246,19 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				}
 				// Handle shell spawn errors and wait for the process to terminate without hanging
 				// on inherited stdio handles held by detached descendants.
-				const exitCode = await waitForChildProcess(child);
+				const exitCode = await Promise.race([waitForChildProcess(child), cancelOutput]);
+				// A pending write can schedule another write from a previously queued chunk.
+				// Promise.all(pendingOutput) snapshots only the first batch; loop until no
+				// queued or in-flight chunks remain, including writes started by a drain.
+				// Abort and timeout still win against a sink that never settles.
+				while (pendingOutput.size > 0 || queuedChunks.length > 0) {
+					if (pendingOutput.size === 0) {
+						deliverChunk(queuedChunks.shift()!);
+						continue;
+					}
+					await Promise.race([Promise.all([...pendingOutput]), cancelOutput]);
+				}
+				if (hasOutputFailure) throw outputFailure;
 				if (signal?.aborted) {
 					throw new Error("aborted");
 				}
@@ -280,7 +371,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -288,7 +379,7 @@ export function createShellToolDefinition(
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		async execute(
 			_toolCallId,
-			{ command, timeout }: { command: string; timeout?: number },
+			{ command, timeout, background }: { command: string; timeout?: number; background?: boolean },
 			signal?: AbortSignal,
 			onUpdate?,
 			ctx?: ExtensionContext,
@@ -301,6 +392,36 @@ export function createShellToolDefinition(
 				exposeSessionEnvironment,
 				ctx,
 			);
+
+			if (background) {
+				if (options?.operations || config.name !== "bash" || config.shellName !== "bash") {
+					throw new Error("Background execution is not supported by this shell backend");
+				}
+				if (timeout !== undefined) {
+					throw new Error("Cannot set a timeout for a background command");
+				}
+				if (signal?.aborted) throw new Error("aborted");
+				const startedAt = performance.now();
+				const { pid, outputPath } = await startBackgroundShell(
+					spawnContext.command,
+					spawnContext.cwd,
+					getShellConfig(options?.shellPath),
+					spawnContext.env,
+					config.tempFilePrefix,
+				);
+				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The supervisor caps captured output at ${BACKGROUND_LOG_MAX_BYTES} bytes. Monitor and stop the process explicitly when needed.`;
+				return {
+					content: [{ type: "text", text }],
+					details: undefined,
+					structuredContent: {
+						output: "",
+						truncated: false,
+						wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+						background_pid: pid,
+						background_output_path: outputPath,
+					},
+				};
+			}
 			const output = new OutputAccumulator({ tempFilePrefix: config.tempFilePrefix });
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
@@ -351,6 +472,7 @@ export function createShellToolDefinition(
 				if (!acceptingOutput) return;
 				output.append(data);
 				scheduleOutputUpdate();
+				return output.waitForDrain();
 			};
 
 			const finishOutput = async () => {

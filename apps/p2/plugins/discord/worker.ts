@@ -148,11 +148,28 @@ export default defineFacet((host) => {
 					return { conversation: target, submissionId };
 				},
 				unlinked: async (ctx) => {
-					await harness().durable.commit(async (tx) => {
-						const doc = await tx.doc(DiscordLinkDoc);
-						doc.link = null;
-						doc.threads = {};
-					}, durableContext(ctx));
+					const durable = harness().durable;
+					const context = durableContext(ctx);
+					const doc = await durable.snapshot(DiscordLinkDoc, context);
+					const main = await mainConversation(durable, context);
+					const conversations = new Set<number>([
+						main,
+						...Object.keys(doc?.threads ?? {})
+							.map(Number)
+							.filter((id) => Number.isSafeInteger(id) && id >= 0),
+					]);
+					// Discord delivery RPCs finish before this call, but followUp submissions
+					// may still be queued or executing. Stop/await them while the session
+					// lock is installed; only then may the server lift that lock.
+					for (const conversation of conversations) {
+						const chat = await ctx.get(Conversation, { conversation });
+						await chat.stop(ctx);
+					}
+					await durable.commit(async (tx) => {
+						const value = await tx.doc(DiscordLinkDoc);
+						value.link = null;
+						value.threads = {};
+					}, context);
 					return null;
 				},
 				turn: async ({ submissionId }, ctx) => {

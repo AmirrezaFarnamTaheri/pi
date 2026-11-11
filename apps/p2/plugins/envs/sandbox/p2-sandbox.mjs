@@ -14,6 +14,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	realpathSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -195,12 +196,39 @@ function hostPath(path, readonly) {
 	const home = homedir();
 	const expanded = path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
 	if (!isAbsolute(expanded)) throw new Error(`Folder must be absolute or start with ~: ${path}`);
-	const resolved = resolve(expanded);
+	const requested = resolve(expanded);
+	const protectedPath = resolve(home, ".pi");
 	const within = (parent, child) => child === parent || child.startsWith(parent === "/" ? "/" : `${parent}/`);
-	const pi = join(home, ".pi");
-	if (!readonly && (within(resolved, pi) || within(pi, resolved)))
-		throw new Error(`A writable folder must not contain or be inside ${pi} (p2's launcher runs from there): ${path}`);
-	return resolved;
+	const overlaps = (first, second) => within(first, second) || within(second, first);
+	const failProtected = () => {
+		throw new Error(
+			`A writable folder must not contain or be inside ${protectedPath} (p2's launcher runs from there): ${path}`,
+		);
+	};
+	// The lexical check protects direct ~/.pi paths even before they exist.
+	if (!readonly && overlaps(requested, protectedPath)) failProtected();
+	// Resolve the nearest existing ancestor *before* making directories: a symlink alias
+	// into ~/.pi must not create a new directory inside the protected tree.
+	const canonicalIfMissing = (candidate) => {
+		let ancestor = candidate;
+		const missing = [];
+		while (!existsSync(ancestor)) {
+			const parent = dirname(ancestor);
+			if (parent === ancestor) throw new Error(`Cannot resolve host folder: ${candidate}`);
+			missing.unshift(basename(ancestor));
+			ancestor = parent;
+		}
+		return resolve(realpathSync(ancestor), ...missing);
+	};
+	const protectedReal = canonicalIfMissing(protectedPath);
+	const canonical = canonicalIfMissing(requested);
+	if (!readonly && overlaps(canonical, protectedReal)) failProtected();
+	// Only after both checks may an absent mount be created. Use the real path as
+	// the RealFSProvider root, not a symlink which can point at protected state.
+	mkdirSync(requested, { recursive: true });
+	const actual = realpathSync(requested);
+	if (!readonly && overlaps(actual, canonicalIfMissing(protectedPath))) failProtected();
+	return actual;
 }
 
 // --- Clients ---------------------------------------------------------------------------------------------------------

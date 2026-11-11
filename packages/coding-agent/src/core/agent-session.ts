@@ -38,7 +38,6 @@ import type {
 	AuthResult,
 	ImageContent,
 	Model,
-	ProviderHeaders,
 	SystemMessage,
 	TextContent,
 	ToolResultMessage,
@@ -62,6 +61,8 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
+import { allowedCycleModels, assertAccountRotationConsent } from "./account-rotation-consent.ts";
+import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -74,7 +75,6 @@ import {
 	compact,
 	estimateContextTokens,
 	estimateProjectedContextTokens,
-	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -176,28 +176,7 @@ export function markRuntimeStreamFunction(streamFn: StreamFn, modelRuntime: Mode
 // Skill Block Parsing
 // ============================================================================
 
-/** Parsed skill block from a user message */
-export interface ParsedSkillBlock {
-	name: string;
-	location: string;
-	content: string;
-	userMessage: string | undefined;
-}
-
-/**
- * Parse a skill block from message text.
- * Returns null if the text doesn't contain a skill block.
- */
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-	const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-	if (!match) return null;
-	return {
-		name: match[1],
-		location: match[2],
-		content: match[3],
-		userMessage: match[4]?.trim() || undefined,
-	};
-}
+export { type ParsedSkillBlock, parseSkillBlock } from "./agent-session-utils.ts";
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {
@@ -256,12 +235,6 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // ============================================================================
 // Types
 // ============================================================================
-
-function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
-	return headers
-		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
-		: undefined;
-}
 
 export interface AgentSessionConfig {
 	agent: Agent;
@@ -343,6 +316,8 @@ export interface PromptOptions {
 export interface ModelMutationOptions {
 	/** Persist the new value to global defaults. Defaults to session-only. */
 	persist?: boolean;
+	/** Caller confirmed the existing transcript may be routed through distinct accounts. */
+	accountRotationConsent?: boolean;
 }
 
 /** Result from cycleModel() */
@@ -378,33 +353,9 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-function estimateMessagesTokens(messages: AgentMessage[]): number {
-	let tokens = 0;
-	for (const message of messages) {
-		tokens += estimateTokens(message);
-	}
-	return tokens;
-}
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
-
-/**
- * Index of the model to cycle to, or undefined when there is nothing to switch to.
- * When the current model is not in the list (currentIndex -1), forward picks the first
- * entry and backward the last, so a one-entry list still selects its only model.
- */
-function getNextCycleIndex(
-	currentIndex: number,
-	length: number,
-	direction: "forward" | "backward",
-): number | undefined {
-	if (length === 0) return undefined;
-	if (currentIndex === -1) return direction === "forward" ? 0 : length - 1;
-	if (length === 1) return undefined;
-	return direction === "forward" ? (currentIndex + 1) % length : (currentIndex - 1 + length) % length;
-}
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -501,6 +452,8 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	/** Session-scoped consent; never inherited from a globally persisted rotation default. */
+	private _rotationConsentSessionId?: string;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
 	// Tool registry for extension getTools/setTools
@@ -1283,7 +1236,10 @@ export class AgentSession {
 	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
 		const mapped = this._entryIdsByMessage.get(message);
 		if (mapped) return mapped;
-		for (const entry of [...this.sessionManager.getBranch()].reverse()) {
+		// getBranch() returns a fresh array, so it can be scanned from the newest entry without another copy.
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index]!;
 			if (entry.type === "message" && entry.message === message) return entry.id;
 		}
 
@@ -1954,6 +1910,13 @@ export class AgentSession {
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+		if (this.model?.provider === "account-profiles")
+			assertAccountRotationConsent(
+				this.model.provider,
+				true,
+				this._rotationConsentSessionId,
+				this.sessionManager.getSessionId(),
+			);
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -2213,6 +2176,13 @@ export class AgentSession {
 	 * Returns the run trigger, or undefined when the prompt was handled or queued.
 	 */
 	private async _preparePrompt(text: string, options?: PromptOptions): Promise<BeforeAgentStartTrigger | undefined> {
+		if (this.model?.provider === "account-profiles")
+			assertAccountRotationConsent(
+				this.model.provider,
+				true,
+				this._rotationConsentSessionId,
+				this.sessionManager.getSessionId(),
+			);
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 
@@ -2655,6 +2625,7 @@ export class AgentSession {
 	 * @throws Error if no auth is configured for the model
 	 */
 	async setModel(model: Model<any>, options: ModelMutationOptions = {}): Promise<void> {
+		assertAccountRotationConsent(model.provider, options.accountRotationConsent === true);
 		if (!(await this._modelRuntime.checkAuth(model.provider))) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
@@ -2662,6 +2633,8 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(model);
 		this.agent.state.model = model;
+		this._rotationConsentSessionId =
+			model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2713,18 +2686,28 @@ export class AgentSession {
 		const availableIds = new Set(
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
-		const scopedModels = this._scopedModels.filter((scoped) =>
-			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
+		const consent =
+			options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		// Scoped entries wrap the model, so filter their provider through
+		// scoped.model rather than treating the entry itself as a Model.
+		const scopedModels = this._scopedModels.filter(
+			(scoped) =>
+				availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`) &&
+				(consent || scoped.model.provider !== "account-profiles"),
 		);
 		const currentModel = this.model;
 		const currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
 		const nextIndex = getNextCycleIndex(currentIndex, scopedModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const next = scopedModels[nextIndex];
+		assertAccountRotationConsent(next.model.provider, consent);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.model, next.thinkingLevel);
 
 		// Apply model
 		this.agent.state.model = next.model;
+		this._rotationConsentSessionId =
+			next.model.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2747,15 +2730,21 @@ export class AgentSession {
 		direction: "forward" | "backward",
 		options: ModelMutationOptions,
 	): Promise<ModelCycleResult | undefined> {
-		const availableModels = this._modelRuntime.getAvailableSnapshot();
+		const consent =
+			options.accountRotationConsent === true ||
+			this._rotationConsentSessionId === this.sessionManager.getSessionId();
+		const availableModels = allowedCycleModels(this._modelRuntime.getAvailableSnapshot(), consent);
 		const currentModel = this.model;
 		const currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
 		const nextIndex = getNextCycleIndex(currentIndex, availableModels.length, direction);
 		if (nextIndex === undefined) return undefined;
 		const nextModel = availableModels[nextIndex];
+		assertAccountRotationConsent(nextModel.provider, consent);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
 		this.agent.state.model = nextModel;
+		this._rotationConsentSessionId =
+			nextModel.provider === "account-profiles" ? this.sessionManager.getSessionId() : undefined;
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		if (options.persist) {
 			this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
@@ -3885,7 +3874,11 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
-		return isRetryableAssistantError(message);
+		const selected = this.model;
+		return (
+			(selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) ||
+			isRetryableAssistantError(message)
+		);
 	}
 
 	/**

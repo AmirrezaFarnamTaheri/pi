@@ -97,6 +97,8 @@ export interface VirtualModelDefinition<TState = unknown> {
 	maxTokens?: number;
 	/** Input types accepted for selection. Defaults to text and images; routed models without image support get placeholders. */
 	input?: ("text" | "image")[];
+	/** Opt in to retries for specific pre-output credential failures, never for partial responses. */
+	shouldRetry?(failed: AssistantMessage): boolean;
 	/** Pick the physical model, which must have credentials, and thinking level for one request. */
 	route(request: ModelRouteRequest<TState>): ModelRoute<TState> | Promise<ModelRoute<TState>>;
 }

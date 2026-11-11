@@ -2,8 +2,9 @@
 // sessions to channels with their cursors, threads and pending replies (persisted), the relay between them (relay.ts),
 // and the owner's `Discord` view. Linking moves the session into a sandbox and locks it to the picked resources;
 // unlinking lifts the lock.
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { obj } from "@earendil-works/pi-schema";
+import { nul, obj, opt, str, union } from "@earendil-works/pi-schema";
 import {
 	type AcceptsTable,
 	BACKGROUND_CONTEXT,
@@ -16,6 +17,7 @@ import {
 	isOwner,
 	type Ref,
 	record,
+	SessionLockSchema,
 	signalOf,
 	sleep,
 } from "@p2/app/v1";
@@ -25,21 +27,37 @@ import { EnvService } from "../envs/contract.ts";
 import { isSandbox } from "../envs/schema.ts";
 import { Catalog, SessionLocks, SessionMoves } from "../sessions/contract.ts";
 import { StatusStore } from "../status/contract.ts";
-import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema } from "./contract.ts";
+import { BindingSchema, Discord, DiscordIngress, DiscordStore, PendingSchema, WakeSchema } from "./contract.ts";
 import { FIRST_BOT, Fleet } from "./fleet.ts";
-import { Relay, type RelayState, type SessionPort } from "./relay.ts";
+import { LinkMutationQueue } from "./link-mutations.ts";
+import { type LinkRepairState, removeSessionBinding, resumeLinkRepairs } from "./link-recovery.ts";
+import { commandOf, Relay, type RelayState, type SessionPort } from "./relay.ts";
+import { DiscordScheduler } from "./scheduler.ts";
+
+const LinkRepairSchema = obj({
+	kind: str(),
+	session: str(),
+	lock: union([SessionLockSchema, nul()]),
+	expectedLock: opt(union([SessionLockSchema, nul()])),
+	expectedWriteId: opt(union([str(), nul()])),
+	writeId: opt(str()),
+	proposedLock: opt(union([SessionLockSchema, nul()])),
+	wake: opt(WakeSchema),
+});
 
 const State = defineState("p2.discord-bindings", {
-	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema) }),
-	// 2: several bots; links and pending replies name theirs (the first release's one bot is `FIRST_BOT`).
-	version: 2,
-	initial: () => ({ bindings: {}, pending: {} }),
+	schema: obj({ bindings: record(BindingSchema), pending: record(PendingSchema), repairs: record(LinkRepairSchema) }),
+	// 4: write-identity-fenced durable link repair journal.
+	version: 4,
+	initial: () => ({ bindings: {}, pending: {}, repairs: {} }),
 	migrate: (old, from) => {
+		if (from === 3) return old as never; // Legacy repairs are handled fail-closed by the reconciler.
+		if (from === 2) return { ...(old as Record<string, unknown>), repairs: {} } as never;
 		if (from !== 1) throw new Error(`Unknown p2.discord-bindings version ${from}`);
 		const value = old as { bindings: Record<string, object>; pending: Record<string, object> };
 		const named = (entries: Record<string, object>) =>
 			Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, { ...entry, botId: FIRST_BOT }]));
-		return { bindings: named(value.bindings), pending: named(value.pending) } as never;
+		return { bindings: named(value.bindings), pending: named(value.pending), repairs: {} } as never;
 	},
 	persist: true,
 	checkpointWhen: () => true,
@@ -97,26 +115,122 @@ export default defineFacet((host) => {
 			read: (session, id, offset, length) =>
 				ingress(session, (worker, ctx) => worker.read({ id, offset, length }, ctx)),
 		};
-		const relay = new Relay((bot) => fleet.value.connected(bot), sessions, {
-			// The state's drafts are the same JSON as the relay's plain records.
-			value: () => state.value as RelayState,
-			change: (update) => state.change((draft) => update(draft as RelayState), during()),
-		});
+		// Owner link mutations may await remote Discord calls; serialize their entire
+		// transaction, including unlink, to preserve the one-session/one-channel invariant.
+		const linkMutations = new LinkMutationQueue();
+		const reconcile = (ctx: Ctx): Promise<void> =>
+			resumeLinkRepairs(
+				{
+					value: () => state.value as unknown as LinkRepairState,
+					change: (update) => state.change((draft) => update(draft as unknown as LinkRepairState), ctx),
+				},
+				async (session, lock, expectedWriteId, writeId) => {
+					if (expectedWriteId === undefined || !writeId)
+						throw new Error("Discord recovery requires a durable lock write ID");
+					const { applied } = await locks.compareAndSet({ session, expectedWriteId, lock, writeId }, ctx);
+					return applied;
+				},
+				{
+					readLock: async (session) => ({
+						lock: locks.locks.value[session] ?? null,
+						writeId: locks.writeIds.value[session] ?? null,
+					}),
+					beforeUnlock: (session) => relay.waitForSession(session),
+					notifyUnlinked: async (session) => {
+						const row = catalog.sessions.value.find((entry) => entry.id === session);
+						if (row && row.archivedAt === null) await ingress(session, (worker, scope) => worker.unlinked(scope));
+					},
+				},
+			);
+		const linkExclusive = <T>(ctx: Ctx, action: () => Promise<T>): Promise<T> =>
+			linkMutations.run(async () => {
+				// No new mutation can bypass an unfinished durable repair.
+				if (Object.keys(state.value.repairs).length) await reconcile(ctx);
+				return action();
+			});
+		const relay = new Relay(
+			(bot) => fleet.value.connected(bot),
+			sessions,
+			{
+				// The state's drafts are the same JSON as the relay's plain records.
+				value: () => state.value as RelayState,
+				change: (update) => state.change((draft) => update(draft as RelayState), during()),
+			},
+			(bot) => fleet.value.requestCatchUp(bot),
+		);
 		self.onLive(async (ctx) => {
 			live = ctx;
-			// One event at a time, in the order the bots received them: a catch-up and a live mention never race.
-			for (;;) {
-				const received = await fleet.value.next(signalOf(ctx));
-				if (!received) return;
-				const { bot, event } = received;
-				await (event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot)).catch(
-					(error: unknown) => console.error("p2 discord:", errorText(error)),
-				);
+			fleet.value.setControlRejectionHandler(async (bot, message) => {
+				if (!(await relay.mayNotifyControlRejected(bot, message))) return;
+				await fleet.value
+					.connected(bot)
+					?.reply(
+						message.channelId,
+						message.id,
+						"Pi control backlog is full; your command was not executed. Please retry.",
+					);
+			});
+			// Repair interrupted link operations before consuming events or enabling new links.
+			while (Object.keys(state.value.repairs).length) {
+				try {
+					await linkMutations.run(() => reconcile(ctx));
+				} catch (error) {
+					console.error("p2 discord: link repair failed; retrying without opening relay:", errorText(error));
+					await sleep(10_000, ctx);
+				}
+			}
+			const scheduler = new DiscordScheduler(
+				(bot) => fleet.value.requestCatchUp(bot),
+				(error) => console.error("p2 discord:", errorText(error)),
+			);
+			try {
+				// The scheduler preserves each channel's delivery order but does not let
+				// a slow channel block another channel, or a stop/status command.
+				for (;;) {
+					const received = await fleet.value.next(signalOf(ctx));
+					if (!received) return;
+					const { bot, event } = received;
+					const id = fleet.value.connected(bot)?.botId;
+					scheduler.enqueue({
+						bot,
+						catchUp: event.kind === "ready",
+						stop:
+							event.kind === "message" &&
+							event.message.mentionsBot &&
+							id !== undefined &&
+							commandOf(event.message.text, id) === "stop",
+						key: event.kind === "message" ? `${bot}:channel:${event.message.channelId}` : `${bot}:catch-up`,
+						priority:
+							event.kind === "message" &&
+							event.message.mentionsBot &&
+							id !== undefined &&
+							commandOf(event.message.text, id) !== undefined,
+						onRejected:
+							event.kind === "message"
+								? async () => {
+										fleet.value.notifyControlRejected(bot, event.message);
+									}
+								: undefined,
+						run: () => (event.kind === "message" ? relay.onMessage(bot, event.message) : relay.catchUp(bot)),
+					});
+				}
+			} finally {
+				scheduler.stop();
+				fleet.value.setControlRejectionHandler(undefined);
+				live = undefined;
 			}
 		});
 		self.onLive(async (ctx) => {
 			for (let tick = 1; !signalOf(ctx).aborted; tick++) {
 				await sleep(TYPING_MS, ctx);
+				if (Object.keys(state.value.repairs).length)
+					await linkMutations
+						.run(() => reconcile(ctx))
+						.catch((error: unknown) =>
+							console.error("p2 discord: retrying pending link recovery:", errorText(error)),
+						);
+
+				relay.retryDeferredCatchUps();
 				await relay.typing();
 				if (tick % CHECK_EVERY === 0 && Object.keys(state.value.pending).length)
 					await relay.checkPending().catch(() => {});
@@ -175,17 +289,20 @@ export default defineFacet((host) => {
 		};
 		/** Drops `session`'s link and lifts its lock; its agents stop being told they answer Discord. */
 		const unlink = async (session: string, ctx: Ctx): Promise<void> => {
+			if (!Object.values(state.value.bindings).some((binding) => binding.session === session)) return;
+			// A single persisted commit first revokes Discord ingress and records the
+			// lock-release intent. A restart can safely retry a failed lock write.
 			await state.change((draft) => {
-				for (const [channel, binding] of Object.entries(draft.bindings))
-					if (binding.session === session) delete draft.bindings[channel];
+				draft.repairs[session] = {
+					kind: "unlink",
+					session,
+					lock: null,
+					expectedWriteId: locks.writeIds.value[session] ?? null,
+					writeId: randomUUID(),
+				};
+				removeSessionBinding(draft as unknown as LinkRepairState, session);
 			}, ctx);
-			await locks.set({ session, lock: null }, ctx);
-			// A session that is gone or archived has no worker to tell (and none to start).
-			const row = catalog.sessions.value.find((entry) => entry.id === session);
-			if (row && row.archivedAt === null)
-				await ingress(session, (worker, scope) => worker.unlinked(scope)).catch((error: unknown) =>
-					console.error("p2 discord: telling the session it is unlinked failed:", errorText(error)),
-				);
+			await reconcile(ctx);
 		};
 		return {
 			bots: followNative(
@@ -201,67 +318,115 @@ export default defineFacet((host) => {
 				await fleet.value.setToken(bot, token);
 				return null;
 			},
-			removeBot: async ({ bot }, ctx) => {
-				for (const binding of Object.values(state.value.bindings))
-					if (binding.botId === bot) await unlink(binding.session, ctx);
-				await fleet.value.remove(bot);
-				return null;
-			},
+			removeBot: ({ bot }, ctx) =>
+				linkExclusive(ctx, async () => {
+					for (const binding of Object.values(state.value.bindings))
+						if (binding.botId === bot) await unlink(binding.session, ctx);
+					await fleet.value.remove(bot);
+					return null;
+				}),
 			server: ({ bot, guild }) => connected(bot).server(guild),
 			mcpServers: async () => {
 				const text = await optionalText(join(dataDir(), "mcp.json"));
 				return text ? mcpServerNames(text) : [];
 			},
-			link: async ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) => {
-				const bindings = Object.values(state.value.bindings);
-				if (bindings.some((binding) => binding.session === session))
-					throw new Error("This session is linked already: unlink it first");
-				if (state.value.bindings[channelId]) throw new Error("This channel is linked to another session");
-				const config = envs.configs.value[sandbox];
-				if (config?.type !== "gondolin") throw new Error(`No sandbox ${sandbox}`);
-				const row = catalog.sessions.value.find((entry) => entry.id === session);
-				if (!row || row.archivedAt !== null) throw new Error("No such session");
-				const channel = await connected(bot).channel(channelId);
-				if (channel.thread || channel.guildId !== guild) throw new Error("Pick a channel of the server");
-				// As the owner's Relocate: the session works in the sandbox from now on, and cannot leave it.
-				if (row.env !== sandbox) {
-					const cwd = config.mounts?.[0]?.guest ?? "/root";
-					const { refused } = await moves.relocate({ id: session, cwd, env: sandbox }, ctx);
-					if (refused) throw new Error(`The session could not move into ${sandbox}: ${refused}`);
-				}
-				await locks.set({ session, lock }, ctx);
-				await state.change((draft) => {
-					draft.bindings[channelId] = {
-						botId: bot,
-						channelId,
-						channelName: channel.name,
-						guildId: channel.guildId,
-						guildName: channel.guildName,
-						session,
-						wake,
-						// The first mention delivers what comes after linking.
-						cursor: channel.lastMessageId,
-						threads: {},
-						createdAt: Date.now(),
-					};
-				}, ctx);
-				return null;
-			},
-			unlink: async ({ session }, ctx) => {
-				await unlink(session, ctx);
-				return null;
-			},
-			updateLink: async ({ session, wake, lock }, ctx) => {
-				if (!Object.values(state.value.bindings).some((binding) => binding.session === session))
-					throw new Error("This session is not linked");
-				// Both apply at once: who may wake Pi is read at each message, the lock is mirrored into the session.
-				await locks.set({ session, lock }, ctx);
-				await state.change((draft) => {
-					for (const binding of Object.values(draft.bindings))
-						if (binding.session === session) binding.wake = wake;
-				}, ctx);
-				return null;
-			},
+			link: ({ session, bot, guild, channel: channelId, wake, sandbox, lock }, ctx) =>
+				linkExclusive(ctx, async () => {
+					const bindings = Object.values(state.value.bindings);
+					if (bindings.some((binding) => binding.session === session))
+						throw new Error("This session is linked already: unlink it first");
+					if (state.value.bindings[channelId]) throw new Error("This channel is linked to another session");
+					const config = envs.configs.value[sandbox];
+					if (config?.type !== "gondolin") throw new Error(`No sandbox ${sandbox}`);
+					const row = catalog.sessions.value.find((entry) => entry.id === session);
+					if (!row || row.archivedAt !== null) throw new Error("No such session");
+					const channel = await connected(bot).channel(channelId);
+					if (channel.thread || channel.guildId !== guild) throw new Error("Pick a channel of the server");
+					// Durable compensation is recorded before relocation or lock changes.
+					// Relocation may remain in the safer sandbox if a later step fails.
+					const priorLock = locks.locks.value[session] ?? null;
+					const expectedWriteId = locks.writeIds.value[session] ?? null;
+					const writeId = randomUUID();
+					await state.change((draft) => {
+						draft.repairs[session] = {
+							kind: "link",
+							session,
+							lock: priorLock,
+							proposedLock: lock,
+							expectedWriteId,
+							writeId,
+						};
+					}, ctx);
+					try {
+						// As the owner's Relocate: the session works in the sandbox from now on.
+						if (row.env !== sandbox) {
+							const cwd = config.mounts?.[0]?.guest ?? "/root";
+							const { refused } = await moves.relocate({ id: session, cwd, env: sandbox }, ctx);
+							if (refused) throw new Error(`The session could not move into ${sandbox}: ${refused}`);
+						}
+						const { applied } = await locks.compareAndSet({ session, lock, expectedWriteId, writeId }, ctx);
+						if (!applied)
+							throw new Error("Session lock changed during Discord linking; retry with the current policy");
+						await state.change((draft) => {
+							if (Object.values(draft.bindings).some((binding) => binding.session === session))
+								throw new Error("This session is linked already: unlink it first");
+							if (draft.bindings[channelId]) throw new Error("This channel is linked to another session");
+							draft.bindings[channelId] = {
+								botId: bot,
+								channelId,
+								channelName: channel.name,
+								guildId: channel.guildId,
+								guildName: channel.guildName,
+								session,
+								wake,
+								// The first mention delivers what comes after linking.
+								cursor: channel.lastMessageId,
+								threads: {},
+								createdAt: Date.now(),
+								generation: randomUUID(),
+							};
+							delete draft.repairs[session];
+						}, ctx);
+					} catch (error) {
+						// If the binding was already atomically committed, never roll back its lock.
+						if (!Object.values(state.value.bindings).some((binding) => binding.session === session)) {
+							try {
+								await reconcile(ctx);
+							} catch (repairError) {
+								console.error("p2 discord: link compensation pending:", errorText(repairError));
+								throw new Error("Discord link failed and lock repair is pending; retry after recovery", {
+									cause: error,
+								});
+							}
+						}
+						throw error;
+					}
+					return null;
+				}),
+			unlink: ({ session }, ctx) =>
+				linkExclusive(ctx, async () => {
+					await unlink(session, ctx);
+					return null;
+				}),
+			updateLink: ({ session, wake, lock }, ctx) =>
+				linkExclusive(ctx, async () => {
+					if (!Object.values(state.value.bindings).some((binding) => binding.session === session))
+						throw new Error("This session is not linked");
+					// Record the owner's desired policy before changing the session's lock.
+					// A crash after either write resumes the same update on startup.
+					await state.change((draft) => {
+						draft.repairs[session] = {
+							kind: "update",
+							session,
+							lock,
+							wake,
+							expectedWriteId: locks.writeIds.value[session] ?? null,
+							writeId: randomUUID(),
+						};
+					}, ctx);
+					await reconcile(ctx);
+					return null;
+				}),
 		};
 	});
 

@@ -18,6 +18,7 @@ import { canonicalizePath, getPathComparisonKey, shortenHomePath } from "../../.
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
+import { filterSessionsByRegexInWorker } from "./session-selector-regex-worker.ts";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 
 type SessionScope = "current" | "all";
@@ -198,18 +199,29 @@ interface FlatSessionNode {
  */
 function buildSessionTree(sessions: SessionInfo[]): SessionTreeNode[] {
 	const byPath = new Map<string, SessionTreeNode>();
+	// The same session path appears during insertion and parenting. Cache canonical
+	// keys only for this build, so symlink changes are respected on the next load.
+	const keys = new Map<string, string>();
+	const keyOf = (path: string): string => {
+		let key = keys.get(path);
+		if (key === undefined) {
+			key = getSessionPathKey(path);
+			keys.set(path, key);
+		}
+		return key;
+	};
 
 	for (const session of sessions) {
-		const sessionPath = getSessionPathKey(session.path);
+		const sessionPath = keyOf(session.path);
 		byPath.set(sessionPath, { session, children: [], latestActivity: session.modified.getTime() });
 	}
 
 	const roots: SessionTreeNode[] = [];
 
 	for (const session of sessions) {
-		const sessionPath = getSessionPathKey(session.path);
+		const sessionPath = keyOf(session.path);
 		const node = byPath.get(sessionPath)!;
-		const parentPath = session.parentSessionPath ? getSessionPathKey(session.parentSessionPath) : undefined;
+		const parentPath = session.parentSessionPath ? keyOf(session.parentSessionPath) : undefined;
 
 		if (parentPath && byPath.has(parentPath)) {
 			byPath.get(parentPath)!.children.push(node);
@@ -299,6 +311,14 @@ class SessionList implements Component, Focusable {
 	public onRenameSession?: (sessionPath: string) => void;
 	public onError?: (message: string) => void;
 	private maxVisible: number = 10; // Max sessions visible (one line each)
+	private regexSearchVersion = 0;
+	private regexAbort?: AbortController;
+	private regexDelay?: ReturnType<typeof setTimeout>;
+	private regexSearching = false;
+	private regexNeedsRefresh = false;
+	private regexSelectedPath: string | undefined;
+	private regexQuery: string | undefined;
+	public onFilteredSessionsChange?: () => void;
 
 	// Focusable implementation - propagate to searchInput for IME cursor positioning
 	private _focused = false;
@@ -353,6 +373,13 @@ class SessionList implements Component, Focusable {
 		const selectedPath = this.selectionTouched ? this.getSelectedSessionPath() : undefined;
 		this.allSessions = sessions;
 		this.showCwd = showCwd;
+		// Continuous discovery progress must not keep aborting the active worker.
+		// Refresh once its current batch finishes and keep the previous matches
+		// visible while the refreshed search runs.
+		if (this.regexSearching && this.searchInput.getValue().trim().startsWith("re:")) {
+			this.regexNeedsRefresh = true;
+			return;
+		}
 		this.filterSessions(this.searchInput.getValue());
 		if (!this.selectionTouched) {
 			this.selectedIndex = 0;
@@ -362,10 +389,87 @@ class SessionList implements Component, Focusable {
 		}
 	}
 
+	/** Stop an obsolete or abandoned regex search without waiting for its worker. */
+	cancelSearch(): void {
+		this.regexSearchVersion++;
+		if (this.regexDelay !== undefined) clearTimeout(this.regexDelay);
+		this.regexDelay = undefined;
+		this.regexAbort?.abort();
+		this.regexAbort = undefined;
+		this.regexSearching = false;
+		this.regexNeedsRefresh = false;
+		this.regexSelectedPath = undefined;
+		this.regexQuery = undefined;
+	}
+
 	private filterSessions(query: string): void {
+		const previouslySelected = this.regexSelectedPath ?? this.getSelectedSessionPath();
+		const oldRegexQuery = this.regexQuery;
+		this.cancelSearch();
 		const trimmed = query.trim();
 		const nameFiltered =
 			this.nameFilter === "all" ? this.allSessions : this.allSessions.filter((session) => hasSessionName(session));
+
+		if (trimmed.startsWith("re:")) {
+			// Untrusted regexes can catastrophically backtrack on large JSONL histories.
+			// Never execute them on the terminal event loop. Debounce and cancel obsolete queries.
+			const pattern = trimmed.slice(3).trim();
+			// Preserve old matches during a refresh, but never expose matches from a
+			// different user query or filter mode.
+			const refreshing = oldRegexQuery === trimmed && this.filteredSessions.length > 0;
+			if (!refreshing) this.filteredSessions = [];
+			this.selectedIndex = Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
+			this.regexSelectedPath = previouslySelected;
+			this.regexQuery = trimmed;
+			if (!pattern) return;
+			this.regexSearching = true;
+			const version = this.regexSearchVersion;
+			const controller = new AbortController();
+			this.regexAbort = controller;
+			this.regexDelay = setTimeout(() => {
+				this.regexDelay = undefined;
+				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal, (ids) => {
+					if (this.regexSearchVersion === version && !controller.signal.aborted)
+						this.onError?.(
+							`Regex search incomplete: skipped ${ids.length} oversized or unreadable session${ids.length === 1 ? "" : "s"} (${ids.slice(0, 3).join(", ")}).`,
+						);
+				})
+					.then((filtered) => {
+						if (this.regexSearchVersion !== version || controller.signal.aborted) return;
+						this.filteredSessions = filtered.map((session) => ({
+							session,
+							depth: 0,
+							isLast: true,
+							ancestorContinues: [],
+						}));
+						const selected = this.regexSelectedPath;
+						const restored = selected
+							? this.filteredSessions.findIndex((node) => node.session.path === selected)
+							: -1;
+						this.selectedIndex =
+							restored >= 0
+								? restored
+								: Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
+						this.regexSearching = false;
+						this.regexAbort = undefined;
+						const needsRefresh = this.regexNeedsRefresh;
+						this.regexNeedsRefresh = false;
+						this.onFilteredSessionsChange?.();
+						if (needsRefresh) this.filterSessions(this.searchInput.getValue());
+					})
+					.catch((error: unknown) => {
+						if (this.regexSearchVersion !== version || controller.signal.aborted) return;
+						this.regexSearching = false;
+						this.regexAbort = undefined;
+						this.onError?.(error instanceof Error ? error.message : String(error));
+						const needsRefresh = this.regexNeedsRefresh;
+						this.regexNeedsRefresh = false;
+						this.onFilteredSessionsChange?.();
+						if (needsRefresh) this.filterSessions(this.searchInput.getValue());
+					});
+			}, 75);
+			return;
+		}
 
 		if (this.sortMode === "threaded" && !trimmed) {
 			// Threaded mode without search: show tree structure
@@ -418,7 +522,9 @@ class SessionList implements Component, Focusable {
 
 		if (this.filteredSessions.length === 0) {
 			let emptyMessage: string;
-			if (this.nameFilter === "named") {
+			if (this.regexSearching) {
+				emptyMessage = "  Searching sessions...";
+			} else if (this.nameFilter === "named") {
 				const toggleKey = keyText("app.session.toggleNamedFilter");
 				if (this.showCwd) {
 					emptyMessage = `  No named sessions found. Press ${toggleKey} to show all.`;
@@ -605,7 +711,7 @@ class SessionList implements Component, Focusable {
 		}
 		// Down arrow
 		else if (kb.matches(keyData, "tui.select.down")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1);
+			this.selectedIndex = Math.max(0, Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1));
 		}
 		// Page up - jump up by maxVisible items
 		else if (kb.matches(keyData, "tui.select.pageUp")) {
@@ -613,7 +719,10 @@ class SessionList implements Component, Focusable {
 		}
 		// Page down - jump down by maxVisible items
 		else if (kb.matches(keyData, "tui.select.pageDown")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible);
+			this.selectedIndex = Math.max(
+				0,
+				Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible),
+			);
 		}
 		// Enter
 		else if (kb.matches(keyData, "tui.select.confirm")) {
@@ -784,6 +893,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		);
 
 		this.buildBaseLayout(this.sessionList);
+		this.sessionList.onFilteredSessionsChange = () => this.requestRender();
 
 		this.renameInput.onSubmit = (value) => {
 			void this.confirmRename(value);
@@ -864,6 +974,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 	}
 
 	private cancelLoads(): void {
+		this.sessionList.cancelSearch();
 		if (this.currentLoad) {
 			this.currentLoad.abort();
 			this.currentLoad = null;
