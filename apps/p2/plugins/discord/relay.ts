@@ -115,6 +115,8 @@ export class Relay {
 	readonly #discord: (bot: string) => DiscordPort | undefined;
 	/** Pending replies being checked: two checks at once would post one reply twice. */
 	readonly #checking = new Set<string>();
+	/** Recently posted session-answer IDs prevent duplicate replies across separate checks. */
+	readonly #postedAnswerKeys = new Set<string>();
 	/**
 	 * Each channel's and thread's delivery under way, the next one chained after it: two mentions in quick succession
 	 * would otherwise both read from the same cursor and deliver overlapping batches.
@@ -661,18 +663,71 @@ export class Relay {
 	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
 	async checkPending(sessions?: ReadonlySet<string>): Promise<void> {
 		const now = Date.now();
-		for (const pending of Object.values(this.#state.value().pending)) {
-			if ((sessions && !sessions.has(pending.session)) || this.#checking.has(pending.messageId)) continue;
-			if ((pending.retryAt ?? 0) > now) continue;
-			// Losing the connection never means discarding a completed response, even after a long outage.
-			const port = this.#discord(pending.botId);
-			if (!port) continue;
-			this.#checking.add(pending.messageId);
-			try {
-				await this.#check(port, pending, now);
-			} finally {
-				this.#checking.delete(pending.messageId);
+		const candidates: { pending: Pending; port: DiscordPort; turn: TurnState | undefined }[] = [];
+		const claimed: string[] = [];
+		try {
+			for (const pending of Object.values(this.#state.value().pending)) {
+				if ((sessions && !sessions.has(pending.session)) || this.#checking.has(pending.messageId)) continue;
+				if ((pending.retryAt ?? 0) > now) continue;
+				// A temporarily disconnected bot must retain its pending replies.
+				const port = this.#discord(pending.botId);
+				if (!port) continue;
+				this.#checking.add(pending.messageId);
+				claimed.push(pending.messageId);
+				let turn: TurnState | undefined;
+				try {
+					turn = await this.#sessions.turn(pending.session, pending.submissionId);
+				} catch {
+					// The normal check handles transient failures and the timeout notice.
+				}
+				candidates.push({ pending, port, turn });
 			}
+
+			// Steered inputs can share one answer. Only the newest mention gets its reply,
+			// including files offered by earlier inputs of that same turn.
+			const grouped = new Map<string, typeof candidates>();
+			const individual: typeof candidates = [];
+			for (const item of candidates) {
+				const key =
+					item.turn?.state === "answered" && typeof item.turn.answer === "number"
+						? item.pending.session + ":" + item.turn.answer
+						: undefined;
+				if (!key) {
+					individual.push(item);
+					continue;
+				}
+				const group = grouped.get(key) ?? [];
+				group.push(item);
+				grouped.set(key, group);
+			}
+			for (const [key, group] of grouped) {
+				if (this.#postedAnswerKeys.has(key)) {
+					for (const { pending } of group) await this.#forget(pending);
+					continue;
+				}
+				const newest = group.reduce((latest, item) =>
+					BigInt(item.pending.messageId) > BigInt(latest.pending.messageId) ? item : latest,
+				);
+				if (newest.turn?.state !== "answered") continue;
+				const offered = new Map<string, OfferedFile>();
+				for (const { turn } of group)
+					if (turn?.state === "answered")
+						for (const file of turn.files) offered.set(file.id, file);
+				await this.#check(newest.port, newest.pending, now, {
+					...newest.turn,
+					files: Array.from(offered.values()),
+				});
+				if (!this.#state.value().pending[newest.pending.messageId]) {
+					this.#postedAnswerKeys.add(key);
+					if (this.#postedAnswerKeys.size > 512)
+						this.#postedAnswerKeys.delete(this.#postedAnswerKeys.values().next().value!);
+					for (const { pending } of group)
+						if (pending.messageId !== newest.pending.messageId) await this.#forget(pending);
+				}
+			}
+			for (const item of individual) await this.#check(item.port, item.pending, now, item.turn);
+		} finally {
+			for (const id of claimed) this.#checking.delete(id);
 		}
 	}
 
@@ -707,18 +762,21 @@ export class Relay {
 		});
 	}
 
-	async #check(port: DiscordPort, pending: Pending, now: number): Promise<void> {
+	async #check(port: DiscordPort, pending: Pending, now: number, knownTurn?: TurnState): Promise<void> {
 		if (!this.#pendingIsCurrent(pending)) {
 			await this.#forget(pending);
 			return;
 		}
 		let turn: TurnState;
-		try {
-			turn = await this.#sessions.turn(pending.session, pending.submissionId);
-		} catch (error) {
-			console.error("p2 discord: reading a turn failed:", error instanceof Error ? error.message : error);
-			if (now - pending.since < PENDING_TIMEOUT_MS) return;
-			turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
+		if (knownTurn) turn = knownTurn;
+		else {
+			try {
+				turn = await this.#sessions.turn(pending.session, pending.submissionId);
+			} catch (error) {
+				console.error("p2 discord: reading a turn failed:", error instanceof Error ? error.message : error);
+				if (now - pending.since < PENDING_TIMEOUT_MS) return;
+				turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
+			}
 		}
 		if (turn.state === "pending") {
 			if (now - pending.since < PENDING_TIMEOUT_MS) return;
