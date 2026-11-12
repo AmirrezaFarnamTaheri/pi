@@ -91,7 +91,8 @@ function OwnerHome() {
 		const current = nav.route;
 		// Deferred Familiar data must never replace a session, list or sheet the
 		// reader opened while home was loading. Only home is an auto-open target.
-		if (current.session !== undefined || current.page !== undefined || current.newSession || current.layers.length) return;
+		if (current.session !== undefined || current.page !== undefined || current.newSession) return;
+		if (current.layers.length > 0) return;
 		const row = session === null ? undefined : rows.find((each) => each.id === session);
 		if (row?.archivedAt === null) void nav.replace(conversationRoute(current, row.id, row.main), current);
 		// Archived by the owner: home leaves it archived; the Pi logo restores it.
