@@ -370,8 +370,19 @@ describe("command menu: workspace, terminal and folders", { skip: !browserTests 
 						modifiers: 4,
 					});
 				await guest.wait(`${OPEN} && ${TITLES}.includes('Switch session…')`);
-				if (mode === "full") await guest.wait(`${TITLES}.includes('Browse files')`);
-				else await new Promise((resolve) => setTimeout(resolve, 500));
+				if (mode === "full") {
+					try {
+						await guest.wait(`${TITLES}.includes('Browse files')`);
+					} catch (error) {
+						const details = await guest.evaluate<unknown>(`({
+							path: location.pathname,
+							workspaceButton: !!document.querySelector('.workspace-toggle'),
+							menuTarget: document.querySelector('.command-menu .command-target')?.textContent,
+							options: [...document.querySelectorAll('.command-menu [role=option] .command-title')].map((e) => e.textContent),
+						})`);
+						throw new Error(`Full-access guest missing workspace commands: ${JSON.stringify(details)}`, { cause: error });
+					}
+				} else await new Promise((resolve) => setTimeout(resolve, 500));
 				const titles = await guest.evaluate<string[]>(TITLES);
 				const workspace = ["Browse files", "Show changes", "Search files"];
 				for (const title of workspace)
