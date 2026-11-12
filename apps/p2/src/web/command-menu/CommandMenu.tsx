@@ -13,7 +13,7 @@ import {
 	useState,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { Commands, getNavigation, useHost, useRegistry, useRoute, useShownModal } from "../../runtime/web.tsx";
+import { Commands, getNavigation, useCanWrite, useHost, useOwner, useRegistry, useRoute, useShownModal } from "../../runtime/web.tsx";
 import { useComposerState } from "../composer-state.tsx";
 import { type CommandMenuActions, CommandMenuContext, type CommandMenuMeta, type CommandMenuValue } from "./context.ts";
 import { Input, Target } from "./Header.tsx";
@@ -31,17 +31,29 @@ import { CommandTargetsContext, currentTarget, type TargetSources } from "./targ
  */
 function Provider({ children }: { children: ReactNode }) {
 	const [sources] = useState<TargetSources>(() => ({}));
+	const route = useRoute();
+	const owner = useOwner();
+	const writer = useCanWrite(route.session);
 	useEffect(() => {
 		const key = (event: KeyboardEvent) => {
 			if (event.defaultPrevented || event.isComposing || event.repeat || !matchesBinding(event, "p2.commands.open"))
 				return;
 			event.preventDefault();
 			if (openMenu(getNavigation().route)) void closeMenu();
-			else pushMenu(currentTarget(sources));
+			else {
+				// A guest can join and write before the conversation has published its
+				// catalog-backed command target. Capture the authorized session then,
+				// rather than silently offering only global commands on first Cmd+K.
+				const fallback =
+					!owner && writer && route.session && route.page === undefined
+						? { type: "session" as const, id: route.session, kind: "Session", label: "" }
+						: undefined;
+				pushMenu(currentTarget(sources) ?? fallback);
+			}
 		};
 		window.addEventListener("keydown", key);
 		return () => window.removeEventListener("keydown", key);
-	}, [sources]);
+	}, [sources, route.session, route.page, owner, writer]);
 	return <CommandTargetsContext value={sources}>{children}</CommandTargetsContext>;
 }
 
