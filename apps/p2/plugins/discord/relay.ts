@@ -430,9 +430,9 @@ export class Relay {
 			: port;
 		if (before !== undefined)
 			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
-				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
 		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
-			if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+			if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		if (truncated) {
 			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
@@ -444,9 +444,9 @@ export class Relay {
 					binding.cursor,
 					before,
 					true,
-					(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+					(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 				))
-					if (!message.author.bot && !this.#isCommand(binding, message, port.botId))
+					if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
 						window.add("channel", message);
 			for (const message of await recentHistory(
 				historicalPort,
@@ -454,9 +454,9 @@ export class Relay {
 				cursor,
 				trigger.id,
 				false,
-				(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+				(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 			))
-				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
@@ -951,7 +951,7 @@ async function recentHistory(
 ): Promise<DiscordMessage[]> {
 	let before = includeUntil ? (BigInt(until) + 1n).toString() : until;
 	const recent: DiscordMessage[] = [];
-	// A burst of bot/system posts must not crowd out the human context.
+	// A burst of unrelated posts must not crowd out the eligible context.
 	// Still bound total remote requests regardless of channel size.
 	for (let pages = 0; pages < 32; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
@@ -1101,7 +1101,7 @@ export function batchOf(
 				});
 			else links.push(`[attachment ${attachment.name} (${attachment.size} bytes): ${attachment.url}]`);
 		});
-		return `${message.author.name}: ${[text, ...links].filter(Boolean).join("\n")}`;
+		return `${message.author.name} (${message.author.bot ? "bot, " : ""}<@${message.author.id}>): ${[text, ...links].filter(Boolean).join("\n")}`;
 	};
 	const lines = sections.flatMap(({ title, messages }) => [
 		...(title === undefined ? [] : [title]),
