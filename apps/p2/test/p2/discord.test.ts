@@ -934,7 +934,10 @@ describe("discord relay", () => {
 	});
 
 	it("retains an allowed bot trigger after a full window of human context", async () => {
-		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		// This bot is explicitly permitted by the binding; all other bots remain untrusted.
+		const { discord, sessions, relay } = setup(
+			binding({ cursor: "1", wake: { anyone: false, users: ["u1", "other-bot"], roles: ["r1"] } }),
+		);
 		for (let index = 0; index < 205; index++) discord.say("c1", message(`human ${index}`));
 		const trigger = discord.say(
 			"c1",

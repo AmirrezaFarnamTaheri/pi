@@ -325,6 +325,11 @@ describe("command menu", { skip: !browserTests }, () => {
 			const id = await create("Filtering");
 			await openSession(id, "Filtering");
 			await openMenu();
+			// Plugin command rows mount as their permission and session state arrive.
+			// Wait for the announced count to settle after those asynchronous rows.
+			await browser.wait(
+				`(() => { const groups = [...document.querySelectorAll(".command-menu .command-group")].filter((group) => getComputedStyle(group).display !== "none"); const visible = groups.reduce((count, group) => count + group.querySelectorAll("[role=option]").length, 0); return document.querySelector(".command-menu .command-count")?.textContent === (visible === 1 ? "1 result" : visible + " results"); })()`,
+			);
 			const all = await menu();
 			assert.equal(all?.chip, "Session · Filtering");
 			const total = all!.groups.flatMap(([, rows]) => rows).length;
