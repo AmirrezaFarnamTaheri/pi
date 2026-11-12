@@ -9,6 +9,7 @@ This repository is a fork of [earendil-works/pi](https://github.com/earendil-wor
 - \`sync-upstream.yml\`: weekly/manual proposal for merging upstream main into the fork via a pull request, never an automatic merge.
 - `envelope-compat.yml`: runs the Envelope source regression suite against this fork's built Pi CLI and verifies actual RPC extension registration.
 - \`npm-audit.yml\`: dependency checks on demand and daily.
+- `provider-client-audit.yml`: weekly read-only check for newer official stable Claude Code, Copilot Chat and VS Code releases; reports drift for human review rather than blindly changing client headers.
 - \`env.yml\` and \`env-daemons.yml\`: cross-platform execution-environment tests.
 - \`bench-runtime.yml\` (once included): manual/scheduled benchmark results saved as an artifact.
 
@@ -24,7 +25,7 @@ GitHub repository Actions permissions must permit pull-request creation for the 
 
 ## Building and releasing
 
-Merge a tested PR into \`main\`, choose a new version that matches the coding-agent package, and push \`release/fork-v<version>\` at the tested commit. The workflow builds from that commit, checks platform binaries and publishes only to this fork's GitHub Releases. Never reuse an existing tag; use the next version. If the fork binaries change but the unpublished upstream-namespaced package is still version 1.5.1, a distinct GitHub-only snapshot `v1.5.1-fork.N` is also accepted. The CLI still reports its actual package version (1.5.1); the suffix identifies the GitHub binary build, not an npm release.
+Merge a tested PR into \`main\`, choose a new version that matches the coding-agent package, and push \`release/fork-v<version>\` at the tested commit. The workflow builds from that commit, checks platform binaries and publishes only to this fork's GitHub Releases. Never reuse an existing tag; use the next version. If the fork binaries change without a package-version change, a distinct GitHub-only snapshot `v<package-version>-fork.N` is also accepted. The CLI still reports the package version; the suffix identifies the GitHub binary build, not an npm release.
 
 Windows standalone users should unpack \`pi-windows-x64.zip\` or \`pi-windows-arm64.zip\` under a directory in their user \`PATH\`. This fork's release updater is not the upstream \`pi.dev\` installer or upstream npm package.
 

@@ -917,48 +917,54 @@ async function buildSessionInfo(
 
 		// Hash raw bytes as readline parses them, instead of reading the entire
 		// JSONL file a second time on every cold cache fill.
-		const input = createReadStream(filePath, { signal });
+		const input = createReadStream(filePath);
 		const hash = createHash("sha256");
 		input.on("data", (bytes) => {
 			hash.update(bytes);
 		});
 		const rl = createInterface({ input, crlfDelay: Infinity });
 
-		for await (const line of rl) {
-			const entry = parseSessionEntryLine(line);
-			if (!entry) continue;
+		try {
+			for await (const line of rl) {
+				signal?.throwIfAborted();
+				const entry = parseSessionEntryLine(line);
+				if (!entry) continue;
 
-			if (!header) {
-				if (entry.type !== "session") return null;
-				header = entry;
-				continue;
+				if (!header) {
+					if (entry.type !== "session") return null;
+					header = entry;
+					continue;
+				}
+
+				// Extract session name (use latest, including explicit clears)
+				if (entry.type === "session_info") {
+					name = entry.name?.trim() || undefined;
+				}
+
+				if (entry.type !== "message") continue;
+				messageCount++;
+
+				const activityTime = getMessageActivityTime(entry);
+				if (typeof activityTime === "number") {
+					lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
+				}
+
+				const message = entry.message;
+				if (!isMessageWithContent(message)) continue;
+				if (message.role !== "user" && message.role !== "assistant") continue;
+
+				const textContent = extractTextContent(message);
+				if (!textContent) continue;
+
+				allMessages.push(textContent);
+				if (!firstMessage && message.role === "user") {
+					firstMessage = textContent;
+				}
 			}
-
-			// Extract session name (use latest, including explicit clears)
-			if (entry.type === "session_info") {
-				name = entry.name?.trim() || undefined;
-			}
-
-			if (entry.type !== "message") continue;
-			messageCount++;
-
-			const activityTime = getMessageActivityTime(entry);
-			if (typeof activityTime === "number") {
-				lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			}
-
-			const message = entry.message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") {
-				firstMessage = textContent;
-			}
+		} finally {
+			input.destroy();
 		}
+		signal?.throwIfAborted();
 
 		if (!header) return null;
 		const digest = hash.digest("hex");

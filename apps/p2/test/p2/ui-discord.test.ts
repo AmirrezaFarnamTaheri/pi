@@ -41,19 +41,19 @@ test(
 			).create({ cwd: fixture.workspace, title: "Listener" }, BACKGROUND_CONTEXT)
 		).id;
 		const browser = await Browser.start();
+		await browser.signIn(fixture.owner);
 		t.after(() => browser.close());
 		await browser.metrics(390, 844);
-		await browser.open(`http://127.0.0.1:${fixture.server.port}/`);
-		await browser.wait(`[...document.querySelectorAll('.foot-button')].some(e=>e.textContent==='Discord')`);
-		await browser.evaluate(
-			`[...document.querySelectorAll('.foot-button')].find(e=>e.textContent==='Discord').click()`,
-		);
+		await browser.open(`http://127.0.0.1:${fixture.server.port}/new`);
+		await browser.openSettings("Discord");
 		await browser.wait(`${text("Discord bot")} && ${text("Not connected")}`);
 		assert(!(await browser.evaluate<boolean>(text("Bind a channel"))), "no channels in the global sheet");
 
 		// Add bot: Discord refuses the token; the sheet says so and keeps nothing.
 		await browser.evaluate(press("Add bot"));
-		await browser.wait(`document.querySelector('[role=dialog][aria-label="Add bot"] input[aria-label="Bot token"]')`);
+		await browser.wait(
+			`document.querySelector('[role=dialog] [aria-label="Add bot"] input[aria-label="Bot token"]')`,
+		);
 		await browser.evaluate(
 			`(()=>{const e=document.querySelector('input[aria-label="Bot token"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(ADDED)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`,
 		);
@@ -106,6 +106,7 @@ test(
 		const fixture = await startFixture({ web: true });
 		t.after(() => fixture.close());
 		const browser = await Browser.start();
+		await browser.signIn(fixture.owner);
 		t.after(() => browser.close());
 		await browser.metrics(390, 844);
 		await browser.open(`http://127.0.0.1:${fixture.server.port}`);

@@ -41,6 +41,7 @@ describe("phone gestures across a live plugin reload", { skip: !browserTests }, 
 		await until(chat.view, (view) => !live(view)?.run && JSON.stringify(view).includes("Echo: steps"), 30_000);
 		chat.release();
 		browser = await Browser.start();
+		await browser.signIn(fixture.owner);
 		await browser.metrics(390, 844);
 		await browser.call("Emulation.setTouchEmulationEnabled", { enabled: true });
 	});
@@ -73,11 +74,11 @@ describe("phone gestures across a live plugin reload", { skip: !browserTests }, 
 		);
 		await sleep(300);
 		// The drawer: a swipe toward the inline end on the chat opens it, one back on the drawer closes it.
-		await drag(60, 400, 330, 400);
+		await drag(40, 700, 300, 700);
 		await browser
 			.wait("document.querySelector('.app.drawer-open') && !document.querySelector('.drawer').style.transform")
 			.catch(() => assert.fail(`${when}: the swipe opens the drawer`));
-		await drag(300, 400, 20, 400);
+		await drag(250, 700, 20, 700);
 		await browser
 			.wait("!document.querySelector('.app.drawer-open') && !document.querySelector('.drawer').style.transform")
 			.catch(() => assert.fail(`${when}: the swipe closes the drawer`));

@@ -121,6 +121,7 @@ test(
 		let browser: Browser | undefined;
 		try {
 			browser = await Browser.start();
+			await browser.signIn(fixture.owner);
 			await browser.metrics(390, 844);
 			await browser.open(`http://127.0.0.1:${fixture.server.port}`);
 			await browser.wait("document.querySelector('.app')");
@@ -142,9 +143,13 @@ test(
 			// The detail: the tool's own, under the tool's words.
 			await browser.click("[data-testid=step] button");
 			await browser.wait("document.querySelector('[data-testid=word-count]')");
+			// The redesigned activity panel expands the selected tool's detail in place;
+			// the panel header remains the run summary rather than the tool's label.
 			assert.equal(
-				await browser.evaluate("document.querySelector('.sheet-head h2').textContent"),
-				"Counted words in The quick brown fox",
+				await browser.evaluate<string>(
+					"document.querySelector('[data-testid=step] button')?.getAttribute('aria-expanded')",
+				),
+				"true",
 			);
 			assert.equal(
 				await browser.evaluate("document.querySelector('[data-testid=word-count]').textContent"),

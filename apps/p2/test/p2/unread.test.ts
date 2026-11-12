@@ -77,7 +77,7 @@ describe("unread answers", () => {
 	});
 
 	it(
-		"shows the working dot, then a steady unread dot, cleared by opening the session",
+		"shows the working mark, then a steady unread dot and a bold title, cleared by opening the session",
 		{
 			skip: !browserTests,
 		},
@@ -89,6 +89,7 @@ describe("unread answers", () => {
 			const target = await sessions.create({ cwd: fixture.workspace, title: "Answers here" }, BACKGROUND_CONTEXT);
 			const elsewhere = await sessions.create({ cwd: fixture.workspace, title: "Looking here" }, BACKGROUND_CONTEXT);
 			const browser = await Browser.start();
+			await browser.signIn(fixture.owner);
 			try {
 				await browser.metrics(1280, 900);
 				await browser.open(`http://127.0.0.1:${fixture.server.port}/s/${elsewhere.id}`);
@@ -96,12 +97,18 @@ describe("unread answers", () => {
 				await browser.wait(`Boolean(${row})`);
 				const chat = await holdIn(owner, Chat, { session: target.id, conversation: 1 }, "participant");
 				await chat.send({ text: "slow-tool", requestId: "slow" }, BACKGROUND_CONTEXT);
-				await browser.wait(`Boolean(${row}?.querySelector('.live-dot'))`);
-				await browser.wait(`Boolean(${row}?.querySelector('.unread-dot')) && !${row}?.querySelector('.live-dot')`);
+				// Working: a frame around the row's glyph (a spinner where it has none).
+				const working = ".working-frame, .working-mark";
+				await browser.wait(`Boolean(${row}?.querySelector('${working}'))`);
+				await browser.wait(`Boolean(${row}?.querySelector('.unread-dot')) && !${row}?.querySelector('${working}')`);
 				assert.equal(
 					await browser.evaluate<string>(`getComputedStyle(${row}.querySelector('.unread-dot')).animationName`),
 					"none",
-					"the unread dot does not pulse",
+					"the unread dot does not move",
+				);
+				assert.ok(
+					await browser.evaluate<boolean>(`${row}.querySelector('.session-title').classList.contains('unread')`),
+					"an unread session's title is bold",
 				);
 				assert.equal(marks.reads.value?.[target.id], undefined);
 				await browser.evaluate(`${row}.querySelector('.session-main').click()`);

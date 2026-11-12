@@ -2704,6 +2704,91 @@ validation and copies the v2 kernel added around Delta.
   old version until the restarted object's successor is live (design §21); classes the edit renamed or removed are
   unstyled until then. Accepted and documented; apps contribute UI from facets and let objects supply data. Rejected
   for now: a kernel signal "this plugin's restarts on this host finished" to retire old sheets later.
+- **The kit serves the reload control (owner, 2026-11-11: "approve of AppChanges"; p3 step 0, decision 1):** the kit's
+  plugin marks (`app.plugins.state`) and `app.applyChanges` were reachable only from the start script, so applying a
+  change from a page, a terminal or an agent tool would need base code (a signal handler or a route in the start
+  script), against p3's "Reloads first". The kit serves `AppChanges` (`chord.app.changes`, remote, on the server,
+  params `{}`) to the app's owner only (any other principal: `forbidden`): state `marks` (the plugins component's state
+  as it is) and `apply()`, which runs `applyChanges` and answers `{ steps: { name, failed: string[] }[] }`. The app
+  re-exports the token through its server API. Rejected: applying on a signal or a start-script route.
+- **Call windows only for untrusted links (owner, 2026-11-11: "make the limit ten thousand"; from the Pong netcode
+  discussion):** the call window N (design §3) bounds how many calls one caller runs at once on a provider; calls past
+  it wait in the caller's own queue, so a client that fires too many only slows itself. No saturation by calls was
+  ever observed, and the app's own hosts are assumed to behave: a link a host accepts as trusted (`trusted: true`)
+  has no call window (`hello` announces 0). An untrusted link (pages, guests, view frames running agent-written code)
+  keeps one, a host option `callWindow`, default 10,000 (was a fixed 256 in `remote/host-link.ts`): many people may
+  have much in flight, and a misbehaving page still cannot start unbounded handlers. To be built with the events
+  change if that is decided, otherwise on its own. Built with it (2026-11-11, spec `events/spec.md` §3): `hello.calls`
+  is optional, absent on a trusted link (the binary codec writes 0, which no window is; "no hello yet" stays a state of
+  its own in the code); relays honour each upstream window (relayed calls of an origin wait in a FIFO per upstream link
+  and origin, following the relay's own queued calls' lifecycle, rejected `unavailable` before a new `bound`'s `ack`
+  passes upstream), which closed slice 4a's carry-over "one N on every host".
+- **Events: fire-and-forget members (owner, 2026-11-11; spec `events/spec.md`, third draft after two rounds of reviews by
+  Astra and Sol; the Pong netcode discussion):** a contract member is state, a method, or an **event**: a JSON value an
+  object emits, delivered once to each reference bound to the object before the emit and still bound when it is sent,
+  never folded, never kept, never sent to a later holder, dropped for a holder that cannot keep up. State folds and keeps
+  the newest value, right for what a joiner needs and wrong for motion (a paddle sample is worthless a moment later and
+  interpolation needs the samples between). (1) Contracts: `events` in a remote variant, the local marker `event(schema)`;
+  one kind per name across the history; JSON only; the fingerprint lists events under their own kind (contracts without
+  events keep theirs); edits `addEvent`, `removeEvent`, `event`; `accepts.events` maps a changed event per variant (or
+  refuses its version's binding), a removed or added one needs nothing (an older consumer receives none of it), a no-op
+  edit needs an identity mapping. (2) Types: `EventMember<T>` (`on(listener, ctx)`, references expose only it),
+  `EventSource<T>` (adds `emit`, `self.events<T>()`), `EventSubscription` (`stop`); an implementation is the attempt's
+  own source or a reference's member (re-exposed, value and `at` unchanged), anything else fails `broken`. (3)
+  `self.events` is a declaration (inert in staging, owned by the attempt: `emit` after its seal throws `released`); an
+  emit is immediate, no transaction work; `at` is the emitting host's `Date.now()`. (4) Delivery, one rule: emits wait for
+  the event flush, a microtask the first queues, which sends after every state message published before it; each binding
+  records the host's emit counter when it is made (a hold at its `bound`, a reference at its binding to the instance; an
+  arrival takes the receiving host's next value) and gets only later entries while it stays that binding; one `event`
+  message per link and origin, then the same-host listeners outside the reentrancy fence, entry then subscription order;
+  a throwing listener ends its subscription (`listener_error`). (5) Wire: `event { origin?, events: [{ hold, member, at,
+  value }] }`, `ack.events` (messages consumed: parsed, inflated, delivered or deliberately dropped; one per origin per
+  inbound turn; never combined with a state ack), an event window per link and origin at the emitting host (host option
+  `eventWindow`, default 32: a full window drops that flush's entries, counted, nothing queues), event tickets naming
+  each message's sender (relays forward at once, filter entries as for state, never acknowledge themselves: an early ack
+  of a filtered message would credit an earlier sender's message still unconsumed downstream). (6) Versions: one mapping
+  per emit per bound older version, kept while a reference of it is bound; a throwing mapping drops that emit for that
+  version, reported once per failure episode (`event_mapping_failed`). (7) `useEvents` in `chord/react`, `TuiScope.on`.
+  (8) Metrics `chord.events.emitted`, `sent`, `dropped { reason }`, `encodes`. Outside Chord: a clock (an app's `now()`
+  method), consumer-to-provider events (calls through the client's latest-only outbox), netcode policy, unreliable
+  transports (WebTransport later). Rejected: a stream type (design §31: events have no backpressure, replay or restart
+  rules), a subscription message per member (every bound hold gets its variant's events; a consumer without listeners
+  drops them on arrival). Settled by the build's code reviews (Astra and Sol, 2026-11-11; the strict rule by the
+  owner): (9) a relay forwards a hold's `release` upstream before it frees its forwarded calls' slots (else a call of
+  another hold could reach an honest finite-window upstream before the release that ends them there, one call too
+  many); an `abort` is forwarded, then frees its slot. (10) The strict failure rule holds over links too: a hold whose
+  object no longer shows it live untaps its events at once, while its state follows the admitted commits; an emit its
+  object failed after in the same turn reaches no holder anywhere. (11) The event window is checked per entry before
+  any encode (it cannot change during a flush), and a consumer drops a value nothing listens to before any inflate or
+  parse. (12) Contracts without event members cost nothing per binding (no event records, nodes or taps; shared empty
+  name lists), measured against the commit before events (`benchmarks.md`). (13) `useEvents` updates its listener in
+  a layout effect (an event between a commit and its passive effects reaches that render's listener).
+- **Documents and table rows can belong to a host (owner, 2026-11-09: "it looks like we have a plan"; p3 session data,
+  backups and exports):** data needed while a host is not running lives on another host (p3: facts about a session the
+  server needs while its worker is off) but must travel with that host on export, import and delete. (1) `defineState`'s
+  `keyed` takes `true` (string keys, as today) or a **host kind**: keys are then addresses of that kind
+  (`bindings.change(Session({ id }), fn, ctx)`, typed `KeyOf<K>`), stored with the address key in `key` and in a new
+  indexed `host` column of `chord_documents` (NULL for string keys, so a string can never pose as an address); store
+  schema migration to version 3. (2) Tables get a column type `host(Kind)` (at most one per table): the value is an
+  address (written and read as `Address`, stored as its key, indexed automatically); the table catalog records it. (3)
+  Two store operations: export the records and rows belonging to one address (a filtered archive in the existing format:
+  manifest, `document.create`/`document.revision` parts of records with that `host`, per table with a host column its
+  definition and `put` parts of its rows, `end`), and import such an archive into a store that already has data (fresh
+  ids and seqs; an existing record or row for the same address refuses unless the import is an explicit replace; a copy
+  under a new address rewrites only the host columns and keys). Delete retires those records and rows. (4) The kit's
+  per-address export, import and delete (`exportData`, `importData`, archive) include the server's records and rows
+  belonging to that address, next to the host's own store. Migration of imported content happens when the owning
+  object loads it, as for every document. Plugins must not put addresses inside JSON values they expect to be rewritten.
+  To be specified, reviewed and built (p3 status 2026-11-09). Built 2026-11-09 (spec `host-keyed/spec.md`, reviewed by
+  gpt-6-astra and gpt-6.1-sol). Owner decisions in review: (5) no checks a forged archive could defeat anyway and no
+  guards against plugin mistakes: no fingerprint or metadata comparison of archive tables (the store's own host column
+  and a per-row target check are enough), no re-validation of decoded address keys, no refusal of dropping the
+  automatic host index, no host-data guards after `host.close()`; (6) the kit has no recovery journal: import unpacks
+  into staging, moves the old directory aside, renames staging into place and commits the server's part last (definite
+  failures undo the renames; an unknown outcome keeps everything and is reported); delete commits the server's part
+  first, then removes the directory; the remaining crash windows are documented (re-run the import with replace; a
+  repeated delete removes an orphan directory). Host-keyed keyed members (`keyed(schema, Kind)`) and migration of older
+  archive tables through the owner's `evolveTable` history are part of the build.
 - **A plugin's npm dependencies are bundled; external only by opt-in (owner, 2026-10-29: "explicit opt in + (a)"):**
   a plugin's `dependencies` are installed into its own `node_modules` (`npm install --ignore-scripts`) and bundled into
   each facet that imports them (host packages, its `peerDependencies`, stay external and are passed in). On Node a

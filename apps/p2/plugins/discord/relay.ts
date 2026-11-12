@@ -54,7 +54,7 @@ export type DiscordPort = {
 
 export type TurnState =
 	| { state: "pending" }
-	| { state: "answered"; text: string; files: OfferedFile[] }
+	| { state: "answered"; text: string; files: OfferedFile[]; answer?: number }
 	| { state: "stopped" }
 	| { state: "unanswered"; reason: string; files: OfferedFile[] };
 
@@ -109,11 +109,14 @@ const MAX_FILES = 20;
 
 /** A pending reply older than this is dropped with a notice: its turn is not going to end on its own. */
 export const PENDING_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+export const MAX_BOT_TURNS = 3;
 
 export class Relay {
 	readonly #discord: (bot: string) => DiscordPort | undefined;
 	/** Pending replies being checked: two checks at once would post one reply twice. */
 	readonly #checking = new Set<string>();
+	/** Recently posted session-answer IDs prevent duplicate replies across separate checks. */
+	readonly #postedAnswerKeys = new Set<string>();
 	/**
 	 * Each channel's and thread's delivery under way, the next one chained after it: two mentions in quick succession
 	 * would otherwise both read from the same cursor and deliver overlapping batches.
@@ -121,6 +124,7 @@ export class Relay {
 	readonly #lanes = new Map<string, Promise<void>>();
 	/** Channels and threads with deliveries under way (how many), and their bots: "typing" from the first moment. */
 	readonly #delivering = new Map<string, { bot: string; count: number }>();
+	readonly #botStreaks = new Map<string, { turns: number; noticed: boolean }>();
 	readonly #sessions: SessionPort;
 	readonly #state: StatePort;
 	readonly #resumeCatchUp: ((bot: string) => void) | undefined;
@@ -189,8 +193,10 @@ export class Relay {
 	 * thread of one), delivers.
 	 */
 	async onMessage(bot: string, message: DiscordMessage): Promise<void> {
-		if (message.author.bot || !message.mentionsBot) return;
 		const port = this.#port(bot);
+		if (message.author.id === port.botId) return;
+		if (!message.author.bot) this.#personWrote(message.channelId);
+		if (!message.mentionsBot) return;
 		const { bindings } = this.#state.value();
 		let binding = bindings[message.channelId];
 		let thread: DiscordChannel | undefined;
@@ -215,7 +221,42 @@ export class Relay {
 		// A command runs now, never behind the delivery under way (a stop must reach the running turn).
 		const command = commandOf(message.text, port.botId);
 		if (command) await this.#trackSession(binding.session, this.#command(binding, thread, message, command));
-		else await this.deliver(binding.channelId, message, thread);
+		else if (this.#botTurnAllowed(port, message)) await this.deliver(binding.channelId, message, thread);
+	}
+
+	/** A person wrote in `target` (a channel or thread): bots may wake Pi there again. */
+	#personWrote(target: string): void {
+		this.#botStreaks.delete(target);
+	}
+
+	/**
+	 * Whether `message` may start a turn: a person's always; a bot's while fewer than `MAX_BOT_TURNS` turns in a row
+	 * there were started by bots (two bots mentioning each other would otherwise talk forever). The first one refused
+	 * gets a short notice; the streak ends when a person writes.
+	 */
+	#botTurnAllowed(port: DiscordPort, message: DiscordMessage): boolean {
+		if (!message.author.bot) return true;
+		const target = message.channelId;
+		const streak = this.#botStreaks.get(target) ?? { turns: 0, noticed: false };
+		this.#botStreaks.set(target, streak);
+		if (streak.turns < MAX_BOT_TURNS) {
+			streak.turns++;
+			return true;
+		}
+		console.error(
+			`p2 discord: not answering ${message.author.name} in ${target}: ${MAX_BOT_TURNS} bot-started turns in a row`,
+		);
+		if (!streak.noticed) {
+			streak.noticed = true;
+			void port
+				.reply(
+					target,
+					message.id,
+					`Not answering more bots here until a person writes (${MAX_BOT_TURNS} bot turns in a row).`,
+				)
+				.catch(() => {});
+		}
+		return false;
 	}
 
 	/**
@@ -389,9 +430,11 @@ export class Relay {
 			: port;
 		if (before !== undefined)
 			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
-				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+					window.add("channel", message);
 		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
-			if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+			if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+				window.add("here", message, message.id === trigger.id);
 		if (truncated) {
 			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
@@ -403,9 +446,9 @@ export class Relay {
 					binding.cursor,
 					before,
 					true,
-					(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+					(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 				))
-					if (!message.author.bot && !this.#isCommand(binding, message, port.botId))
+					if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
 						window.add("channel", message);
 			for (const message of await recentHistory(
 				historicalPort,
@@ -413,11 +456,12 @@ export class Relay {
 				cursor,
 				trigger.id,
 				false,
-				(message) => !message.author.bot && !this.#isCommand(binding, message, port.botId),
+				(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 			))
-				if (!message.author.bot && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+					window.add("here", message, message.id === trigger.id);
 		}
-		if (!window.has(trigger.id)) window.add("here", trigger);
+		if (!window.has(trigger.id)) window.add("here", trigger, true);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
 		const left = truncated
 			? `; deep Discord history truncated after ${DELIVERY_HISTORY_PAGES} API pages; newest ${window.kept} messages shown`
@@ -622,18 +666,70 @@ export class Relay {
 	/** Posts the replies of the turns that ended (`sessions`: only those, when given); answers split at 2000. */
 	async checkPending(sessions?: ReadonlySet<string>): Promise<void> {
 		const now = Date.now();
-		for (const pending of Object.values(this.#state.value().pending)) {
-			if ((sessions && !sessions.has(pending.session)) || this.#checking.has(pending.messageId)) continue;
-			if ((pending.retryAt ?? 0) > now) continue;
-			// Losing the connection never means discarding a completed response, even after a long outage.
-			const port = this.#discord(pending.botId);
-			if (!port) continue;
-			this.#checking.add(pending.messageId);
-			try {
-				await this.#check(port, pending, now);
-			} finally {
-				this.#checking.delete(pending.messageId);
+		const candidates: { pending: Pending; port: DiscordPort; turn: TurnState | undefined }[] = [];
+		const claimed: string[] = [];
+		try {
+			for (const pending of Object.values(this.#state.value().pending)) {
+				if ((sessions && !sessions.has(pending.session)) || this.#checking.has(pending.messageId)) continue;
+				if ((pending.retryAt ?? 0) > now) continue;
+				// A temporarily disconnected bot must retain its pending replies.
+				const port = this.#discord(pending.botId);
+				if (!port) continue;
+				this.#checking.add(pending.messageId);
+				claimed.push(pending.messageId);
+				let turn: TurnState | undefined;
+				try {
+					turn = await this.#sessions.turn(pending.session, pending.submissionId);
+				} catch {
+					// The normal check handles transient failures and the timeout notice.
+				}
+				candidates.push({ pending, port, turn });
 			}
+
+			// Steered inputs can share one answer. Only the newest mention gets its reply,
+			// including files offered by earlier inputs of that same turn.
+			const grouped = new Map<string, typeof candidates>();
+			const individual: typeof candidates = [];
+			for (const item of candidates) {
+				const key =
+					item.turn?.state === "answered" && typeof item.turn.answer === "number"
+						? `${item.pending.session}:${item.turn.answer}`
+						: undefined;
+				if (!key) {
+					individual.push(item);
+					continue;
+				}
+				const group = grouped.get(key) ?? [];
+				group.push(item);
+				grouped.set(key, group);
+			}
+			for (const [key, group] of grouped) {
+				if (this.#postedAnswerKeys.has(key)) {
+					for (const { pending } of group) await this.#forget(pending);
+					continue;
+				}
+				const newest = group.reduce((latest, item) =>
+					BigInt(item.pending.messageId) > BigInt(latest.pending.messageId) ? item : latest,
+				);
+				if (newest.turn?.state !== "answered") continue;
+				const offered = new Map<string, OfferedFile>();
+				for (const { turn } of group)
+					if (turn?.state === "answered") for (const file of turn.files) offered.set(file.id, file);
+				await this.#check(newest.port, newest.pending, now, {
+					...newest.turn,
+					files: Array.from(offered.values()),
+				});
+				if (!this.#state.value().pending[newest.pending.messageId]) {
+					this.#postedAnswerKeys.add(key);
+					if (this.#postedAnswerKeys.size > 512)
+						this.#postedAnswerKeys.delete(this.#postedAnswerKeys.values().next().value!);
+					for (const { pending } of group)
+						if (pending.messageId !== newest.pending.messageId) await this.#forget(pending);
+				}
+			}
+			for (const item of individual) await this.#check(item.port, item.pending, now, item.turn);
+		} finally {
+			for (const id of claimed) this.#checking.delete(id);
 		}
 	}
 
@@ -668,18 +764,21 @@ export class Relay {
 		});
 	}
 
-	async #check(port: DiscordPort, pending: Pending, now: number): Promise<void> {
+	async #check(port: DiscordPort, pending: Pending, now: number, knownTurn?: TurnState): Promise<void> {
 		if (!this.#pendingIsCurrent(pending)) {
 			await this.#forget(pending);
 			return;
 		}
 		let turn: TurnState;
-		try {
-			turn = await this.#sessions.turn(pending.session, pending.submissionId);
-		} catch (error) {
-			console.error("p2 discord: reading a turn failed:", error instanceof Error ? error.message : error);
-			if (now - pending.since < PENDING_TIMEOUT_MS) return;
-			turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
+		if (knownTurn) turn = knownTurn;
+		else {
+			try {
+				turn = await this.#sessions.turn(pending.session, pending.submissionId);
+			} catch (error) {
+				console.error("p2 discord: reading a turn failed:", error instanceof Error ? error.message : error);
+				if (now - pending.since < PENDING_TIMEOUT_MS) return;
+				turn = { state: "unanswered", reason: "the session did not answer in time.", files: [] };
+			}
 		}
 		if (turn.state === "pending") {
 			if (now - pending.since < PENDING_TIMEOUT_MS) return;
@@ -844,7 +943,7 @@ async function* history(
 	}
 }
 
-/** Get at most the latest BATCH_CAP messages at/before a marker, without traversing a long backlog. */
+/** Bounded reverse history, preserving the latest human context even behind a flood of bot posts. */
 async function recentHistory(
 	port: Pick<DiscordPort, "messages">,
 	channel: string,
@@ -855,11 +954,17 @@ async function recentHistory(
 ): Promise<DiscordMessage[]> {
 	let before = includeUntil ? (BigInt(until) + 1n).toString() : until;
 	const recent: DiscordMessage[] = [];
-	// A burst of bot/system posts must not crowd out the human context.
-	// Still bound total remote requests regardless of channel size.
+	let preferred = 0;
+	const selected = (): DiscordMessage[] => {
+		const window = new BatchWindow(BATCH_CAP);
+		for (const message of recent) window.add("here", message);
+		return window.sections({ channel: undefined, here: undefined }).flatMap(({ messages }) => messages);
+	};
+	// Look beyond a burst of bot messages for human context, but keep a hard
+	// bound on remote reads: incomplete history must not checkpoint the cursor.
 	for (let pages = 0; pages < 32; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
-		if (!page.length) return recent.slice(-BATCH_CAP);
+		if (!page.length) return selected();
 		const inRange = page.filter(
 			(message) =>
 				(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
@@ -867,12 +972,9 @@ async function recentHistory(
 				eligible(message),
 		);
 		recent.unshift(...inRange);
-		if (
-			recent.length >= BATCH_CAP ||
-			page.length < PAGE ||
-			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))
-		)
-			return recent.slice(-BATCH_CAP);
+		preferred += inRange.filter((message) => !message.author.bot).length;
+		if (preferred >= BATCH_CAP || page.length < PAGE || (cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor)))
+			return selected();
 		before = page[0]!.id;
 	}
 	// Do not quietly checkpoint a trigger if earlier eligible context was
@@ -931,17 +1033,22 @@ type Part = "channel" | "here";
 /** The newest `cap` messages of a batch in order, by part, and how many there were in all. */
 class BatchWindow {
 	readonly #cap: number;
-	readonly #entries: { part: Part; message: DiscordMessage }[] = [];
+	readonly #entries: { part: Part; message: DiscordMessage; pinned: boolean }[] = [];
 	readonly #counts: Record<Part, number> = { channel: 0, here: 0 };
 
 	constructor(cap: number) {
 		this.#cap = cap;
 	}
 
-	add(part: Part, message: DiscordMessage): void {
+	add(part: Part, message: DiscordMessage, pinned = false): void {
 		this.#counts[part]++;
-		this.#entries.push({ part, message });
-		if (this.#entries.length > this.#cap) this.#entries.shift();
+		this.#entries.push({ part, message, pinned });
+		if (this.#entries.length <= this.#cap) return;
+		// Other bots may speak, but a burst of their messages must not eject the last
+		// human context. The trigger itself is pinned even when another bot sent it.
+		const bot = this.#entries.findIndex((entry) => !entry.pinned && entry.message.author.bot);
+		const oldest = this.#entries.findIndex((entry) => !entry.pinned);
+		this.#entries.splice(bot >= 0 ? bot : Math.max(0, oldest), 1);
 	}
 
 	has(id: string): boolean {
@@ -1005,7 +1112,7 @@ export function batchOf(
 				});
 			else links.push(`[attachment ${attachment.name} (${attachment.size} bytes): ${attachment.url}]`);
 		});
-		return `${message.author.name}: ${[text, ...links].filter(Boolean).join("\n")}`;
+		return `${message.author.name} (${message.author.bot ? "bot, " : ""}<@${message.author.id}>): ${[text, ...links].filter(Boolean).join("\n")}`;
 	};
 	const lines = sections.flatMap(({ title, messages }) => [
 		...(title === undefined ? [] : [title]),

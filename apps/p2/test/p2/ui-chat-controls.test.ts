@@ -22,6 +22,7 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			).create({ cwd: fixture.workspace, title: "Control parity" }, BACKGROUND_CONTEXT)
 		).id;
 		browser = await Browser.start();
+		await browser.signIn(fixture.owner);
 	});
 	after(async () => {
 		await browser?.close();
@@ -35,12 +36,13 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			await browser.evaluate<string[]>(
 				`[...document.querySelectorAll('.topbar>button')].map(e=>e.getAttribute('aria-label'))`,
 			),
-			["Sessions", "Terminal", "Workspace files and changes", "Session options"],
+			["Sessions", "Annotate", "Terminal", "Workspace files and changes", "Session options"],
 		);
 		await browser.click('button[aria-label="Model and thinking"]');
 		await browser.wait(`document.querySelector('[role=dialog][aria-label=Model]')`);
 		await browser.click("[role=dialog] button[aria-label=Close]");
 		const second = await Browser.start();
+		await second.signIn(fixture.owner);
 		try {
 			await second.open(`http://127.0.0.1:${fixture.server.port}/s/${id}`);
 			await browser.wait(`document.querySelector('.session-stats .client-count')?.textContent.trim()==='2'`);
@@ -81,7 +83,7 @@ describe("chat control parity", { skip: !browserTests }, () => {
 		await browser.wait(`document.querySelector('.attachment-name')?.textContent==='kept.txt'`);
 		await browser.click(".new-session");
 		await browser.wait(
-			`location.pathname==='/' && document.querySelector('.new-session-view .composer textarea') && document.querySelector('.attachment-name')`,
+			`location.pathname==='/new' && document.querySelector('.new-session-view .composer textarea') && document.querySelector('.attachment-name')`,
 		);
 		assert.equal(
 			await browser.evaluate<string>(`document.querySelector('.composer textarea').value`),

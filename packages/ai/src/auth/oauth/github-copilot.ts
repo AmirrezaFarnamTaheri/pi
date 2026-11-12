@@ -11,10 +11,15 @@ import { trustedHttpUrl } from "./trusted-url.ts";
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
 
+// Versions intentionally pinned as a tested pair; update them together and recheck the OAuth tests.
+// Copilot Chat stable: microsoft/vscode-copilot-chat v0.43.0 (2026-04-07).
+// VS Code stable: microsoft/vscode 1.146.0 (2026-11-11).
+const COPILOT_CHAT_VERSION = "0.43.0";
+const VSCODE_VERSION = "1.146.0";
 const COPILOT_HEADERS = {
-	"User-Agent": "GitHubCopilotChat/0.35.0",
-	"Editor-Version": "vscode/1.107.0",
-	"Editor-Plugin-Version": "copilot-chat/0.35.0",
+	"User-Agent": `GitHubCopilotChat/${COPILOT_CHAT_VERSION}`,
+	"Editor-Version": `vscode/${VSCODE_VERSION}`,
+	"Editor-Plugin-Version": `copilot-chat/${COPILOT_CHAT_VERSION}`,
 	"Copilot-Integration-Id": "vscode-chat",
 } as const;
 const COPILOT_API_VERSION = "2026-06-01";
@@ -211,7 +216,7 @@ async function startDeviceFlow(domain: string, signal: AbortSignal): Promise<Dev
 		headers: {
 			Accept: "application/json",
 			"Content-Type": "application/x-www-form-urlencoded",
-			"User-Agent": "GitHubCopilotChat/0.35.0",
+			"User-Agent": COPILOT_HEADERS["User-Agent"],
 		},
 		body: new URLSearchParams({
 			client_id: CLIENT_ID,
@@ -271,7 +276,7 @@ async function pollForGitHubAccessToken(
 				headers: {
 					Accept: "application/json",
 					"Content-Type": "application/x-www-form-urlencoded",
-					"User-Agent": "GitHubCopilotChat/0.35.0",
+					"User-Agent": COPILOT_HEADERS["User-Agent"],
 				},
 				body: new URLSearchParams({
 					client_id: CLIENT_ID,

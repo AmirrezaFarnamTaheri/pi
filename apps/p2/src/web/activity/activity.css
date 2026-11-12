@@ -9,7 +9,6 @@
  */
 .activity,
 .results,
-.activity-sheet,
 .activity-panel {
 	--semantic-typography-ui-primary:
 		var(--semantic-typography-ui-primary-font-weight) var(--semantic-typography-ui-primary-font-size) /
@@ -220,80 +219,110 @@
 .activity-block.selected {
 	background: var(--hover);
 }
-.activity-thought {
-	display: flex;
-	align-items: flex-start;
-	gap: var(--s3);
-	padding: var(--s3) 0 0;
+/* A working wheel's latest thought, below it (ThoughtSlot.tsx): muted, at most three lines that scroll, its icon
+   under the wheel's and its words under the wheel's words. Its height only grows (set by ThoughtSlot); handed off, it
+   leaves the layout and its words fade out over the start of the next row. */
+.activity-slot {
+	/* Elanor's one icon size, as on the wheel. */
+	--slot-icon: 20px;
+	--slot-line: 1.65;
+	overflow: hidden;
+	transition: height 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+	pointer-events: none;
+}
+.activity-slot.handed-off {
+	overflow: visible;
+	transition: none;
+}
+.activity-slot-content {
+	position: relative;
+	padding: var(--s2) 0 var(--s1) calc(var(--slot-icon) + var(--semantic-dimension-space-gap-small));
 	color: var(--muted);
 	font-size: var(--fs-sm);
-	line-height: 1.65;
+	line-height: var(--slot-line);
+	transition:
+		opacity 0.22s ease-out,
+		color 0.4s ease;
 }
-.activity-thought > svg {
-	flex: none;
-	width: 18px;
-	height: 18px;
-	margin-top: var(--s1);
+/* Fading out: before the next thought comes in, or as the next row takes over (FADE_OUT in ThoughtSlot.tsx). */
+.activity-slot-content.hidden {
+	opacity: 0;
+	transition: opacity 0.16s ease-in;
 }
-.activity-thought-text {
-	display: -webkit-box;
-	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 3;
-	overflow: hidden;
-	white-space: pre-wrap;
+/* A live thought reads a little stronger than one the wheel moved on from. */
+.activity-slot-content.live {
+	color: color-mix(in srgb, var(--muted) 72%, var(--text));
 }
-.activity-dock:empty {
+/* Beside the first line shown; it breathes while the thought streams. */
+.activity-slot-icon {
+	position: absolute;
+	top: calc(var(--s2) + (var(--slot-line) * 1em - var(--slot-icon)) / 2);
+	left: 0;
+	display: grid;
+	width: var(--slot-icon);
+	height: var(--slot-icon);
+	place-items: center;
+}
+.activity-slot-content.live .activity-slot-icon {
+	animation: slot-thinking 1.6s ease-in-out infinite;
+}
+@keyframes slot-thinking {
+	50% {
+		opacity: 0.4;
+		transform: scale(0.88);
+	}
+}
+/* Three lines at most, scrolling: the newest show while the thought streams; the reader can scroll up to read on.
+   An edge with more words beyond it fades. */
+.activity-slot-window {
+	max-height: calc(3 * var(--slot-line) * 1em);
+	overflow-y: auto;
+	scrollbar-width: none;
+	pointer-events: auto;
+}
+.activity-slot-window::-webkit-scrollbar {
 	display: none;
 }
-.activity-panel {
-	display: flex;
-	flex-direction: column;
-	min-width: 0;
-	height: 100%;
-	background: var(--bg);
-	border-left: 1px solid var(--line);
+.activity-slot.handed-off .activity-slot-window {
+	pointer-events: none;
 }
-.activity-panel .activity-panel-head {
-	flex: none;
-	padding-left: var(--x);
+.activity-slot-window.more-above {
+	-webkit-mask-image: linear-gradient(transparent, #000 1.4em);
+	mask-image: linear-gradient(transparent, #000 1.4em);
 }
-.activity-panel .activity-panel-head h2 {
-	flex: none;
+.activity-slot-window.more-below {
+	-webkit-mask-image: linear-gradient(#000 calc(100% - 1.4em), transparent);
+	mask-image: linear-gradient(#000 calc(100% - 1.4em), transparent);
 }
-.activity-panel-meta {
-	flex: 1;
-	text-align: right;
-	color: var(--muted);
-	font-size: var(--fs-xs);
-	font-variant-numeric: tabular-nums;
+.activity-slot-window.more-above.more-below {
+	-webkit-mask-image: linear-gradient(transparent, #000 1.4em, #000 calc(100% - 1.4em), transparent);
+	mask-image: linear-gradient(transparent, #000 1.4em, #000 calc(100% - 1.4em), transparent);
 }
+.activity-slot-words {
+	display: block;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+	.activity-slot {
+		transition: none;
+	}
+	.activity-slot-content.live .activity-slot-icon {
+		animation: none;
+	}
+}
+/* The panel's own scroller follows the running step: the side panel's body (sheet or dock) does not scroll. */
 .activity-panel-body {
 	flex: 1;
 	min-height: 0;
 	overflow: auto;
 	padding-bottom: var(--s3);
 }
-.activity-sheet .sheet-body {
+.activity-panel .sheet-body,
+.activity-panel .side-panel-body {
 	display: flex;
 	padding: 0;
 	overflow: hidden;
-}
-@media (min-width: 700px) {
-	.activity-dock {
-		position: fixed;
-		inset: 0 0 0 auto;
-		width: min(460px, 60vw);
-		z-index: 20;
-	}
-}
-@media (min-width: 1280px) {
-	.activity-dock {
-		position: static;
-		flex: 0 0 460px;
-		width: 460px;
-		min-width: 0;
-		z-index: auto;
-	}
 }
 .step-list {
 	margin: 0;
