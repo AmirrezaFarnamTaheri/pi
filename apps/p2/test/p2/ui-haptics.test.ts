@@ -15,10 +15,12 @@ import { type Fixture, holdIn, startFixture, until } from "./helpers.ts";
 const live = (view: ConversationView | null | undefined) => view?.docs["pi.live"] as LiveState | undefined;
 /** The iOS app's bridge as the page sees it, recording the Haptics calls. */
 const BRIDGE = `window.__haptics = []; window.Capacitor = { getPlatform: () => "ios", nativePromise: (plugin, method, options) => { if (plugin === "Haptics") window.__haptics.push(method + (options?.style ? ":" + options.style : "")); return Promise.resolve(); } };`;
+// Space the tool calls so the browser observes separate wheel detents, not a
+// single initially-rendered batch from the zero-latency fake provider.
 const SCRIPT = [
-	'await tools.bash({ command: "echo one" });',
-	'await tools.bash({ command: "echo two" });',
-	'await tools.bash({ command: "echo three" });',
+	'await tools.bash({ command: "sleep 0.2 && echo one" });',
+	'await tools.bash({ command: "sleep 0.2 && echo two" });',
+	'await tools.bash({ command: "sleep 0.2 && echo three" });',
 	"return 3;",
 ].join("\n");
 
