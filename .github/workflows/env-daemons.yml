@@ -1,8 +1,8 @@
 name: pi-env daemons
 
-# Builds the pi-env daemon for every remote system @earendil-works/pi-env supports, on native runners, as artifacts
-# named pi-env-<platform>-<arch>. Build Binaries calls this before publishing npm packages; the Environments workflow
-# calls it to test the release builds on every change.
+# Builds pi-env daemons for all remote targets, cross-compiling macOS ARM64 on macOS Intel to reduce
+# scarce Apple Silicon runner demand. Produces pi-env-<platform>-<arch> artifacts; Environments
+# validates each shipped daemon on its matching native target in the release-daemons matrix.
 on:
   workflow_call:
     inputs:
@@ -25,7 +25,7 @@ jobs:
           - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, name: linux-arm64 }
           - { runner: ubuntu-latest, target: aarch64-linux-android, name: android-arm64, android: aarch64-linux-android24 }
           - { runner: ubuntu-latest, target: x86_64-linux-android, name: android-x64, android: x86_64-linux-android24 }
-          - { runner: macos-26, target: aarch64-apple-darwin, name: darwin-arm64 }
+          - { runner: macos-15-intel, target: aarch64-apple-darwin, name: darwin-arm64 }
           - { runner: macos-15-intel, target: x86_64-apple-darwin, name: darwin-x64 }
           - { runner: windows-latest, target: x86_64-pc-windows-msvc, name: windows-x64 }
           - { runner: windows-11-arm, target: aarch64-pc-windows-msvc, name: windows-arm64 }
@@ -75,7 +75,7 @@ jobs:
           ls -l "$GITHUB_WORKSPACE/pi-env-${{ matrix.name }}"
 
       - name: Run the native build
-        if: ${{ !matrix.android && !(matrix.target == 'x86_64-apple-darwin') }}
+        if: ${{ !matrix.android && !(matrix.target == 'x86_64-apple-darwin') && !(matrix.name == 'darwin-arm64') }}
         run: |
           suffix=""
           case "${{ matrix.target }}" in *windows*) suffix=".exe" ;; esac
