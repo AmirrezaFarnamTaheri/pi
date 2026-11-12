@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { auditForkWorkflows } from "./check-fork-workflows.mjs";
+import YAML from "yaml";
 
 test("fork workflow policy accepts this repository's workflow set", () => {
   assert.deepEqual(auditForkWorkflows(), []);
@@ -146,11 +147,12 @@ test("fork prerelease verifies exact main P2 CI and smoke-tests all six native a
     ["windows-latest", "win32-x64", "X64"],
     ["windows-11-arm", "win32-arm64", "ARM64"],
   ];
-  for (const [runner, platform, arch] of required) {
-    const row = smoke.includes(`runner: ${runner}\\n`) && smoke.includes(`platform: ${platform}\\n`) && smoke.includes(`arch: ${arch}\\n`);
-    assert.ok(row, `missing smoke matrix runner ${runner} for ${platform} (${arch})`);
-  }
-  assert.equal((smoke.match(/^\\s+- runner:/gm) ?? []).length, required.length);
+  const matrix = YAML.parse(release).jobs["smoke-test"].strategy.matrix.include;
+  assert.deepEqual(
+    matrix,
+    required.map(([runner, platform, arch]) => ({ runner, platform, arch })),
+    "each supported platform must use its matching native runner",
+  );
   assert.match(smoke, /matrix\\.platform/, "use the selected platform archive");
   assert.match(smoke, /RUNNER_ARCH/, "verify native runner architecture");
 });
