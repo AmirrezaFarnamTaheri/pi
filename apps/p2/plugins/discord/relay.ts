@@ -957,7 +957,7 @@ async function recentHistory(
 	let preferred = 0;
 	const selected = (): DiscordMessage[] => {
 		const window = new BatchWindow(BATCH_CAP);
-		for (const message of recent) window.add("here", message, message.id === trigger.id);
+		for (const message of recent) window.add("here", message);
 		return window.sections({ channel: undefined, here: undefined }).flatMap(({ messages }) => messages);
 	};
 	// Look beyond a burst of bot messages for human context, but keep a hard
