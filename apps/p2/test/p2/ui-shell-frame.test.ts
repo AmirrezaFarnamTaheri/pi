@@ -8,12 +8,13 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@p2/app/v1";
+import { Familiar } from "../../plugins/familiar/contract.ts";
 import { Models } from "../../plugins/models/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { defineFacet } from "../../src/runtime/chord.ts";
 import { RequestResolvers } from "../../src/runtime/server.ts";
 import { Browser, browserTests } from "./browser.ts";
-import { type Fixture, holdIn, poll, startFixture } from "./helpers.ts";
+import { type Fixture, holdIn, poll, startFixture, until } from "./helpers.ts";
 
 const BRAIN = "/pi/acme/11111111-0000-4000-8000-000000000000";
 
@@ -95,9 +96,18 @@ describe("framed by the Radius shell", { skip: !browserTests }, () => {
 		await poll(() => inApp<boolean>(`Boolean(${row})`), 30_000, "the session's row");
 		assert.equal(await inApp<string>(`${row}.href`), `${shellOrigin}${BRAIN}/s/${session.id}`);
 
-		// Where the app is before the step: its start page, or the session a plugin shows there (the Familiar's).
-		await poll(async () => (await log()).some((message) => message.type === "location"), 30_000, "a report");
-		const start = (await log()).filter((message) => message.type === "location").at(-1)!.path!;
+		// Home is an asynchronous Familiar session, not a stable `/` screen.
+		// Wait for its actual destination before taking the history baseline;
+		// otherwise a late home replace races with our session-row click.
+		const familiar = await holdIn(fixture.browser(), Familiar, {}, "owner");
+		const familiarId = await until(familiar.session, (id) => typeof id === "string");
+		familiar.release();
+		await poll(
+			() => inApp<boolean>(`location.pathname.startsWith(${JSON.stringify(`/s/${familiarId}`)})`),
+			30_000,
+			"the Familiar home route",
+		);
+		const start = await inApp<string>("location.pathname");
 		const shellUrl = (path: string) => (path === "/" ? BRAIN : `${BRAIN}${path}`);
 		await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
 
