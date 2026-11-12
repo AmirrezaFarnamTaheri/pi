@@ -933,6 +933,21 @@ describe("discord relay", () => {
 		assert.match(sessions.delivered[0]?.text ?? "", /human before the bot flood/);
 	});
 
+	it("retains an allowed bot trigger after a full window of human context", async () => {
+		const { discord, sessions, relay } = setup(binding({ cursor: "1" }));
+		for (let index = 0; index < 205; index++) discord.say("c1", message(`human ${index}`));
+		const trigger = discord.say(
+			"c1",
+			message(`<@${BOT}> review this bot request`, {
+				author: { id: "other-bot", name: "Other bot", bot: true },
+			}),
+		);
+		await relay.onMessage("bot-a", trigger);
+		const input = sessions.delivered[0]?.text ?? "";
+		assert.match(input, /human 204/);
+		assert.match(input, /Other bot \\(bot, <@other-bot>\\): @Pi review this bot request/);
+	});
+
 	it("does not advance the cursor after an incomplete bounded reverse-history scan", async () => {
 		const { discord, sessions, relay, state } = setup(binding({ cursor: "1" }));
 		discord.say("c1", message("human further back"));
