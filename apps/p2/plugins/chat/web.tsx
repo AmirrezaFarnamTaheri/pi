@@ -856,9 +856,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	const shared = !owner && grantMode(grant, sessionId) !== undefined;
 	useCommandRouteTarget(
 		viewTarget(session, conversationId, child) ??
-			(!session && shared && !child
-				? { type: "session", id: sessionId, kind: "Session", label: "" }
-				: undefined),
+			(!session && shared && !child ? { type: "session", id: sessionId, kind: "Session", label: "" } : undefined),
 	);
 	// Where the viewed conversation works: a subagent may have its own location (e.g. a git worktree, or another machine).
 	const viewLocation = conversationLocation(session, child);
