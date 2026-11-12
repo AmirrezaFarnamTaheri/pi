@@ -973,11 +973,7 @@ async function recentHistory(
 		);
 		recent.unshift(...inRange);
 		preferred += inRange.filter((message) => !message.author.bot).length;
-		if (
-			preferred >= BATCH_CAP ||
-			page.length < PAGE ||
-			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))
-		)
+		if (preferred >= BATCH_CAP || page.length < PAGE || (cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor)))
 			return selected();
 		before = page[0]!.id;
 	}
