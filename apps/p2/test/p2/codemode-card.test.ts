@@ -220,18 +220,26 @@ test("TUI shows pi's code mode card: the script, the newest nested calls by dept
 
 test(
 	"browser: the script's step, its highlighted script and its calls, live and settled",
-	{ skip: !browserTests, timeout: 60_000 },
-	async () => {
+	{ skip: !browserTests, timeout: 120_000 },
+	async (context) => {
+		// A cold CI runner spends substantial time starting the fixture, bundling
+		// the browser script and shutting down Chromium. Leave time for a genuine
+		// 30-second DOM timeout to report its assertion instead of cancelling it.
+		const started = Date.now();
+		const mark = (phase: string) => context.diagnostic(`${phase}: ${Date.now() - started}ms`);
 		const fixture = await startFixture({ web: true });
+		mark("fixture started");
 		let browser: Browser | undefined;
 		try {
 			browser = await Browser.start();
+			mark("Chromium started");
 			await browser.signIn(fixture.owner);
 			await browser.metrics(390, 844);
 			await browser.open(`http://127.0.0.1:${fixture.server.port}`);
 			await browser.wait("document.querySelector('.app')");
 			await browser.loadFixture("codemode-card.ts");
 			await browser.wait("typeof window.showCodemode==='function'");
+			mark("browser fixture loaded");
 			const show = (view: ConversationView) => browser!.evaluate(`window.showCodemode(${JSON.stringify(view)})`);
 			const call = (index: number) => `document.querySelectorAll('[data-testid=call]')[${index}]`;
 			await show(running());
@@ -255,6 +263,7 @@ test(
 			assert.match(await browser.evaluate<string>(`${call(7)}.textContent`), /Running npm test|npm test/);
 			await browser.click("[data-testid=calls-more]");
 			await browser.wait("document.querySelectorAll('[data-testid=call]').length===10");
+			mark("live call details shown");
 			assert.equal(
 				await browser.evaluate(
 					"document.querySelector('[data-testid=step] > button').getAttribute('aria-expanded')",
@@ -292,6 +301,7 @@ test(
 			// Settled: the result's calls; a cancelled one is interrupted, a failure.
 			await show(settled());
 			await browser.wait("document.querySelectorAll('[data-testid=call]').length===3");
+			mark("settled call details shown");
 			assert.equal(
 				await browser.evaluate(
 					"[...document.querySelectorAll('[data-testid=call]')].map((row)=>row.dataset.state).join()",
