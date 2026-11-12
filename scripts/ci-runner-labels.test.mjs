@@ -6,12 +6,14 @@ import YAML from "yaml";
 
 const root = join(import.meta.dirname, "..");
 
-test("macOS ARM64 daemon, environment, and release jobs use the alternative hosted runner pool", () => {
+test("macOS ARM64 daemon cross-compiles on Intel while execution tests stay on Apple Silicon", () => {
   const workflows = join(root, ".github", "workflows");
   const daemons = YAML.parse(readFileSync(join(workflows, "env-daemons.yml"), "utf8"));
   const daemonArm = daemons.jobs.build.strategy.matrix.include.find((row) => row.name === "darwin-arm64");
   assert.ok(daemonArm, "ARM64 daemon target must exist");
-  assert.equal(daemonArm.runner, "macos-26");
+  assert.equal(daemonArm.runner, "macos-15-intel", "cross-compile the ARM64 daemon on the reliable Intel runner");
+  const nativeCheck = daemons.jobs.build.steps.find((step) => step.name === "Run the native build");
+  assert.match(nativeCheck.if, /matrix\.name == 'darwin-arm64'/, "never attempt to execute an ARM64 binary on Intel");
 
   const env = YAML.parse(readFileSync(join(workflows, "env.yml"), "utf8"));
   assert.ok(env.jobs.tests.strategy.matrix.os.includes("macos-26"), "environment test must run on Apple Silicon");
