@@ -88,7 +88,7 @@ function OwnerHome() {
 	const opening = useRef(false);
 	useEffect(() => {
 		if (session === undefined || rows === undefined || opening.current) return;
-		const current = nav.route;
+		const current = route;
 		// Deferred Familiar data must never replace a session, list or sheet the
 		// reader opened while home was loading. Only home is an auto-open target.
 		if (current.session !== undefined || current.page !== undefined || current.newSession) return;
