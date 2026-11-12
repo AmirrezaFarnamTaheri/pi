@@ -142,6 +142,12 @@ echo "==> Creating release archives..."
 
 # Copy shared files to each platform directory
 for platform in "${PLATFORMS[@]}"; do
+    # Include a native, user-scoped installer in every standalone archive.
+    if [[ "$platform" == windows-* ]]; then
+        cp ../../scripts/install-standalone.ps1 "$OUTPUT_DIR/$platform/install.ps1"
+    else
+        cp ../../scripts/install-standalone.sh "$OUTPUT_DIR/$platform/install.sh"
+    fi
     cp package.json "$OUTPUT_DIR/$platform/"
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
