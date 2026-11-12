@@ -175,10 +175,15 @@ describe("web host", () => {
 				const tree = (await browser.call("Page.getFrameTree")) as {
 					frameTree: { childFrames?: { frame: { url: string; unreachableUrl?: string } }[] };
 				};
+				// Chromium may omit an iframe from the frame tree entirely when frame-ancestors
+				// denies it. Check the element exists, then reject any successfully loaded app frame.
+				assert.equal(
+					await browser.evaluate<string>("document.querySelector('iframe#app')?.getAttribute('src')"),
+					`http://127.0.0.1:${fixture.server.port}/`,
+				);
 				const child = tree.frameTree.childFrames?.[0]?.frame;
-				assert.ok(child, "the framer has its iframe");
 				assert.ok(
-					child.url.startsWith("chrome-error:") || child.unreachableUrl !== undefined,
+					!child || child.url.startsWith("chrome-error:") || child.unreachableUrl !== undefined,
 					JSON.stringify(child),
 				);
 			} finally {
