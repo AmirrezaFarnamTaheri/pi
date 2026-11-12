@@ -402,16 +402,27 @@ export class TranscriptScroll {
 	dockRef = (docked: HTMLDivElement | null) => {
 		const element = this.#scroller;
 		if (!docked || !element) return;
+		let frame: number | undefined;
 		const observer = new ResizeObserver(() => {
-			element.style.paddingBottom = `${docked.offsetHeight}px`;
-			docked.style.right = `${Math.max(element.offsetWidth - element.clientWidth, 4)}px`;
-			// The room is below the rows: a taller composer (a second line, a queued chip) moves nothing the reader
-			// sees, and a transcript following the answer stays at its end.
-			this.#sync();
+			// Writing an observed element's dimensions during ResizeObserver delivery
+			// can trigger "loop completed with undelivered notifications". Defer
+			// the dock adjustment to the next frame and coalesce repeated measures.
+			if (frame !== undefined) return;
+			frame = requestAnimationFrame(() => {
+				frame = undefined;
+				element.style.paddingBottom = `${docked.offsetHeight}px`;
+				docked.style.right = `${Math.max(element.offsetWidth - element.clientWidth, 4)}px`;
+				// The room is below the rows: a taller composer (a second line, a queued chip) moves nothing the reader
+				// sees, and a transcript following the answer stays at its end.
+				this.#sync();
+			});
 		});
 		observer.observe(element);
 		observer.observe(docked);
-		return () => observer.disconnect();
+		return () => {
+			observer.disconnect();
+			if (frame !== undefined) cancelAnimationFrame(frame);
+		};
 	};
 
 	/** The reader scrolls up or touches the transcript: stop following the answer. */
