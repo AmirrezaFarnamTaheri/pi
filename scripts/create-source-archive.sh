@@ -124,6 +124,8 @@ required_paths=(
     "package.json"
     "package-lock.json"
     "scripts/build-binaries.sh"
+    "scripts/install-standalone.sh"
+    "scripts/install-standalone.ps1"
     "packages/ai/src/models.generated.ts"
     "packages/ai/src/providers/data/.manifest.json"
     "packages/tui/native/napi.h"

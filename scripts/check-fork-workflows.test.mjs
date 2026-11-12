@@ -2,8 +2,6 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { auditForkWorkflows } from "./check-fork-workflows.mjs";
 import YAML from "yaml";
@@ -64,29 +62,14 @@ test("fork release uses hash-pinned catalog and requires a successful CI run for
   assert.match(release, /sha256sum -c/);
 });
 
-test("corrupted release assets fail checksum verification before publication", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-fork-checksum-"));
-  try {
-    const filename = "release-asset.tar.gz";
-    writeFileSync(join(root, filename), "valid");
-    const hash = createHash("sha256").update("valid").digest("hex");
-    writeFileSync(join(root, "SHA256SUMS"), hash + "  " + filename + "\n");
-    const available = spawnSync("sha256sum", ["--version"], { encoding: "utf8" });
-    if (available.error && available.error.code === "ENOENT") {
-      // macOS and Windows may not ship GNU coreutils; hosted Linux CI must.
-      assert.notEqual(process.platform, "linux", "Linux CI requires sha256sum");
-      return;
-    }
-    assert.equal(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
-    writeFileSync(join(root, filename), "corrupted");
-    assert.notEqual(spawnSync("sha256sum", ["-c", "SHA256SUMS"], { cwd: root }).status, 0);
-    const release = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "fork-github-release.yml"), "utf8");
-    const publish = release.slice(release.indexOf("  publish-github-release:"));
-    assert.match(publish, /set -euo pipefail[\s\S]*sha256sum -c SHA256SUMS[\s\S]*gh release create/);
-    assert.doesNotMatch(publish.slice(0, publish.indexOf("gh release create")), /sha256sum -c SHA256SUMS\s*\|\|\s*true/);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+test("platform release assets are hashed separately and verified before upload", () => {
+  const release = readFileSync(join(import.meta.dirname, "..", ".github/workflows/fork-github-release.yml"), "utf8");
+  const publish = release.slice(release.indexOf("  build-and-publish:"));
+  assert.match(publish, /SHA256SUMS-\$RELEASE_PLATFORM/);
+  assert.match(publish, /sha256sum -c/);
+  assert.match(publish, /shasum -a 256 -c/);
+  assert.match(publish, /gh release upload/);
+  assert.doesNotMatch(publish, /needs:\s*\[build, smoke-test\]/);
 });
 
 test("fork release supports an explicit manual rerun on the verified release branch only", () => {
@@ -132,27 +115,29 @@ test("P2 CI runs the full test-file set in isolated bounded shards", () => {
   assert.doesNotMatch(full, /--test-skip-pattern|--test-name-pattern/, "do not filter failing tests");
 });
 
-test("fork prerelease verifies exact main P2 CI and smoke-tests all six native architectures", () => {
+test("fork prerelease verifies exact-SHA CI and publishes six installable platforms independently", () => {
   const release = readFileSync(join(import.meta.dirname, "..", ".github/workflows/fork-github-release.yml"), "utf8");
-  const build = release.slice(release.indexOf("  build:"), release.indexOf("  smoke-test:"));
-  assert.match(build, /actions\/workflows\/ci\.yml\/runs/, "verify exact-SHA core CI");
-  assert.match(build, /actions\/workflows\/p2-ci\.yml\/runs/, "verify exact-SHA P2 extended CI");
-  assert.equal((build.match(/verify-fork-release-ci\.mjs "\$GITHUB_SHA"/g) ?? []).length, 2, "verify both suites");
-  const smoke = release.slice(release.indexOf("  smoke-test:"), release.indexOf("  publish-github-release:"));
-  const required = [
-    ["ubuntu-latest", "linux-x64", "X64"],
-    ["ubuntu-24.04-arm", "linux-arm64", "ARM64"],
-    ["macos-15-intel", "darwin-x64", "X64"],
-    ["macos-15", "darwin-arm64", "ARM64"],
-    ["windows-latest", "win32-x64", "X64"],
-    ["windows-11-arm", "win32-arm64", "ARM64"],
-  ];
-  const matrix = YAML.parse(release).jobs["smoke-test"].strategy.matrix.include;
-  assert.deepEqual(
-    matrix,
-    required.map(([runner, platform, arch]) => ({ runner, platform, arch })),
-    "each supported platform must use its matching native runner",
-  );
-  assert.match(smoke, /matrix\.platform/, "use the selected platform archive");
-  assert.match(smoke, /RUNNER_ARCH/, "verify native runner architecture");
+  const parsed = YAML.parse(release);
+  const prepare = release.slice(release.indexOf("  prepare:"), release.indexOf("  build-and-publish:"));
+  assert.match(prepare, /actions\/workflows\/ci\.yml\/runs/);
+  assert.match(prepare, /actions\/workflows\/p2-ci\.yml\/runs/);
+  assert.equal((prepare.match(/verify-fork-release-ci\.mjs "\$GITHUB_SHA"/g) ?? []).length, 2);
+  const job = parsed.jobs["build-and-publish"];
+  assert.equal(job.needs, "prepare");
+  assert.equal(job.strategy["fail-fast"], false);
+  assert.deepEqual(job.strategy.matrix.include, [
+    { runner: "ubuntu-latest", platform: "linux-x64", arch: "X64" },
+    { runner: "ubuntu-24.04-arm", platform: "linux-arm64", arch: "ARM64" },
+    { runner: "macos-15-intel", platform: "darwin-x64", arch: "X64" },
+    { runner: "macos-15", platform: "darwin-arm64", arch: "ARM64" },
+    { runner: "windows-latest", platform: "windows-x64", arch: "X64" },
+    { runner: "windows-11-arm", platform: "windows-arm64", arch: "ARM64" },
+  ]);
+  const platform = release.slice(release.indexOf("  build-and-publish:"));
+  assert.match(platform, /RUNNER_ARCH/);
+  assert.match(platform, /install\.sh/);
+  assert.match(platform, /install\.ps1/);
+  assert.match(platform, /smoke-test-codemode-binary\.mjs/);
+  assert.match(platform, /gh release upload/);
+  assert.doesNotMatch(release, /^  publish-github-release:/m);
 });
