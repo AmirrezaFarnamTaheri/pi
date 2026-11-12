@@ -3,7 +3,7 @@
 
 // Plugins share the host ReactDOM and glyph implementation; no cross-plugin source import.
 export { createPortal } from "react-dom";
-export { GlyphIcon } from "../../plugins/glyphs/GlyphIcon.tsx";
+export { GlyphIcon } from "../../../plugins/glyphs/GlyphIcon.tsx";
 export * from "../../runtime/web.tsx";
 export * from "../../web/AppLayout.tsx";
 export * from "../../web/activity/api.ts";
