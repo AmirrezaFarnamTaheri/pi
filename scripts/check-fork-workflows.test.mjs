@@ -130,3 +130,27 @@ test("P2 CI runs the full test-file set in isolated bounded shards", () => {
   assert.ok(full.includes("exit ") && full.includes("failures"), "propagate all per-file failures");
   assert.doesNotMatch(full, /--test-skip-pattern|--test-name-pattern/, "do not filter failing tests");
 });
+
+test("fork prerelease verifies exact main P2 CI and smoke-tests all six native architectures", () => {
+  const release = readFileSync(join(import.meta.dirname, "..", ".github/workflows/fork-github-release.yml"), "utf8");
+  const build = release.slice(release.indexOf("  build:"), release.indexOf("  smoke-test:"));
+  assert.match(build, /actions\\/workflows\\/ci\\.yml\\/runs/, "verify exact-SHA core CI");
+  assert.match(build, /actions\\/workflows\\/p2-ci\\.yml\\/runs/, "verify exact-SHA P2 extended CI");
+  assert.equal((build.match(/verify-fork-release-ci\\.mjs "\\$GITHUB_SHA"/g) ?? []).length, 2, "verify both suites");
+  const smoke = release.slice(release.indexOf("  smoke-test:"), release.indexOf("  publish-github-release:"));
+  const required = [
+    ["ubuntu-latest", "linux-x64", "X64"],
+    ["ubuntu-24.04-arm", "linux-arm64", "ARM64"],
+    ["macos-15-intel", "darwin-x64", "X64"],
+    ["macos-15", "darwin-arm64", "ARM64"],
+    ["windows-latest", "win32-x64", "X64"],
+    ["windows-11-arm", "win32-arm64", "ARM64"],
+  ];
+  for (const [runner, platform, arch] of required) {
+    const row = smoke.includes(`runner: ${runner}\\n`) && smoke.includes(`platform: ${platform}\\n`) && smoke.includes(`arch: ${arch}\\n`);
+    assert.ok(row, `missing smoke matrix runner ${runner} for ${platform} (${arch})`);
+  }
+  assert.equal((smoke.match(/^\\s+- runner:/gm) ?? []).length, required.length);
+  assert.match(smoke, /matrix\\.platform/, "use the selected platform archive");
+  assert.match(smoke, /RUNNER_ARCH/, "verify native runner architecture");
+});
