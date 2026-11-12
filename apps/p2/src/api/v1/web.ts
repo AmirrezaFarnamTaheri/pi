@@ -1,9 +1,10 @@
 // p2's plugin API, version 1, for web facets (`@p2/app/v1/web`): the browser runtime (objects as React hooks, slots,
 // sheets, navigation) and the shared components and stores of p2's page (chat, drawer, viewers, icons).
-export * from "../../runtime/web.tsx";
+
 // Plugins share the host ReactDOM and glyph implementation; no cross-plugin source import.
 export { createPortal } from "react-dom";
 export { GlyphIcon } from "../../plugins/glyphs/GlyphIcon.tsx";
+export * from "../../runtime/web.tsx";
 export * from "../../web/AppLayout.tsx";
 export * from "../../web/activity/api.ts";
 export { reportClientError } from "../../web/app-boundary.tsx";

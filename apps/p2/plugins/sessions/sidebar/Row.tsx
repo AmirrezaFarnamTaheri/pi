@@ -6,8 +6,8 @@
 import {
 	BranchIcon,
 	type CommandTargetRow,
-	HOME,
 	GlyphIcon,
+	HOME,
 	inPage,
 	locationLabel,
 	NavDisclosureIcon,
