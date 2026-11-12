@@ -66,7 +66,7 @@ describe("long conversation in the browser", { skip: !browserTests }, () => {
 		// Another session and back: the held view and its pages are still there, nothing is sent again.
 		const before = await browser.evaluate<number>("window.__received");
 		const row = (title: string) =>
-			`[...document.querySelectorAll('.session-row button')].find((button) => button.textContent.includes(${JSON.stringify(title)}))?.click() ?? true`;
+			`(() => { const link = [...document.querySelectorAll('.session-row a.session-main')].find((link) => link.textContent.includes(${JSON.stringify(title)})); if (!link) return false; link.click(); return true; })()`;
 		await browser.evaluate(row("Other one"));
 		await browser.wait(`document.querySelector('.topbar h1')?.textContent === 'Other one'`);
 		await browser.evaluate(row("Long one"));
@@ -85,6 +85,9 @@ describe("long conversation in the browser", { skip: !browserTests }, () => {
 	it("a search hit opens the conversation at an old message, paging back to it", async () => {
 		await browser.open(`http://127.0.0.1:${fixture.server.port}/s/${other}`);
 		await browser.wait(`document.querySelector('.topbar h1')?.textContent === 'Other one'`);
+		// Search now lives in a rollup's list page, not in the chat transcript.
+		await browser.open(`http://127.0.0.1:${fixture.server.port}/list/recents`);
+		await browser.wait(`document.querySelector('input[type=search]')`);
 		await browser.evaluate(
 			`(()=>{const e=document.querySelector('input[type=search]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'module 2 and fix');e.dispatchEvent(new Event('input',{bubbles:true}));})()`,
 		);
