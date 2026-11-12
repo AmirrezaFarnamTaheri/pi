@@ -208,11 +208,13 @@ describe("drawer and new-session parity", { skip: !browserTests }, () => {
 		await browser.wait(`!${conversations}.hidden && ${conversations}.querySelector('.subagent-row')`);
 		// An idle subagent's row ends with when it was last active, in its session's time column; its model and where it
 		// works are its tooltip.
-		const subagentRow = `document.querySelector('.nav-row:has(> .subagent-row)')`;
-		await browser.wait(`${subagentRow}.querySelector('.session-time')?.textContent === 'now'`);
+		const subagentRow = `document.querySelector('.sidebar-section[data-key=recent] .nav-row:has(> .subagent-row)')`;
+		await browser.wait(`${subagentRow}?.querySelector('.session-time')?.textContent === 'now'`);
 		assert.equal(await browser.evaluate<number>(`${subagentRow}.querySelectorAll('.subagent-model').length`), 0);
+		const headerTime = `document.querySelector('.sidebar-section[data-key=recent] .session-header.has-subagents .session-time')`;
+		await browser.wait(`${headerTime} && ${subagentRow}?.querySelector('.session-time')`);
 		const edges = await browser.evaluate<number[]>(
-			`[${subagentRow}.closest('.session-row').querySelector('.session-header .session-time'), ${subagentRow}.querySelector('.session-time')].map(e=>Math.round(e.getBoundingClientRect().right))`,
+			`[${headerTime}, ${subagentRow}.querySelector('.session-time')].map(e=>Math.round(e.getBoundingClientRect().right))`,
 		);
 		assert.equal(edges[0], edges[1]);
 		assert.equal(
