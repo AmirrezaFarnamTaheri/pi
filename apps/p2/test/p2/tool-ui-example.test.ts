@@ -146,7 +146,9 @@ test(
 			// The redesigned activity panel expands the selected tool's detail in place;
 			// the panel header remains the run summary rather than the tool's label.
 			assert.equal(
-				await browser.evaluate<string>("document.querySelector('[data-testid=step] button')?.getAttribute('aria-expanded')"),
+				await browser.evaluate<string>(
+					"document.querySelector('[data-testid=step] button')?.getAttribute('aria-expanded')",
+				),
 				"true",
 			);
 			assert.equal(
