@@ -2,8 +2,6 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import assert from "node:assert/strict";
 import { auditForkWorkflows } from "./check-fork-workflows.mjs";
 import YAML from "yaml";
