@@ -103,7 +103,15 @@ describe("framed by the Radius shell", { skip: !browserTests }, () => {
 
 		// A plain click acts in the app; the shell's URL follows, one history entry for the step.
 		const entries = await browser.evaluate<number>("history.length");
-		await inApp(`${row}.click()`);
+		// A synthetic Element.click() gives Chrome no user activation. Chrome may then
+		// skip its history entry when Back is pressed. Send a real pointer click.
+		const target = await inApp<{ x: number; y: number }>(
+			`(() => { const r=${row}.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`,
+		);
+		const frame = await browser.evaluate<{ x: number; y: number }>(
+			"(() => { const r=document.querySelector('iframe').getBoundingClientRect(); return {x:r.left,y:r.top}; })()",
+		);
+		await browser.clickPoint(frame.x + target.x, frame.y + target.y);
 		await browser.wait(`location.pathname === ${JSON.stringify(`${BRAIN}/s/${session.id}`)}`);
 		assert.equal(await browser.evaluate<number>("history.length"), entries + 1);
 
