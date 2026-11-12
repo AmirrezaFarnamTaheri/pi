@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Verify source commit passed the complete CI matrix
+      - name: Verify source commit passed complete core and P2 extended CI
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -45,6 +45,11 @@ jobs:
           # GitHub paginates workflow runs; never mistake a later-page success for absence.
           gh api --paginate --jq '.workflow_runs[]' \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+            | jq -s '{workflow_runs: .}' \
+            | node scripts/verify-fork-release-ci.mjs "$GITHUB_SHA"
+          # This prerelease also requires every P2 typecheck, virtual-list job and full test shard to pass.
+          gh api --paginate --jq '.workflow_runs[]' \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/p2-ci.yml/runs?head_sha=${GITHUB_SHA}&per_page=100" \
             | jq -s '{workflow_runs: .}' \
             | node scripts/verify-fork-release-ci.mjs "$GITHUB_SHA"
 
@@ -125,10 +130,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - runner: ubuntu-latest
+            platform: linux-x64
+            arch: X64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            arch: ARM64
+          - runner: macos-15-intel
+            platform: darwin-x64
+            arch: X64
+          - runner: macos-15
+            platform: darwin-arm64
+            arch: ARM64
+          - runner: windows-latest
+            platform: win32-x64
+            arch: X64
+          - runner: windows-11-arm
+            platform: win32-arm64
+            arch: ARM64
     permissions:
       actions: read
       contents: read
@@ -146,9 +166,16 @@ jobs:
 
       - name: Extract and smoke-test native binary
         shell: bash
+        env:
+          RELEASE_PLATFORM: ${{ matrix.platform }}
+          RELEASE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          platform="$(node -p "process.platform+'-'+process.arch")"
+          if [ "$RUNNER_ARCH" != "$RELEASE_ARCH" ]; then
+            echo "::error::Wrong runner architecture: $RUNNER_ARCH (expected $RELEASE_ARCH)"
+            exit 1
+          fi
+          platform="$RELEASE_PLATFORM"
           mkdir -p extracted
           case "$platform" in
             darwin-arm64|darwin-x64|linux-arm64|linux-x64)
