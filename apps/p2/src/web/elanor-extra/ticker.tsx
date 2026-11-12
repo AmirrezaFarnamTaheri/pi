@@ -125,9 +125,13 @@ function TickerRoot({
 	const turned = useRef(onTurn);
 	turned.current = onTurn;
 	useEffect(() => {
-		if (faced.current === currentIndex) return;
+		const distance = Math.abs(currentIndex - faced.current);
+		if (!distance) return;
 		faced.current = currentIndex;
-		turned.current?.();
+		// Rapid new steps may arrive in one React render. The wheel traversed
+		// multiple detents even when no intermediate frame committed.
+		// Bound native feedback in case an entire history arrives at once.
+		for (let step = 0; step < Math.min(distance, 8); step++) turned.current?.();
 	}, [currentIndex]);
 	const keyOf = (item: ReactElement | undefined) => (item?.key == null ? undefined : item.key);
 	const shared = {
