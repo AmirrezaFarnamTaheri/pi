@@ -434,7 +434,7 @@ export class Relay {
 					window.add("channel", message);
 		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
 			if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
-				window.add("here", message);
+				window.add("here", message, message.id === trigger.id);
 		if (truncated) {
 			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
@@ -459,9 +459,9 @@ export class Relay {
 				(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 			))
 				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
-					window.add("here", message);
+					window.add("here", message, message.id === trigger.id);
 		}
-		if (!window.has(trigger.id)) window.add("here", trigger);
+		if (!window.has(trigger.id)) window.add("here", trigger, true);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
 		const left = truncated
 			? `; deep Discord history truncated after ${DELIVERY_HISTORY_PAGES} API pages; newest ${window.kept} messages shown`
@@ -943,7 +943,7 @@ async function* history(
 	}
 }
 
-/** Get at most the latest BATCH_CAP messages at/before a marker, without traversing a long backlog. */
+/** Bounded reverse history, preserving the latest human context even behind a flood of bot posts. */
 async function recentHistory(
 	port: Pick<DiscordPort, "messages">,
 	channel: string,
@@ -954,11 +954,17 @@ async function recentHistory(
 ): Promise<DiscordMessage[]> {
 	let before = includeUntil ? (BigInt(until) + 1n).toString() : until;
 	const recent: DiscordMessage[] = [];
-	// A burst of unrelated posts must not crowd out the eligible context.
-	// Still bound total remote requests regardless of channel size.
+	let preferred = 0;
+	const selected = (): DiscordMessage[] => {
+		const window = new BatchWindow(BATCH_CAP);
+		for (const message of recent) window.add("here", message, message.id === trigger.id);
+		return window.sections({ channel: undefined, here: undefined }).flatMap(({ messages }) => messages);
+	};
+	// Look beyond a burst of bot messages for human context, but keep a hard
+	// bound on remote reads: incomplete history must not checkpoint the cursor.
 	for (let pages = 0; pages < 32; pages++) {
 		const page = await port.messages(channel, { before, limit: PAGE });
-		if (!page.length) return recent.slice(-BATCH_CAP);
+		if (!page.length) return selected();
 		const inRange = page.filter(
 			(message) =>
 				(cursor === null || BigInt(message.id) > BigInt(cursor)) &&
@@ -966,12 +972,13 @@ async function recentHistory(
 				eligible(message),
 		);
 		recent.unshift(...inRange);
+		preferred += inRange.filter((message) => !message.author.bot).length;
 		if (
-			recent.length >= BATCH_CAP ||
+			preferred >= BATCH_CAP ||
 			page.length < PAGE ||
 			(cursor !== null && BigInt(page[0]!.id) <= BigInt(cursor))
 		)
-			return recent.slice(-BATCH_CAP);
+			return selected();
 		before = page[0]!.id;
 	}
 	// Do not quietly checkpoint a trigger if earlier eligible context was
@@ -1030,17 +1037,22 @@ type Part = "channel" | "here";
 /** The newest `cap` messages of a batch in order, by part, and how many there were in all. */
 class BatchWindow {
 	readonly #cap: number;
-	readonly #entries: { part: Part; message: DiscordMessage }[] = [];
+	readonly #entries: { part: Part; message: DiscordMessage; pinned: boolean }[] = [];
 	readonly #counts: Record<Part, number> = { channel: 0, here: 0 };
 
 	constructor(cap: number) {
 		this.#cap = cap;
 	}
 
-	add(part: Part, message: DiscordMessage): void {
+	add(part: Part, message: DiscordMessage, pinned = false): void {
 		this.#counts[part]++;
-		this.#entries.push({ part, message });
-		if (this.#entries.length > this.#cap) this.#entries.shift();
+		this.#entries.push({ part, message, pinned });
+		if (this.#entries.length <= this.#cap) return;
+		// Other bots may speak, but a burst of their messages must not eject the last
+		// human context. The trigger itself is pinned even when another bot sent it.
+		const bot = this.#entries.findIndex((entry) => !entry.pinned && entry.message.author.bot);
+		const oldest = this.#entries.findIndex((entry) => !entry.pinned);
+		this.#entries.splice(bot >= 0 ? bot : Math.max(0, oldest), 1);
 	}
 
 	has(id: string): boolean {
