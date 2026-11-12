@@ -88,4 +88,17 @@ jobs:
             exit 1
           fi
           printf 'Testing %s files in shard %s\n' "${#files[@]}" "${{ matrix.shard }}"
-          node --import ./src/source.ts --test --test-concurrency=1 "${files[@]}"
+          failures=0
+          # Run every selected file; a hung Chromium suite must not consume the whole six-hour job.
+          # Timeout is a test failure, not a skip. Continue to report all file results.
+          for file in "${files[@]}"; do
+            echo "::group::P2 ${file}"
+            if timeout --signal=TERM --kill-after=15s 300s node --import ./src/source.ts --test --test-concurrency=1 "${file}"; then
+              :
+            else
+              echo "::error file=${file}::P2 test file failed or exceeded 300 seconds"
+              failures=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failures"

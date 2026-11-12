@@ -3,8 +3,7 @@
 // which applies every edit and owns the state, and the view kit, which applies the server's log the same way: the
 // rules are deterministic functions of (state, edit), so every replica that applies one log in order agrees.
 
-import type { JsonValue } from "@p2/app/v1";
-import { type CompactSavedIdList, type ElementId, IdList } from "articulated";
+import { type CompactSavedIdList, type ElementId, IdList, type JsonValue } from "@p2/app/v1";
 
 /** The most a text room's text may hold, in UTF-16 code units: an insert past it is dropped. */
 export const MAX_TEXT = 100_000;

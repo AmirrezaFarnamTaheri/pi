@@ -9,6 +9,7 @@ import {
 	type Ctx,
 	defineTypedKeyedState,
 	defineTypedState,
+	ElementIdGenerator,
 	event,
 	type FacetHost,
 	forbidden,
@@ -27,7 +28,6 @@ import {
 	withoutAbortSignal,
 } from "@p2/app/v1";
 import { MAX_CLIENT_FRAME, Server } from "@p2/app/v1/server";
-import { ElementIdGenerator } from "articulated";
 import { ModelConfig } from "../models/contract.ts";
 import {
 	AnswerSchema,

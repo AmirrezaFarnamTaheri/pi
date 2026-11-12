@@ -26,6 +26,7 @@ import {
 	type CommandTarget,
 	ContextUsage,
 	CostPanel,
+	createPortal,
 	closeLayers,
 	conversationRoute,
 	type Detail,
@@ -36,6 +37,7 @@ import {
 	FileCompletionPopover,
 	FillGap,
 	FolderIcon,
+	GlyphIcon,
 	forgetSession,
 	type Gap,
 	type Kept,
@@ -113,15 +115,12 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
-import { createPortal } from "react-dom";
 import { Drafts } from "../drafts/contract.ts";
 import { Envs } from "../envs/contract.ts";
 import { DirectoryPicker, directoryPickerLayer } from "../envs/contract.web.tsx";
-import { GlyphIcon } from "../glyphs/GlyphIcon.tsx";
-import { placeSeed } from "../glyphs/seed.ts";
 import { Models } from "../models/contract.ts";
 import type { ResourceSnapshot } from "../models/resources.ts";
-import { Projects } from "../projects/contract.ts";
+import { placeSeed, Projects } from "../projects/contract.ts";
 import { type Session, Sessions } from "../sessions/contract.ts";
 import { SessionMetrics, SessionStatus, WorkerControl } from "../status/contract.ts";
 import { type Child, conversationLocation, SubagentControl, Subagents } from "../subagents/contract.ts";

@@ -420,7 +420,7 @@ test(
 			const removedRefs = [removedServer, removedWorker, removedUnseen];
 			await poll(() => removedRefs.every((ref) => statusOf(ref) === "failed"));
 			for (const ref of removedRefs) ref.release();
-			assert.equal((await http(port, "/__dev_removable")).status, 404, "registration was removed");
+			assert.equal((await http(port, "/__dev_removable", { headers: await local(port) })).status, 404, "registration was removed for the authenticated owner");
 			for (const pid of [serverPid, removedPid, secondPid])
 				await poll(
 					async () =>

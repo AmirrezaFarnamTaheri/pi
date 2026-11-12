@@ -5,6 +5,7 @@ import {
 	type Command,
 	CommandMenu,
 	type CommandPage,
+	conversationOf,
 	type ModelChoice,
 	ModelIcon,
 	matchingModels,
@@ -243,17 +244,8 @@ function useModelTarget(resources: ResourceSnapshot | undefined): ModelTarget | 
 	}
 }
 
-/**
- * Parses a "conversation" target's id, `<session>/<conversation>` (`viewTarget` in web.tsx writes it); it comes back
- * from the menu's locator, so it is checked.
- */
-export function conversationOf(id: string): { readonly session: string; readonly conversation: number } | undefined {
-	const slash = id.lastIndexOf("/");
-	const conversation = Number(id.slice(slash + 1));
-	return slash > 0 && Number.isInteger(conversation) && conversation > 0
-		? { session: id.slice(0, slash), conversation }
-		: undefined;
-}
+// Also exported for existing integrations; the implementation is in the host navigation API.
+export { conversationOf } from "@p2/app/v1/web";
 
 /** A subagent's model as it reports it (`provider/modelId`, the model ID may hold more slashes). */
 function childChoice(child: Child): ModelChoice | undefined {

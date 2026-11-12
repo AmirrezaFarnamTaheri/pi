@@ -7,6 +7,7 @@ import {
 	BranchIcon,
 	type CommandTargetRow,
 	HOME,
+	GlyphIcon,
 	inPage,
 	locationLabel,
 	NavDisclosureIcon,
@@ -22,7 +23,6 @@ import {
 	useRegistry,
 } from "@p2/app/v1/web";
 import { type ReactNode, useEffect, useId, useState, useSyncExternalStore } from "react";
-import { GlyphIcon } from "../../glyphs/GlyphIcon.tsx";
 import type { Activity, GlyphSeed, SidebarRow } from "./model.ts";
 import {
 	failureWords,

@@ -102,19 +102,31 @@ test("fork release supports an explicit manual rerun on the verified release bra
   assert.match(release, /verify-fork-release-ci\.mjs/);
 });
 
-test("P2 CI remains visible but is isolated from the core fork release gate", () => {
+test("P2 CI runs the full test-file set in isolated bounded shards", () => {
   const workflows = join(import.meta.dirname, "..", ".github", "workflows");
   const core = readFileSync(join(workflows, "ci.yml"), "utf8");
-  assert.doesNotMatch(core, /^  p2-(?:virtual-list|check-test):/m,
-    "the slow P2 matrix must not gate the binary release");
+  assert.doesNotMatch(core, /^  p2-(?:virtual-list|check-test|check|test):/m,
+    "P2 browser CI must remain a separate, visible workflow");
 
   const p2 = readFileSync(join(workflows, "p2-ci.yml"), "utf8");
-  assert.match(p2, /^  p2-virtual-list:/m, "retain P2 virtual-list tests in independent CI");
-  assert.match(p2, /^  p2-check-test:/m, "retain P2 full browser suite in independent CI");
-  const full = p2.slice(p2.indexOf("  p2-check-test:"));
-  const generation = full.indexOf("run: npm run generate:models");
-  const checking = full.indexOf("run: npm run check --workspace apps/p2");
-  const testing = full.indexOf("run: npm run test --workspace apps/p2");
-  assert.ok(generation >= 0 && checking > generation && testing > checking,
-    "the P2 test workflow must generate providers before checking and running tests");
+  assert.match(p2, /^  p2-virtual-list:/m, "retain P2 virtual-list tests");
+  assert.match(p2, /^  p2-check:/m, "retain P2 types and formatting checks");
+  assert.match(p2, /^  p2-test:/m, "retain full P2 suite");
+
+  const check = p2.slice(p2.indexOf("  p2-check:"), p2.indexOf("  p2-test:"));
+  const generation = check.indexOf("run: npm run generate:models");
+  const typecheck = check.indexOf("run: npm run check --workspace apps/p2");
+  assert.ok(generation >= 0 && typecheck > generation, "generate models before typechecking P2");
+
+  const full = p2.slice(p2.indexOf("  p2-test:"));
+  assert.ok(full.includes("fail-fast: false"), "report every shard failure");
+  assert.ok(full.includes("shard: [0, 1, 2, 3]"), "run all four shards");
+  assert.ok(full.includes("find test -type f -name"), "enumerate all P2 test files");
+  assert.ok(full.includes("*.test.ts"), "do not omit a test-file class");
+  assert.ok(full.includes("((NR-1)%total)==shard"), "assign each file to exactly one shard");
+  assert.ok(full.includes("for file in"), "run every selected file");
+  assert.ok(full.includes("timeout --signal=TERM"), "bound hangs without dropping tests");
+  assert.ok(full.includes("node --import ./src/source.ts --test"), "use the native P2 test harness");
+  assert.ok(full.includes("exit ") && full.includes("failures"), "propagate all per-file failures");
+  assert.doesNotMatch(full, /--test-skip-pattern|--test-name-pattern/, "do not filter failing tests");
 });
