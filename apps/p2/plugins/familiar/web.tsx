@@ -79,6 +79,7 @@ function FamiliarHome() {
 /** Replaces home with the Familiar's session as soon as the server says which it is; shows nothing meanwhile. */
 function OwnerHome() {
 	const nav = useNavigation();
+	const route = useRoute();
 	const held = useObject(Familiar, {});
 	const familiar = liveIn(held, "owner");
 	const session = useReadable(keptIn(held, "owner")?.session);
@@ -88,6 +89,9 @@ function OwnerHome() {
 	useEffect(() => {
 		if (session === undefined || rows === undefined || opening.current) return;
 		const current = nav.route;
+		// Deferred Familiar data must never replace a session, list or sheet the
+		// reader opened while home was loading. Only home is an auto-open target.
+		if (current.session !== undefined || current.page !== undefined || current.newSession || current.layers.length) return;
 		const row = session === null ? undefined : rows.find((each) => each.id === session);
 		if (row?.archivedAt === null) void nav.replace(conversationRoute(current, row.id, row.main), current);
 		// Archived by the owner: home leaves it archived; the Pi logo restores it.
@@ -102,7 +106,7 @@ function OwnerHome() {
 					opening.current = false;
 				});
 		}
-	}, [session, rows, familiar, nav, fail]);
+	}, [session, rows, familiar, nav, fail, route]);
 	return null;
 }
 
