@@ -119,7 +119,21 @@ describe("framed by the Radius shell", { skip: !browserTests }, () => {
 		// The app owns the navigation entry in the child frame; ask that frame
 		// to traverse its history, then verify the shell mirrors the resulting URL.
 		await inApp("history.back()");
-		await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
+		try {
+			await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
+		} catch (error) {
+			// Preserve browser/child frame history diagnostics when a history
+			// intervention or a frame transition prevents the expected Back.
+			const shellState = await browser.evaluate<unknown>(
+				"({path:location.pathname, length:history.length, state:history.state, messages:shellLog})",
+			);
+			const frameState = await inApp<unknown>(
+				"({path:location.pathname, length:history.length, state:history.state})",
+			).catch((cause) => ({ error: String(cause) }));
+			throw new Error(`Shell Back did not restore ${start}: ${JSON.stringify({ shellState, frameState })}`, {
+				cause: error,
+			});
+		}
 		assert.equal(await inApp<string>("location.pathname"), start);
 		await inApp("history.forward()");
 		await browser.wait(`location.pathname === ${JSON.stringify(`${BRAIN}/s/${session.id}`)}`);
