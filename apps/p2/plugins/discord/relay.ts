@@ -430,9 +430,11 @@ export class Relay {
 			: port;
 		if (before !== undefined)
 			for await (const message of history(historicalPort, channelId, binding.cursor, before, markTruncated))
-				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("channel", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+					window.add("channel", message);
 		for await (const message of history(historicalPort, where, cursor, trigger.id, markTruncated))
-			if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+			if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+				window.add("here", message);
 		if (truncated) {
 			// The prompt already keeps only BATCH_CAP messages. Do not scan a giant backlog:
 			// fetch recent pages backwards from the trigger instead of unbounded older pages.
@@ -456,7 +458,8 @@ export class Relay {
 				false,
 				(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 			))
-				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId)) window.add("here", message);
+				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
+				window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
