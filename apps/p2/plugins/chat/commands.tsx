@@ -5,7 +5,6 @@ import {
 	type Command,
 	CommandMenu,
 	type CommandPage,
-	conversationOf,
 	type ModelChoice,
 	ModelIcon,
 	matchingModels,
@@ -25,7 +24,7 @@ import { type ReactNode, useCallback, useMemo } from "react";
 import { Models, type ResourceSnapshot } from "../models/contract.ts";
 import { type Session, Sessions } from "../sessions/contract.ts";
 import { type Child, modelRefOf, Subagents } from "../subagents/contract.ts";
-import { Chat } from "./contract.ts";
+import { Chat, conversationOf } from "./contract.ts";
 import { newSessionChoice, thinkingLevelOf } from "./model-choice.ts";
 
 /** The targets a model change applies to: a session (its main conversation), a subagent's conversation, a new session. */
@@ -243,9 +242,6 @@ function useModelTarget(resources: ResourceSnapshot | undefined): ModelTarget | 
 			return undefined;
 	}
 }
-
-// Also exported for existing integrations; the implementation is in the host navigation API.
-export { conversationOf } from "@p2/app/v1/web";
 
 /** A subagent's model as it reports it (`provider/modelId`, the model ID may hold more slashes). */
 function childChoice(child: Child): ModelChoice | undefined {

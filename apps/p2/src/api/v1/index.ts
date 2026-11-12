@@ -69,8 +69,6 @@ export {
 	withoutAbortSignal,
 } from "@earendil-works/chord/context";
 export type { JsonValue } from "@earendil-works/chord/json";
-// Shared, browser-safe text CRDT primitives used by view plugins and the host.
-export { type CompactSavedIdList, type ElementId, ElementIdGenerator, IdList } from "articulated";
 export type { NativeWatchable, WatchCall, WatchHandle } from "@earendil-works/chord/watch";
 export * from "../../runtime/access.ts";
 export * from "../../runtime/chord.ts";

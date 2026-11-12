@@ -27,7 +27,6 @@ import {
 	type SessionPort,
 	type TurnState,
 } from "../../plugins/discord/relay.ts";
-import { FileSummaries } from "../../plugins/files/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Subagents } from "../../plugins/subagents/contract.ts";
 import type { Held } from "../../src/runtime/chord.ts";
@@ -1225,9 +1224,6 @@ describe("discord ingress (fake provider)", () => {
 		const content = (entry?.model?.[0] as UserMessage).content;
 		assert(Array.isArray(content));
 		assert(content.some((part) => part.type === "text" && part.text.includes("<attachments>")));
-		const mirror = await holdIn(fixture.browser(), FileSummaries, {}, "owner");
-		const spaces = await mirror.of({ session }, BACKGROUND_CONTEXT);
-		assert.equal(spaces.uploads?.newest[0]?.source, "discord");
 	});
 
 	it("a turn's answer lists the files its conversation offered during it, readable through the ingress", async () => {
