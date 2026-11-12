@@ -165,22 +165,26 @@ export class Browser {
 		return response.result.value;
 	}
 	wait(expression: string): Promise<void> {
-		return poll(async () => {
-			try {
-				return await this.evaluate<boolean>(`Boolean(${expression})`);
-			} catch (error) {
-				// A cross-document redirect can invalidate the current JS context
-				// between DevTools evaluation and the result. Poll the next document.
-				if (
-					error instanceof Error &&
-					/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id/.test(
-						error.message,
+		return poll(
+			async () => {
+				try {
+					return await this.evaluate<boolean>(`Boolean(${expression})`);
+				} catch (error) {
+					// A cross-document redirect can invalidate the current JS context
+					// between DevTools evaluation and the result. Poll the next document.
+					if (
+						error instanceof Error &&
+						/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id/.test(
+							error.message,
+						)
 					)
-				)
-					return false;
-				throw error;
-			}
-		}, 30_000, expression);
+						return false;
+					throw error;
+				}
+			},
+			30_000,
+			expression,
+		);
 	}
 	/** Gives this profile the local owner's session cookie, as the owner's sign-in link would. */
 	async signIn(owner: { readonly port: number; readonly cookie: string }): Promise<void> {
