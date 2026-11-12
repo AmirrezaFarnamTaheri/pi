@@ -140,7 +140,18 @@ describe("sheet parity", { skip: !browserTests }, () => {
 	after(async () => {
 		await call("Browser.close").catch(() => {});
 		socket?.close();
-		process?.kill("SIGTERM");
+		if (process) {
+			// CDP acknowledges Browser.close before the browser finishes writing its profile.
+			// Wait for the process to exit before deleting the still-active directory.
+			const exited = () => process.exitCode !== null || process.signalCode !== null;
+			process.kill("SIGTERM");
+			try {
+				await poll(exited, 5_000, "sheet Chromium shutdown");
+			} catch {
+				process.kill("SIGKILL");
+				await poll(exited, 5_000, "sheet Chromium termination");
+			}
+		}
 		await fixture?.close();
 		if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 	});
