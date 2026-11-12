@@ -5,7 +5,7 @@ This repository is a fork of [earendil-works/pi](https://github.com/earendil-wor
 ## Workflows that remain
 
 - \`ci.yml\`: builds, type checks, linting and tests on main and pull requests.
-- \`fork-github-release.yml\`: builds six binary archives, a source tarball and SHA256SUMS. Runs smoke tests on Linux, Windows and macOS, then publishes a GitHub prerelease on this fork only.
+- \`fork-github-release.yml\`: prepares a verified source archive and an immediately visible prerelease, then independently builds, installs, smoke-tests and publishes each platform archive on its native runner. Each archive includes a standalone installer and per-platform SHA256SUMS; one failed platform does not hold back the others.
 - \`sync-upstream.yml\`: weekly/manual proposal for merging upstream main into the fork via a pull request, never an automatic merge.
 - `envelope-compat.yml`: runs the Envelope source regression suite against this fork's built Pi CLI and verifies actual RPC extension registration.
 - \`npm-audit.yml\`: dependency checks on demand and daily.
