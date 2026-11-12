@@ -116,10 +116,12 @@ describe("framed by the Radius shell", { skip: !browserTests }, () => {
 		assert.equal(await browser.evaluate<number>("history.length"), entries + 1);
 
 		// The browser's Back returns the app to where it was, and the shell's URL with it; Forward again.
-		await browser.evaluate("history.back()");
+		// The app owns the navigation entry in the child frame; ask that frame
+		// to traverse its history, then verify the shell mirrors the resulting URL.
+		await inApp("history.back()");
 		await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
 		assert.equal(await inApp<string>("location.pathname"), start);
-		await browser.evaluate("history.forward()");
+		await inApp("history.forward()");
 		await browser.wait(`location.pathname === ${JSON.stringify(`${BRAIN}/s/${session.id}`)}`);
 		// Only addresses went to the shell, and only to its origin (else the stand-in would not have seen them).
 		assert.ok((await log()).every((message) => message.type === "ready" || message.type === "location"));

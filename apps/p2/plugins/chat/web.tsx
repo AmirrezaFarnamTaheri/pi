@@ -850,7 +850,16 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	const child = children?.[sessionId]?.find((entry) => entry.conversationId === conversationId);
 	// A code mode script's one-shot agent: read-only, opened from the script's tool card.
 	const oneShot = child?.kind === "agent";
-	useCommandRouteTarget(viewTarget(session, conversationId, child));
+	// The guest can have a live grant and usable chat before its catalog row arrives.
+	// Register a session target in that interval so Cmd+K can show commands
+	// authorized by the grant. The row replaces this fallback when it arrives.
+	const shared = !owner && grantMode(grant, sessionId) !== undefined;
+	useCommandRouteTarget(
+		viewTarget(session, conversationId, child) ??
+			(!session && shared && !child
+				? { type: "session", id: sessionId, kind: "Session", label: "" }
+				: undefined),
+	);
 	// Where the viewed conversation works: a subagent may have its own location (e.g. a git worktree, or another machine).
 	const viewLocation = conversationLocation(session, child);
 	const viewCwd = viewLocation?.cwd;

@@ -343,6 +343,9 @@ describe("command menu", { skip: !browserTests }, () => {
 			// "arch": the Archive command, best first; the Model group has no row and hides.
 			await type("arch");
 			await browser.wait(`${SELECTED}==='Archive session'`);
+			// The option list filters on a deferred query and its live region follows
+			// DOM mutations; both must settle before inspecting their consistency.
+			await browser.wait(COUNTED);
 			const typed = await menu();
 			assert.ok(!typed!.groups.some(([heading]) => heading === "Model"), JSON.stringify(typed?.groups));
 			// A group without rows stays in the list, hidden by CSS (the session search's group renders its own rows).
