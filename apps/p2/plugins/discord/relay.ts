@@ -459,7 +459,7 @@ export class Relay {
 				(message) => message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId),
 			))
 				if (message.author.id !== port.botId && !this.#isCommand(binding, message, port.botId))
-				window.add("here", message);
+					window.add("here", message);
 		}
 		if (!window.has(trigger.id)) window.add("here", trigger);
 		const plural = (count: number) => `${count} message${count === 1 ? "" : "s"}`;
