@@ -50,42 +50,72 @@ export class Browser {
 		});
 	}
 	static async start(flags: string[] = []): Promise<Browser> {
-		const profile = mkdtempSync(join(tmpdir(), "p2-browser-"));
-		const process = spawn(
-			chromium,
-			[
-				...(globalThis.process.env.PREFIX ? [`--browser-subprocess-path=${chromium}`] : []),
-				"--headless=new",
-				"--no-sandbox",
-				"--no-zygote",
-				"--disable-gpu",
-				"--disable-dev-shm-usage",
-				"--remote-debugging-address=127.0.0.1",
-				"--remote-debugging-port=0",
-				`--user-data-dir=${profile}`,
-				...flags,
-				"about:blank",
-			],
-			{ stdio: "ignore" },
-		);
-		await poll(() => existsSync(join(profile, "DevToolsActivePort")), 20_000, "Chromium debugging port");
-		const port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
-		const targets = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
-			type: string;
-			webSocketDebuggerUrl: string;
-		}[];
-		// Google Chrome also lists its component extensions' background pages; drive the tab.
-		const page = targets.find((target) => target.type === "page") ?? targets[0]!;
-		const socket = new WebSocket(page.webSocketDebuggerUrl);
-		await new Promise<void>((resolve, reject) => {
-			socket.once("open", resolve);
-			socket.once("error", reject);
-		});
-		const browser = new Browser(process, profile, socket);
-		await browser.call("Page.enable");
-		await browser.call("Page.setLifecycleEventsEnabled", { enabled: true });
-		return browser;
+		// A heavily loaded CI runner may fail to bring up the first Chromium process.
+		// Retry startup, but keep the test failing with Chromium's diagnostics if neither attempt works.
+		let lastError: unknown;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const profile = mkdtempSync(join(tmpdir(), "p2-browser-"));
+			const process = spawn(
+				chromium,
+				[
+					...(globalThis.process.env.PREFIX ? [`--browser-subprocess-path=${chromium}`] : []),
+					"--headless=new",
+					"--no-sandbox",
+					"--no-zygote",
+					"--disable-gpu",
+					"--disable-dev-shm-usage",
+					"--remote-debugging-address=127.0.0.1",
+					"--remote-debugging-port=0",
+					`--user-data-dir=${profile}`,
+					...flags,
+					"about:blank",
+				],
+				{ stdio: ["ignore", "ignore", "pipe"] },
+			);
+			let diagnostics = "";
+			process.stderr?.on("data", (chunk: Buffer) => {
+				diagnostics = (diagnostics + chunk.toString()).slice(-4000);
+			});
+			process.on("error", (error) => {
+				diagnostics = `${diagnostics}\n${error.message}`;
+			});
+			let socket: WebSocket | undefined;
+			try {
+				const activePort = join(profile, "DevToolsActivePort");
+				await poll(
+					() => existsSync(activePort) || process.exitCode !== null || process.signalCode !== null,
+					30_000,
+					"Chromium debugging port",
+				);
+				if (!existsSync(activePort)) throw new Error("Chromium exited before opening its debugging port");
+				const port = readFileSync(activePort, "utf8").split("\n")[0];
+				const targets = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
+					type: string;
+					webSocketDebuggerUrl: string;
+				}[];
+				const page = targets.find((target) => target.type === "page") ?? targets[0];
+				if (!page) throw new Error("Chromium has no DevTools targets");
+				socket = new WebSocket(page.webSocketDebuggerUrl);
+				await new Promise<void>((resolve, reject) => {
+					socket!.once("open", resolve);
+					socket!.once("error", reject);
+				});
+				const browser = new Browser(process, profile, socket);
+				await browser.call("Page.enable");
+				await browser.call("Page.setLifecycleEventsEnabled", { enabled: true });
+				return browser;
+			} catch (error) {
+				lastError = new Error(
+					`Chromium startup attempt ${attempt + 1} failed: ${error instanceof Error ? error.message : String(error)}\n${diagnostics}`,
+				);
+				socket?.close();
+				process.kill("SIGKILL");
+				rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+			}
+		}
+		throw lastError;
 	}
+
 	/** Sends a DevTools command to the page, or to an attached target's flat session (`evaluateInFrame`). */
 	call(method: string, params: object = {}, sessionId?: string): Promise<unknown> {
 		return new Promise((resolve, reject) => {
