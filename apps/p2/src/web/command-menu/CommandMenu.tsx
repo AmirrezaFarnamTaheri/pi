@@ -13,7 +13,16 @@ import {
 	useState,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { Commands, getNavigation, useCanWrite, useHost, useOwner, useRegistry, useRoute, useShownModal } from "../../runtime/web.tsx";
+import {
+	Commands,
+	getNavigation,
+	useCanWrite,
+	useHost,
+	useOwner,
+	useRegistry,
+	useRoute,
+	useShownModal,
+} from "../../runtime/web.tsx";
 import { useComposerState } from "../composer-state.tsx";
 import { type CommandMenuActions, CommandMenuContext, type CommandMenuMeta, type CommandMenuValue } from "./context.ts";
 import { Input, Target } from "./Header.tsx";
