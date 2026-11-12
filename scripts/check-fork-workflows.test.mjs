@@ -135,9 +135,9 @@ test("P2 CI runs the full test-file set in isolated bounded shards", () => {
 test("fork prerelease verifies exact main P2 CI and smoke-tests all six native architectures", () => {
   const release = readFileSync(join(import.meta.dirname, "..", ".github/workflows/fork-github-release.yml"), "utf8");
   const build = release.slice(release.indexOf("  build:"), release.indexOf("  smoke-test:"));
-  assert.match(build, /actions\\/workflows\\/ci\\.yml\\/runs/, "verify exact-SHA core CI");
-  assert.match(build, /actions\\/workflows\\/p2-ci\\.yml\\/runs/, "verify exact-SHA P2 extended CI");
-  assert.equal((build.match(/verify-fork-release-ci\\.mjs "\\$GITHUB_SHA"/g) ?? []).length, 2, "verify both suites");
+  assert.match(build, /actions\/workflows\/ci\.yml\/runs/, "verify exact-SHA core CI");
+  assert.match(build, /actions\/workflows\/p2-ci\.yml\/runs/, "verify exact-SHA P2 extended CI");
+  assert.equal((build.match(/verify-fork-release-ci\.mjs "\$GITHUB_SHA"/g) ?? []).length, 2, "verify both suites");
   const smoke = release.slice(release.indexOf("  smoke-test:"), release.indexOf("  publish-github-release:"));
   const required = [
     ["ubuntu-latest", "linux-x64", "X64"],
@@ -153,6 +153,6 @@ test("fork prerelease verifies exact main P2 CI and smoke-tests all six native a
     required.map(([runner, platform, arch]) => ({ runner, platform, arch })),
     "each supported platform must use its matching native runner",
   );
-  assert.match(smoke, /matrix\\.platform/, "use the selected platform archive");
+  assert.match(smoke, /matrix\.platform/, "use the selected platform archive");
   assert.match(smoke, /RUNNER_ARCH/, "verify native runner architecture");
 });
