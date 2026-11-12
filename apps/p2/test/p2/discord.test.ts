@@ -945,7 +945,7 @@ describe("discord relay", () => {
 		await relay.onMessage("bot-a", trigger);
 		const input = sessions.delivered[0]?.text ?? "";
 		assert.match(input, /human 204/);
-		assert.match(input, /Other bot \\(bot, <@other-bot>\\): @Pi review this bot request/);
+		assert.match(input, /Other bot \(bot, <@other-bot>\): @Pi review this bot request/);
 	});
 
 	it("does not advance the cursor after an incomplete bounded reverse-history scan", async () => {
