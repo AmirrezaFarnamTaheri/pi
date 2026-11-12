@@ -197,10 +197,14 @@ export class Browser {
 		await this.evaluate(await buildBrowserScript(fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))));
 	}
 	async click(selector: string): Promise<void> {
-		await this.wait(`document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`);
+		await this.wait(
+			`document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`,
+		);
 		// A test may click an older transcript row outside the viewport. Like a
 		// pointer-driven browser, bring it into view before checking hit-testing.
-		await this.evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: "center", inline: "nearest" })`);
+		await this.evaluate(
+			`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: "center", inline: "nearest" })`,
+		);
 		await this.wait(
 			`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)return false;for(let p=e;p;p=p.parentElement)if(p.getAnimations().some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.width>0&&r.height>0&&e.contains(hit); })()`,
 		);
