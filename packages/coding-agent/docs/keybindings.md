@@ -54,7 +54,7 @@ Examples: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `super+k`, `ctrl+sup
 | `tui.editor.cursorDown` | `down` | Move cursor down, browsing newer history at the bottom |
 | `tui.editor.historyPrevious` | None | Select the previous prompt history entry |
 | `tui.editor.historyNext` | None | Select the next prompt history entry |
-| `tui.editor.cursorLeft` | `left`, `ctrl+b` | Move cursor left |
+| `tui.editor.cursorLeft` | `left` | Move cursor left (`Ctrl+B` starts a background agent) |
 | `tui.editor.cursorRight` | `right`, `ctrl+f` | Move cursor right |
 | `tui.editor.cursorWordLeft` | `alt+left`, `ctrl+left`, `alt+b` | Move cursor word left |
 | `tui.editor.cursorWordRight` | `alt+right`, `ctrl+right`, `alt+f` | Move cursor word right |
@@ -106,8 +106,8 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `tui.altScreen.pageDown` | `pageDown` | Scroll the transcript down by one page |
 | `tui.altScreen.halfPageUp` | None | Scroll the transcript up by half a page |
 | `tui.altScreen.halfPageDown` | None | Scroll the transcript down by half a page |
-| `tui.altScreen.lineUp` | None | Scroll the transcript up by one line |
-| `tui.altScreen.lineDown` | None | Scroll the transcript down by one line |
+| `tui.altScreen.lineUp` | `shift+up` | Scroll the transcript up by one line |
+| `tui.altScreen.lineDown` | `shift+down` | Scroll the transcript down by one line |
 | `tui.altScreen.previousPrompt` | `ctrl+shift+up`, `ctrl+up` (`ctrl+up` only on Windows and WSL) | Jump to the previous marked message |
 | `tui.altScreen.nextPrompt` | `ctrl+shift+down`, `ctrl+down` (`ctrl+down` only on Windows and WSL) | Jump to the next marked message |
 | `tui.altScreen.search` | `ctrl+shift+f` (`ctrl+f` on Windows and WSL) | Search the rendered transcript |
@@ -117,7 +117,16 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `tui.altScreen.top` | `ctrl+home` | Scroll to the beginning of the transcript |
 | `tui.altScreen.bottom` | `ctrl+end` | Scroll to the transcript end and follow new output |
 
-### Application
+#
+### Background agent sessions
+
+Write a prompt in the editor and press `Ctrl+B`. Pi starts a separate agent process with the current working directory, model, and thinking level, then immediately returns you to the foreground editor. This is a *new session*, not a detached running turn: it does not inherit the current conversation context or write to its session file. The current foreground run, if any, keeps going. The prompt stays in the editor if the new process cannot be started.
+
+Pi displays the background process ID, the `output.log` path, and the isolated session directory in `~/.pi/agent/background-tasks/`. Inspect output with `Get-Content -Wait <output.log>` in PowerShell or `tail -f <output.log>` on Unix. Background tasks keep working after closing the interactive TUI, subject to normal OS process lifetime and credentials. To cancel one, terminate the PID shown when it was started. This does not automatically detach an already-running foreground turn.
+
+`Shift+Up` and `Shift+Down` scroll the fullscreen transcript one line at a time without changing the editor cursor. If your terminal intercepts these shortcuts for text selection, configure the terminal to forward them to Pi. The existing Page Up/Down and mouse wheel still work.
+
+## Application
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
@@ -163,7 +172,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; in fullscreen mode, copy the active selection when `fullscreenCopyOnSelect` is `false`; otherwise copy the last assistant message. On OAuth sign-in screens, copy the sign-in URL |
-| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
+| `app.message.background` | `ctrl+b` | Launch the draft prompt in a new, independent background agent session |\n| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
 ### Tree Navigation
