@@ -84,7 +84,9 @@ describe("overlapping startup and replacement session rebinds", () => {
 			applyRuntimeSettings: () => events.push("apply"),
 			programStatus: { reset: () => {} },
 			renderCurrentSessionState: () => {},
-			bindCurrentSessionExtensions: async () => events.push("bind"),
+			bindCurrentSessionExtensions: async () => {
+				events.push("bind");
+			},
 			subscribeToAgent: () => events.push("subscribe"),
 			updateAvailableProviderCount: async () => {},
 			updateEditorBorderColor: () => {},
@@ -94,5 +96,4 @@ describe("overlapping startup and replacement session rebinds", () => {
 		expect(enable).toHaveBeenCalledTimes(1);
 		expect(events).toEqual(["apply", "bind", "subscribe"]);
 	});
-
 });
