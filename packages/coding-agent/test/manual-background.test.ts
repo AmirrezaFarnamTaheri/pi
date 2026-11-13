@@ -48,7 +48,7 @@ describe("Ctrl+B running-command backgrounding", () => {
 					},
 					{ timeout: 8000 },
 				);
-				expect(await readFile(marker, "utf8")).toBe("started\\n");
+				expect((await readFile(marker, "utf8")).trim()).toBe("started");
 				expect(controller.hasActiveCommand).toBe(false);
 			} finally {
 				if (pid) killProcessTree(pid);
