@@ -4,16 +4,7 @@
  * lossless foreground spool for the TUI's streaming shell callbacks.
  */
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import {
-	closeSync,
-	existsSync,
-	openSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-	writeSync,
-} from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ShellConfig } from "../../utils/shell.ts";
 

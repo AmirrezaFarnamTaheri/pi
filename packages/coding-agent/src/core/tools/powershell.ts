@@ -89,10 +89,12 @@ export function createPowerShellToolDefinition(
 		...options,
 		operations: options?.operations ?? createLocalPowerShellOperations(options?.backgroundController),
 		// Default operations are local; injected operations may be remote and cannot be backgrounded.
-		...(options?.operations ? {} : {
-			backgroundShellConfig: getPowerShellConfig,
-			backgroundCommandTransform: preparePowerShellCommand,
-		}),
+		...(options?.operations
+			? {}
+			: {
+					backgroundShellConfig: getPowerShellConfig,
+					backgroundCommandTransform: preparePowerShellCommand,
+				}),
 	});
 }
 

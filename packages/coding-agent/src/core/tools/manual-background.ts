@@ -112,7 +112,10 @@ export async function executeDetachableShell(
 	const onAbort = () => rejectInterruption(new Error("aborted"));
 	options.signal?.addEventListener("abort", onAbort, { once: true });
 	if (options.signal?.aborted) onAbort();
-	const timeoutHandle = timeout !== undefined ? setTimeout(() => rejectInterruption(new Error(`timeout:${timeout}`)), timeout * 1_000) : undefined;
+	const timeoutHandle =
+		timeout !== undefined
+			? setTimeout(() => rejectInterruption(new Error(`timeout:${timeout}`)), timeout * 1_000)
+			: undefined;
 	let stream: Awaited<ReturnType<typeof open>> | undefined;
 	try {
 		stream = await open(foregroundOutputPath, "r");
@@ -129,7 +132,10 @@ export async function executeDetachableShell(
 				const { bytesRead } = await stream.read(chunk, 0, chunk.length, offset);
 				if (!bytesRead) break;
 				offset += bytesRead;
-				const outcome = await Promise.race([Promise.resolve(options.onData(chunk.subarray(0, bytesRead))), interruption]);
+				const outcome = await Promise.race([
+					Promise.resolve(options.onData(chunk.subarray(0, bytesRead))),
+					interruption,
+				]);
 				if (outcome === DETACHED) break;
 			}
 			if (requested) continue;
@@ -151,7 +157,8 @@ export async function executeDetachableShell(
 				completed = true;
 				if (state.error) throw new Error(`Background command failed: ${state.error}`);
 				if (typeof state.exitCode === "number") return { exitCode: state.exitCode };
-				return { exitCode: state.signal ? 128 + (osConstants.signals[state.signal as keyof typeof osConstants.signals] ?? 0) : 1 };
+				const signalCode = osConstants.signals[state.signal as keyof typeof osConstants.signals];
+				return { exitCode: typeof signalCode === "number" ? 128 + signalCode : 1 };
 			}
 			const outcome = await Promise.race([
 				new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
