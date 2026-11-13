@@ -9,6 +9,8 @@ import { killProcessTree, type ShellConfig } from "../../utils/shell.ts";
 export interface BackgroundShellResult {
 	pid: number;
 	outputPath: string;
+	/** Uncapped foreground spool; only requested for commands that Ctrl+B may detach. */
+	foregroundOutputPath?: string;
 }
 
 /** Hard maximum of captured background output; excess bytes are drained, never written. */
@@ -114,6 +116,7 @@ export async function startBackgroundShell(
 	shellConfig: ShellConfig,
 	env: NodeJS.ProcessEnv,
 	tempFilePrefix: string,
+	options?: { captureForegroundOutput?: boolean },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
 	const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
@@ -126,6 +129,7 @@ export async function startBackgroundShell(
 				cwd,
 				shellConfig,
 				maxLogBytes: BACKGROUND_LOG_MAX_BYTES,
+				captureForegroundOutput: options?.captureForegroundOutput === true,
 			}),
 			{ flag: "wx", mode: 0o600 },
 		);
@@ -152,7 +156,11 @@ export async function startBackgroundShell(
 					error?: string;
 				};
 				if (typeof state.childPid === "number" && state.childPid > 0) {
-					return { pid: state.childPid, outputPath: join(folder, "output.log") };
+					return {
+						pid: state.childPid,
+						outputPath: join(folder, "output.log"),
+						...(options?.captureForegroundOutput ? { foregroundOutputPath: join(folder, "foreground.log") } : {}),
+					};
 				}
 				if (state.status === "failed") {
 					throw new Error(`Background command failed: ${state.error || "spawn error"}`);
