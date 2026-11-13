@@ -42,7 +42,7 @@ describe("CustomEditor background prompt shortcut", () => {
 		const cursorBefore = editor.getCursor();
 		let launched = 0;
 		editor.onAction("app.message.background", () => launched++);
-		editor.handleInput("\\x02");
+		editor.handleInput("\x02");
 		expect(launched).toBe(1);
 		expect(editor.getText()).toBe("background this task");
 		expect(editor.getCursor()).toEqual(cursorBefore);
