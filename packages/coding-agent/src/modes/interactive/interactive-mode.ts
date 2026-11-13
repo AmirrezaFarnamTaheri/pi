@@ -2138,7 +2138,7 @@ export class InteractiveMode {
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		const session = this.session;
-		session.manualBackgroundController.enable();
+		session?.manualBackgroundController?.enable();
 
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;

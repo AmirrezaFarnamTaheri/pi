@@ -1004,12 +1004,17 @@ forEachCodec(() => {
 			await transported();
 			expect(counts()["chord.link.inflates"]).toBeUndefined();
 			peer.send({ kind: "event", events: [{ hold, member: PLAYER.events.paddle!, at: 1, value: deflated(2) }] });
-			// The web inflate takes a few turns of its own.
-			for (let turn = 0; turn < 50 && seen.length === 0; turn++) await transported();
-			await transported();
-			expect(seen).toEqual([2]);
+			// DecompressionStream may complete on a later event-loop turn under CI load.
+			// Poll the observable delivery and ack rather than assuming 50 scheduler turns suffice.
+			await vi.waitFor(
+				async () => {
+					await transported();
+					expect(seen).toEqual([2]);
+					expect(eventAcks(peer).reduce((sum, events) => sum + events, 0)).toBe(2);
+				},
+				{ timeout: 10_000, interval: 20 },
+			);
 			expect(counts()["chord.link.inflates"]).toBe(1);
-			expect(eventAcks(peer).reduce((sum, events) => sum + events, 0)).toBe(2);
 		});
 
 		it("close the link for a member index outside the bound version (a protocol error)", async () => {
