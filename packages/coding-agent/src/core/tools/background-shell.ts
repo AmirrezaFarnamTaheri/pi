@@ -19,8 +19,8 @@ export const BACKGROUND_SUPERVISOR_FLAG = "--pi-internal-background-supervisor";
 /** A compiled Pi binary cannot interpret Node's -e; use Pi's internal worker route. */
 export function backgroundSupervisorInvocation(
 	executable: string,
-	argv: readonly string[],
-	execArgv: readonly string[],
+	_argv: readonly string[],
+	_execArgv: readonly string[],
 	folder: string,
 ): { executable: string; args: string[] } {
 	const runtime = basename(executable).toLowerCase();
@@ -29,7 +29,6 @@ export function backgroundSupervisorInvocation(
 	}
 	return { executable, args: [BACKGROUND_SUPERVISOR_FLAG, folder] };
 }
-
 
 /**
  * Self-contained supervisor source. Its Node executable and this source ship
