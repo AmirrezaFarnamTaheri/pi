@@ -118,13 +118,13 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `tui.altScreen.bottom` | `ctrl+end` | Scroll to the transcript end and follow new output |
 
 #
-### Background agent sessions
+### Background commands
 
-Write a prompt in the editor and press `Ctrl+B`. Pi starts a separate agent process with the current working directory, model, and thinking level, then immediately returns you to the foreground editor. This is a *new session*, not a detached running turn: it does not inherit the current conversation context or write to its session file. The current foreground run, if any, keeps going. The prompt stays in the editor if the new process cannot be started.
+While a local shell command (for example a long test suite) is running, press `Ctrl+B` to detach **that same process** into the background. This works with agent-issued local Bash/PowerShell tool calls and direct `!` shell commands in the interactive UI; it never launches another agent or reruns the command. The shell result shows its PID and persistent `output.log` path. You can keep chatting while the process continues; later inspect the log with `Get-Content -Wait <path>` on Windows or `tail -f <path>` on Unix. Ctrl+B does nothing destructive if there is no active local command. Remote/custom shell backends must provide their own lifecycle management.
 
-Pi displays the background process ID, the `output.log` path, and the isolated session directory in `~/.pi/agent/background-tasks/`. Inspect output with `Get-Content -Wait <output.log>` in PowerShell or `tail -f <output.log>` on Unix. Background tasks keep working after closing the interactive TUI, subject to normal OS process lifetime and credentials. To cancel one, terminate the PID shown when it was started. This does not automatically detach an already-running foreground turn.
+For commands known in advance to take a long time, the agent should use the local Bash/PowerShell tool's `background: true` option *from the outset*, then check the log and status before claiming the task passed. This saves waiting without skipping tests.
 
-`Shift+Up` and `Shift+Down` scroll the fullscreen transcript one line at a time without changing the editor cursor. If your terminal intercepts these shortcuts for text selection, configure the terminal to forward them to Pi. The existing Page Up/Down and mouse wheel still work.
+`Shift+Up` and `Shift+Down` scroll the fullscreen transcript one line at a time without changing the editor cursor. If your terminal intercepts these shortcuts for selection, configure it to forward the keys to Pi. Page Up/Down and the mouse wheel remain available.
 
 ## Application
 
@@ -172,7 +172,7 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; in fullscreen mode, copy the active selection when `fullscreenCopyOnSelect` is `false`; otherwise copy the last assistant message. On OAuth sign-in screens, copy the sign-in URL |
-| `app.message.background` | `ctrl+b` | Launch the draft prompt in a new, independent background agent session |\n| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
+| `app.command.background` | `ctrl+b` | Detach the currently running local shell command to the background without restarting it |\n| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
 ### Tree Navigation
