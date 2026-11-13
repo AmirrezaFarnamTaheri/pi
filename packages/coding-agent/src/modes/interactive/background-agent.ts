@@ -85,6 +85,7 @@ export async function startBackgroundAgent(\n  prompt: string,\n  options: Backg
 		});
 		if (!child.pid) throw new Error("Pi background agent did not receive a process ID");
 		// Deliberately do not write the task prompt to any file or argv.
+		if (!child.stdin) throw new Error("Background agent stdin pipe is missing");
 		child.stdin.on("error", () => {}); // a failed child is reported in its log
 		child.stdin.end(prompt + "\n");
 		child.unref();
