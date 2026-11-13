@@ -143,7 +143,7 @@ export function createLocalShellOperations(
 					command,
 					cwd,
 					shellConfig,
-					{ onData, signal, timeout, env },
+					{ onData, signal, timeout, env: env ?? getShellEnv() },
 					manualBackgroundController,
 					"pi-shell",
 				);
@@ -371,6 +371,8 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 	/** Explicitly allow a built-in local shell implementation to run detached. Never set for remote operations. */
 	backgroundShellConfig?: () => ShellConfig;
+	/** Normalize commands before explicitly detached local execution (e.g. Windows PowerShell 5.1). */
+	backgroundCommandTransform?: (command: string) => string;
 	/** Interactive Ctrl+B controller; only the local shell may be detached. */
 	backgroundController?: ManualBackgroundController;
 }
@@ -437,7 +439,7 @@ export function createShellToolDefinition(
 				if (signal?.aborted) throw new Error("aborted");
 				const startedAt = performance.now();
 				const { pid, outputPath } = await startBackgroundShell(
-					spawnContext.command,
+					options?.backgroundCommandTransform?.(spawnContext.command) ?? spawnContext.command,
 					spawnContext.cwd,
 					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
