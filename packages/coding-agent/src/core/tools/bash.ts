@@ -14,7 +14,7 @@ import {
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
-import { type BackgroundedProcess, executeDetachableShell, ManualBackgroundController } from "./manual-background.ts";
+import { type BackgroundedProcess, executeDetachableShell, type ManualBackgroundController } from "./manual-background.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -134,7 +134,14 @@ export function createLocalShellOperations(
 			}
 			const shellConfig = resolveShellConfig();
 			if (manualBackgroundController?.isEnabled) {
-				return executeDetachableShell(command, cwd, shellConfig, { onData, signal, timeout, env }, manualBackgroundController, "pi-shell");
+				return executeDetachableShell(
+					command,
+					cwd,
+					shellConfig,
+					{ onData, signal, timeout, env },
+					manualBackgroundController,
+					"pi-shell",
+				);
 			}
 			try {
 				await fsAccess(cwd, constants.F_OK);
@@ -303,7 +310,10 @@ export function createLocalShellOperations(
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string; backgroundController?: ManualBackgroundController }): BashOperations {
+export function createLocalBashOperations(options?: {
+	shellPath?: string;
+	backgroundController?: ManualBackgroundController;
+}): BashOperations {
 	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath), options?.backgroundController);
 }
 
@@ -381,7 +391,9 @@ export function createShellToolDefinition(
 	config: ShellToolConfig,
 	options?: BashToolOptions,
 ): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
-	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath, backgroundController: options?.backgroundController });
+	const ops =
+		options?.operations ??
+		createLocalBashOperations({ shellPath: options?.shellPath, backgroundController: options?.backgroundController });
 	const commandPrefix = options?.commandPrefix;
 	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
 	const spawnHook = options?.spawnHook;
@@ -540,7 +552,9 @@ export function createShellToolDefinition(
 						const text = `Background command running (PID ${pid}). Output log: ${outputPath}. This is the same process that was already executing, not a restarted command.`;
 						return {
 							content: [{ type: "text", text }],
-							details: snapshot.truncation.truncated ? { truncation: snapshot.truncation, fullOutputPath: snapshot.fullOutputPath } : undefined,
+							details: snapshot.truncation.truncated
+								? { truncation: snapshot.truncation, fullOutputPath: snapshot.fullOutputPath }
+								: undefined,
 							structuredContent: {
 								output: snapshot.content,
 								truncated: snapshot.truncation.truncated,
