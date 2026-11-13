@@ -565,10 +565,12 @@ export class ModelRuntime implements Models {
 
 	/** A memorable display name, separate from the stable provider ID used by credentials and sessions. */
 	getAccountLabel(providerId: string): string {
-		return this.accountProfiles.get(providerId)?.label ??
+		return (
+			this.accountProfiles.get(providerId)?.label ??
 			this.accountNames.get(providerId) ??
 			this.getProvider(providerId)?.name ??
-			providerId;
+			providerId
+		);
 	}
 
 	/** Rename either an additional account or the original provider without touching credentials. */
