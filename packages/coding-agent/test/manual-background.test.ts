@@ -1,5 +1,5 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalBashOperations } from "../src/core/tools/bash.ts";
@@ -56,6 +56,71 @@ describe("Ctrl+B running-command backgrounding", () => {
 			}
 		},
 	);
+
+
+	it.skipIf(process.platform === "win32")("preserves every foreground byte even after the retained background log hits its cap", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-detach-lossless-"));
+		const controller = new ManualBackgroundController();
+		controller.enable();
+		let observed = 0;
+		try {
+			const script = 'process.stdout.write("x".repeat(2_500_000))';
+			const result = await createLocalBashOperations({ backgroundController: controller }).exec(
+				`${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+				cwd,
+				{ onData: (chunk) => { observed += chunk.length; } },
+			);
+			expect(result.exitCode).toBe(0);
+			expect(result.background).toBeUndefined();
+			expect(observed).toBe(2_500_000);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("Ctrl+B detaches a command even when its foreground output callback never resolves", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-detach-stalled-"));
+		const controller = new ManualBackgroundController();
+		controller.enable();
+		let received = false;
+		try {
+			const script = 'process.stdout.write("started\\\\n"); setTimeout(() => process.stdout.write("done\\\\n"), 500)';
+			const running = createLocalBashOperations({ backgroundController: controller }).exec(
+				`${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+				cwd,
+				{ onData: () => { received = true; return new Promise<void>(() => {}); } },
+			);
+			await vi.waitFor(() => expect(received).toBe(true), { timeout: 8_000 });
+			expect(controller.backgroundCurrentCommand()).toBe(true);
+			const detached = await Promise.race([
+				running,
+				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("Detach blocked on output")), 2_000)),
+			]);
+			expect(detached.background?.pid).toBeGreaterThan(0);
+			await vi.waitFor(async () => {
+				const log = await readFile(detached.background!.outputPath, "utf8");
+				expect(log).toContain("done");
+			}, { timeout: 8_000 });
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it.skipIf(process.platform === "win32")("maps Unix termination signals to shell-compatible exit codes", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-detach-signal-"));
+		const controller = new ManualBackgroundController();
+		controller.enable();
+		try {
+			const result = await createLocalBashOperations({ backgroundController: controller }).exec(
+				"kill -TERM $",
+				cwd,
+				{ onData: () => {} },
+			);
+			expect(result.exitCode).toBe(128 + osConstants.signals.SIGTERM);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
 
 	it("does not enable detachment for a noninteractive command", async () => {
 		const controller = new ManualBackgroundController();
