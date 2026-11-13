@@ -5961,7 +5961,7 @@ export class InteractiveMode {
 			if ((!authType || authType === "oauth") && provider.auth.oauth) {
 				options.push({
 					id: provider.id,
-					name: provider.name,
+					name: this.session.modelRuntime.getAccountLabel(provider.id),
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5971,7 +5971,7 @@ export class InteractiveMode {
 			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
 				options.push({
 					id: provider.id,
-					name: provider.name,
+					name: this.session.modelRuntime.getAccountLabel(provider.id),
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -5989,7 +5989,7 @@ export class InteractiveMode {
 				const provider = this.session.modelRuntime.getProvider(providerId);
 				return {
 					id: providerId,
-					name: provider?.name ?? providerId,
+					name: this.session.modelRuntime.getAccountLabel(providerId),
 					authType: type,
 					status: { type, source: "stored credential" },
 					subscription: provider?.auth.oauth?.isSubscription === true,
