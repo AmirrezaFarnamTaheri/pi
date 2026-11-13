@@ -41,57 +41,86 @@ export function backgroundSupervisorInvocation(
 const SUPERVISOR = `
 "use strict";
 const fs=require("node:fs");
-const {spawn}=require("node:child_process");
+const {spawn,spawnSync}=require("node:child_process");
 const {join}=require("node:path");
 const folder=process.argv[1];
 const requestPath=join(folder,"request.json");
 const request=JSON.parse(fs.readFileSync(requestPath,"utf8"));
 fs.rmSync(requestPath,{force:true});
 const statePath=join(folder,"state.json");
-let fd=null,child=null,used=0,truncated=false,done=false;
+const detachPath=join(folder,"detached");
+let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false;
 const save=(patch)=>{
   const state={version:1,workerPid:process.pid,childPid:child?.pid??null,
-    outputTruncated:truncated,updatedAt:Date.now(),...patch};
+    outputTruncated:truncated,foregroundOutputTruncated:false,updatedAt:Date.now(),...patch};
   const tmp=statePath+"."+process.pid+".tmp";
   fs.writeFileSync(tmp,JSON.stringify(state),{mode:0o600});
   fs.renameSync(tmp,statePath);
 };
+const closeForeground=()=>{
+  if(foregroundFd!==null){fs.closeSync(foregroundFd);foregroundFd=null;}
+};
 const finish=(status,exitCode,signal,error)=>{
   if(done)return;
   done=true;
-  try{if(fd!==null){fs.closeSync(fd);fd=null;}}catch{}
+  try{if(fd!==null){fs.closeSync(fd);fd=null;}closeForeground();}catch{}
   try{save({status,exitCode,signal:signal||null,error:error||null,finishedAt:Date.now()});}
   catch{process.exitCode=1;}
 };
-const write=buf=>{
-  if(done||fd===null)return;
-  const remaining=request.maxLogBytes-used;
-  if(remaining<=0){if(buf.length>0)truncated=true;return;}
-  let count=Math.min(remaining,buf.length),pos=0;
+const stopChildTree=()=>{
+  if(!child?.pid)return;
+  try{
+    if(process.platform==="win32"){
+      spawnSync("taskkill",["/PID",String(child.pid),"/T","/F"],{windowsHide:true});
+    }else{
+      process.kill(-child.pid,"SIGKILL");
+    }
+  }catch{try{child.kill();}catch{}}
+};
+const fail=e=>{
+  if(done)return;
+  stopChildTree();
+  finish("failed",null,null,e?.message||e?.code||String(e));
+};
+const writeFully=(target,buf,count)=>{
+  let pos=0;
   while(pos<count){
-    const n=fs.writeSync(fd,buf,pos,count-pos);
-    if(n<=0)throw new Error("background log write failed");
+    const n=fs.writeSync(target,buf,pos,count-pos);
+    if(n<=0)throw new Error("Background output write failed");
     pos+=n;
   }
+};
+const write=buf=>{
+  if(done)return;
+  if(foregroundFd!==null){
+    if(fs.existsSync(detachPath))closeForeground();
+    else writeFully(foregroundFd,buf,buf.length);
+  }
+  if(fd===null)return;
+  const remaining=request.maxLogBytes-used;
+  if(remaining<=0){if(buf.length>0)truncated=true;return;}
+  const count=Math.min(remaining,buf.length);
+  writeFully(fd,buf,count);
   used+=count;
   if(buf.length>count)truncated=true;
 };
 try{
   fd=fs.openSync(join(folder,"output.log"),"wx",0o600);
-  const opts=request.shellConfig;
-  const fromStdin=opts.commandTransport==="stdin";
-  child=spawn(opts.shell,fromStdin?opts.args:[...opts.args,request.command],{
+  if(request.captureForegroundOutput)foregroundFd=fs.openSync(join(folder,"foreground.log"),"wx",0o600);
+  const cfg=request.shellConfig;
+  const fromStdin=cfg.commandTransport==="stdin";
+  child=spawn(cfg.shell,fromStdin?cfg.args:[...cfg.args,request.command],{
     cwd:request.cwd,env:process.env,detached:process.platform!=="win32",
     stdio:[fromStdin?"pipe":"ignore","pipe","pipe"],windowsHide:true
   });
-  child.once("spawn",()=>save({status:"running",exitCode:null}));
-  child.once("error",e=>finish("failed",null,null,e.code||"spawn failed"));
+  child.once("spawn",()=>{try{save({status:"running",exitCode:null});}catch(e){fail(e);}});
+  child.once("error",fail);
   for(const stream of [child.stdout,child.stderr]){
-    stream.on("data",write);
-    stream.on("error",e=>finish("failed",null,null,e.code||"stream failure"));
+    stream.on("data",buf=>{try{write(buf);}catch(e){fail(e);}});
+    stream.on("error",fail);
   }
   if(fromStdin){
-    child.stdin.on("error",()=>{});
+    child.stdin.on("error",fail);
     child.stdin.end(request.command);
   }
   child.once("exit",()=>{
@@ -99,10 +128,7 @@ try{
     guard.unref();
   });
   child.once("close",(code,signal)=>finish(code===0?"completed":"failed",code,signal,null));
-}catch(e){
-  try{if(child?.pid)child.kill();}catch{}
-  finish("failed",null,null,e.code||"supervisor failure");
-}
+}catch(e){fail(e);}
 `;
 
 /**
