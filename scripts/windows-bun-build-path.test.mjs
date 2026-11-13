@@ -53,6 +53,31 @@ test("Bun receives the original Unix path even when cygpath is installed", () =>
 
 test("Release builder uses the tested compiler wrapper", () => {
   const build = readFileSync(join(scripts, "build-binaries.sh"), "utf8");
-  assert.match(build, /source \.\.\/\.\.\/scripts\/bun-compiler-path\.sh/);
+  assert.match(build, /source scripts\/bun-compiler-path\.sh/);
   assert.match(build, /pi_bun_compile "\$platform" "\$bun_target" "\$outfile"/);
+});
+
+
+test("Git Bash normalizes drive-letter release output roots before making directories", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-output-root-"));
+  try {
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const cygpath = join(bin, "cygpath");
+    writeFileSync(cygpath, "#!/bin/sh\n[ \"$1\" = '-u' ] || exit 4\nprintf '%s\\n' '/d/a/pi/pi/binaries'\n");
+    chmodSync(cygpath, 0o755);
+    const result = spawnSync("bash", ["-c", 'source "$HELPER"; pi_normalize_output_dir "$OUTDIR"'], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: bin + delimiter + (process.env.PATH ?? ""),
+        HELPER: join(scripts, "bun-compiler-path.sh"),
+        OUTDIR: String.raw`D:\a\pi\pi/binaries`,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "/d/a/pi/pi/binaries");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

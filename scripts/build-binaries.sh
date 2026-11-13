@@ -25,6 +25,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/bun-compiler-path.sh
 
 SKIP_INSTALL=false
 SKIP_BUILD=false
@@ -77,9 +78,7 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="packages/coding-agent/binaries"
 fi
-if [[ "$OUTPUT_DIR" != /* ]]; then
-    OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
-fi
+OUTPUT_DIR="$(pi_normalize_output_dir "$OUTPUT_DIR")"
 
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
@@ -102,7 +101,6 @@ fi
 
 echo "==> Building binaries..."
 cd packages/coding-agent
-source ../../scripts/bun-compiler-path.sh
 
 # Clean previous builds
 rm -rf "$OUTPUT_DIR"
