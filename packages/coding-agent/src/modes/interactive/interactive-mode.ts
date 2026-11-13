@@ -141,6 +141,7 @@ import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { reportBug } from "./bug-report.ts";
+import { startBackgroundAgent } from "./background-agent.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
@@ -416,6 +417,7 @@ export class InteractiveMode {
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
+	private backgroundSubmitInProgress = false;
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
@@ -3158,6 +3160,7 @@ export class InteractiveMode {
 			"app.message.copy",
 			() => void this.handleCopyCommand({ flashConfirmation: true, preferSelection: true }),
 		);
+		this.defaultEditor.onAction("app.message.background", () => void this.handleBackgroundPrompt());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
@@ -4580,6 +4583,42 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			throw error;
+		}
+	}
+
+
+	/**
+	 * Ctrl+B starts a new *independent* agent session. It does not pause, abort,
+	 * or write to the foreground session, and it works while a turn is streaming.
+	 */
+	private async handleBackgroundPrompt(): Promise<void> {
+		if (this.backgroundSubmitInProgress) return;
+		const draft = this.editor.getText();
+		const prompt = (this.editor.getExpandedText?.() ?? draft).trim();
+		if (!prompt) {
+			this.showStatus("Type a prompt before pressing Ctrl+B to send it to a background agent");
+			return;
+		}
+		this.backgroundSubmitInProgress = true;
+		try {
+			const model = this.session.model;
+			const result = await startBackgroundAgent(prompt, {
+				cwd: this.sessionManager.getCwd(),
+				agentDir: getAgentDir(),
+				...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+				thinkingLevel: this.session.thinkingLevel,
+			});
+			this.editor.addToHistory?.(prompt);
+			// Keep anything typed since the background launch started.
+			if (this.editor.getText() === draft) this.editor.setText("");
+			this.showStatus(`Background Pi agent started (PID ${result.pid}); output: ${result.outputPath}`);
+			this.showStatus(`Independent session stored in: ${result.sessionDir}`);
+			this.ui.requestRender();
+		} catch (error) {
+			// Retain the draft on failure so the user can retry.
+			this.showError(`Failed to start background agent: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			this.backgroundSubmitInProgress = false;
 		}
 	}
 
@@ -7308,6 +7347,7 @@ export class InteractiveMode {
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
+		const backgroundPrompt = this.getAppKeyDisplay("app.message.background");
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
