@@ -6080,14 +6080,19 @@ export class InteractiveMode {
 			...originals,
 			...aliases.map((profile) => ({ ...profile, original: false })),
 		];
-		const items = accounts.map((profile) => {
+		const baseLabels = accounts.map((profile) => {
+			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
+			return `${profile.label} · ${provider}`;
+		});
+		const duplicates = new Set(baseLabels.filter((name, index) => baseLabels.indexOf(name) !== index));
+		const items = accounts.map((profile, index) => {
 			const connected = runtime.getProviderAuthStatus(profile.id).configured;
 			const selected = this.session.model?.provider === profile.id;
-			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
+			const name = baseLabels[index]!;
 			return {
 				profile,
-				// Keep the provider ID visible so accounts with identical nicknames remain distinguishable.
-				label: `${selected ? "●" : connected ? "✓" : "○"} ${profile.label} · ${provider} · ${profile.original ? "main" : profile.id}`,
+				// Show stable IDs only when two accounts have the same nickname and provider.
+				label: `${selected ? "●" : connected ? "✓" : "○"} ${name}${duplicates.has(name) ? ` · ${profile.id}` : ""}`,
 			};
 		});
 		const signIn = "＋ Sign in";
@@ -6228,17 +6233,32 @@ export class InteractiveMode {
 					void (async () => {
 						const runtime = this.session.modelRuntime;
 						const selected = this.session.model;
-						if (
+						const connectedAfterRemoval = [
+							profile.sourceProviderId,
+							...runtime.getAccountProfiles()
+								.filter((account) => account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id)
+								.map((account) => account.id),
+						].filter((id) => id !== profile.id && runtime.hasConfiguredAuth(id)).length;
+						const rotationWillStop = connectedAfterRemoval < 2;
+						const activeNeedsSwitch =
 							selected?.provider === profile.id ||
-							(selected?.provider === "account-profiles" && selected.id === profile.sourceProviderId)
-						) {
-							const available = runtime.getAvailableSnapshot();
-							const fallback = available.find(
+							(rotationWillStop && selected?.provider === "account-profiles" && selected.id === profile.sourceProviderId);
+						const defaultProvider = this.settingsManager.getDefaultProvider();
+						const defaultNeedsUpdate =
+							defaultProvider === profile.id ||
+							(rotationWillStop && defaultProvider === "account-profiles" &&
+								this.settingsManager.getDefaultModel() === profile.sourceProviderId);
+						if (activeNeedsSwitch || defaultNeedsUpdate) {
+							const fallback = runtime.getAvailableSnapshot().find(
 								(model) =>
 									model.provider !== profile.id &&
 									!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
 							);
-							if (fallback) await this.session.setModel(fallback);
+							if (fallback && activeNeedsSwitch) {
+								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
+							} else if (fallback && defaultNeedsUpdate) {
+								this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
+							}
 						}
 						if (profile.original) await runtime.logout(profile.id);
 						else await runtime.removeAccountAlias(profile.id);
