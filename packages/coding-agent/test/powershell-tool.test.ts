@@ -56,7 +56,7 @@ describe("PowerShell background execution", () => {
 
 	it.skipIf(process.platform !== "win32")(
 		"starts a real detached PowerShell command and captures output",
-			async () => {
+		async () => {
 			const tool = createPowerShellTool(process.cwd());
 			const result = await tool.execute("local-ps", {
 				command: "Write-Output 'background-ready'; Start-Sleep -Milliseconds 500",
@@ -67,19 +67,19 @@ describe("PowerShell background execution", () => {
 			expect(data.background_output_path).toBeTruthy();
 			try {
 				await vi.waitFor(
-						async () => {
-					const output = await readFile(data.background_output_path!, "utf8");
-					expect(output).toContain("background-ready");
-				},
-						{ timeout: 10000 },
-					);
+					async () => {
+						const output = await readFile(data.background_output_path!, "utf8");
+						expect(output).toContain("background-ready");
+					},
+					{ timeout: 10000 },
+				);
 			} finally {
 				await rm(dirname(data.background_output_path!), {
-						recursive: true,
-						force: true,
-						maxRetries: 5,
-						retryDelay: 200,
-					});
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
 			}
 		},
 	);
