@@ -15,7 +15,7 @@ If an extension supplies a provider, Pi retains its additional account profiles 
 
 ## Enable automatic rotation
 
-Select **Enable automatic rotation** from `/login` or `/accounts`. This is **opt-in** and selects a virtual model under `account-profiles/<source-provider-id>`. To return to one account, use `/model` or choose **Choose a model from this account**.
+Select **Automatic account rotation** from `/login` or `/accounts`. Selecting the group enables it immediately without an additional confirmation step and selects a virtual model under `account-profiles/<source-provider-id>`. To return to one account, use `/model` or choose **Choose a model from this account**.
 
 - New user turns select available, independently authenticated identities round-robin, for the same physical model ID.
 - Tool continuations keep the identity used earlier in that turn.
@@ -35,4 +35,4 @@ The default gateway URL is `http://127.0.0.1:8045/v1`. Non-loopback gateways req
 
 Secret prompts mask values on-screen, clear their input buffer on completion/cancellation, and erase undo/kill-ring history when returning to ordinary input. Never paste credentials into chat messages or `account-profiles.json`.
 
-Account and rotation changes in this document are part of the unified **draft PR #14**, not the published v1.5.0 release. They require the complete CI/build/test matrix and benchmark checks before release.
+Account rotation selection persists when saved as the default or restored from a session. Routing may send the existing transcript and tool results to any signed-in account in the selected group; use separate sessions for unrelated identities.
