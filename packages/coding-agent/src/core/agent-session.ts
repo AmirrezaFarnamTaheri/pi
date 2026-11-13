@@ -149,6 +149,7 @@ import {
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { ManualBackgroundController } from "./tools/manual-background.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
@@ -403,6 +404,8 @@ export class AgentSession {
 
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
+	/** Enables Ctrl+B for the local command currently running in the interactive UI. */
+	readonly manualBackgroundController = new ManualBackgroundController();
 	private _pendingBashMessages: BashExecutionMessage[] = [];
 
 	// Extension system
@@ -3777,7 +3780,8 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, backgroundController: this.manualBackgroundController },
+					powershell: { backgroundController: this.manualBackgroundController },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -4024,7 +4028,7 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
+				options?.operations ?? createLocalBashOperations({ shellPath, backgroundController: this.manualBackgroundController }),
 				{
 					onChunk: (delta) => {
 						onChunk?.(delta);
