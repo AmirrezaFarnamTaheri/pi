@@ -3,7 +3,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "vitest";
-import { addAccountProfile, loadAccountProfiles, removeAccountProfile } from "../src/core/account-profiles.ts";
+import {
+	addAccountProfile,
+	loadAccountProfiles,
+	loadPrimaryAccountNames,
+	removeAccountProfile,
+	renameAccountProfile,
+	renamePrimaryAccount,
+} from "../src/core/account-profiles.ts";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -41,4 +48,34 @@ test("keeps profiles independent of credentials, even when the provider source c
 	const profile = addAccountProfile(path, "llama.cpp", ["llama.cpp"]);
 	assert.match(profile.id, /^account-llama-cpp-/);
 	assert.equal(profile.sourceProviderId, "llama.cpp");
+});
+
+test("renames a single account without changing its identity or sibling accounts", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-rename-account-"));
+	directories.push(dir);
+	const path = join(dir, "accounts.json");
+	const work = addAccountProfile(path, "anthropic", ["anthropic"], "Work");
+	const personal = addAccountProfile(path, "anthropic", ["anthropic", work.id], "Personal");
+	const renamed = renameAccountProfile(path, work.id, "  Client projects  ");
+	assert.deepEqual(renamed, { ...work, label: "Client projects" });
+	assert.deepEqual(loadAccountProfiles(path), [{ ...work, label: "Client projects" }, personal]);
+	assert.equal(renameAccountProfile(path, "missing", "Unused"), undefined);
+	assert.throws(() => renameAccountProfile(path, work.id, "   "), /name/i);
+	assert.throws(() => renameAccountProfile(path, work.id, "bad\\nname"), /name/i);
+	assert.throws(() => renameAccountProfile(path, work.id, "a".repeat(65)), /name/i);
+	assert.deepEqual(loadAccountProfiles(path)[1], personal);
+});
+
+test("primary names survive adding, renaming and deleting additional accounts", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-primary-name-"));
+	directories.push(dir);
+	const path = join(dir, "accounts.json");
+	assert.equal(renamePrimaryAccount(path, "anthropic", "  Main work  "), "Main work");
+	const alternate = addAccountProfile(path, "anthropic", ["anthropic"]);
+	renameAccountProfile(path, alternate.id, "Side projects");
+	assert.deepEqual(loadPrimaryAccountNames(path), { anthropic: "Main work" });
+	assert.deepEqual(loadAccountProfiles(path), [{ ...alternate, label: "Side projects" }]);
+	assert.equal(removeAccountProfile(path, alternate.id), true);
+	assert.deepEqual(loadPrimaryAccountNames(path), { anthropic: "Main work" });
+	assert.deepEqual(loadAccountProfiles(path), []);
 });
