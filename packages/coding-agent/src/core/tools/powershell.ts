@@ -12,6 +12,7 @@ import {
 	createShellToolDefinition,
 	type ShellToolConfig,
 } from "./bash.ts";
+import { ManualBackgroundController } from "./manual-background.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
@@ -36,9 +37,9 @@ export type PowerShellToolDetails = BashToolDetails;
 export type PowerShellToolInput = BashToolInput;
 
 export interface PowerShellToolOptions
-	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook"> {}
+	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook" | "backgroundController"> {}
 
-export function createLocalPowerShellOperations(): PowerShellOperations {
+export function createLocalPowerShellOperations(backgroundController?: ManualBackgroundController): PowerShellOperations {
 	return {
 		exec: async (command, cwd, options) => {
 			const shellConfig = getPowerShellConfig();
@@ -47,7 +48,7 @@ export function createLocalPowerShellOperations(): PowerShellOperations {
 				win32.basename(shellConfig.shell).toLowerCase() === "powershell.exe" && !command.endsWith("`")
 					? WINDOWS_POWERSHELL_EXIT_SUFFIX
 					: "";
-			return createLocalShellOperations("PowerShell", () => shellConfig).exec(
+			return createLocalShellOperations("PowerShell", () => shellConfig, backgroundController).exec(
 				`${UTF8_OUTPUT_PREFIX}${command}${suffix}`,
 				cwd,
 				options,
@@ -72,7 +73,7 @@ export function createPowerShellToolDefinition(
 ): ReturnType<typeof createShellToolDefinition> {
 	return createShellToolDefinition(cwd, powershellToolConfig, {
 		...options,
-		operations: options?.operations ?? createLocalPowerShellOperations(),
+		operations: options?.operations ?? createLocalPowerShellOperations(options?.backgroundController),
 		// Default operations are local; injected operations may be remote and cannot be backgrounded.
 		...(options?.operations ? {} : { backgroundShellConfig: getPowerShellConfig }),
 	});
