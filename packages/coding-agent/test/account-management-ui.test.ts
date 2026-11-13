@@ -11,7 +11,7 @@ describe("account management menu", () => {
 		setKeybindings(new KeybindingsManager());
 	});
 
-	function harness(activeProvider = "anthropic") {
+	function harness(activeProvider = "anthropic", defaultProvider?: string) {
 		const actions: string[] = [];
 		const renameAccount = vi.fn((_id: string, name: string) => name.trim());
 		const removeAccountAlias = vi.fn(async (id: string) => {
@@ -20,7 +20,7 @@ describe("account management menu", () => {
 		const logout = vi.fn(async (id: string) => {
 			actions.push(`logout ${id}`);
 		});
-		const setModel = vi.fn(async (model: { provider: string }) => {
+		const setModel = vi.fn(async (model: { provider: string }, _options?: { persist?: boolean }) => {
 			actions.push(`switch ${model.provider}`);
 		});
 		const alias = { id: "account-anthropic-1", label: "Work", sourceProviderId: "anthropic" };
@@ -38,6 +38,11 @@ describe("account management menu", () => {
 		let selected: ExtensionSelectorComponent | undefined;
 		const mode = Object.create(InteractiveMode.prototype) as {
 			runtimeHost: unknown;
+			settingsManager: {
+				getDefaultProvider: () => string | undefined;
+				getDefaultModel: () => string | undefined;
+				setDefaultModelAndProvider: (provider: string, modelId: string) => void;
+			};
 			showSelector: (factory: (done: () => void) => { component: ExtensionSelectorComponent }) => void;
 			showExtensionInput: (label: string, initial?: string) => Promise<string | undefined>;
 			showStatus: (message: string) => void;
@@ -46,6 +51,11 @@ describe("account management menu", () => {
 			updateAvailableProviderCount: () => Promise<void>;
 			updateEditorBorderColor: () => void;
 			footer: { invalidate: () => void };
+		};
+		mode.settingsManager = {
+			getDefaultProvider: () => defaultProvider,
+			getDefaultModel: () => "claude-sonnet",
+			setDefaultModelAndProvider: (provider, modelId) => actions.push(`default ${provider}/${modelId}`),
 		};
 		mode.runtimeHost = {
 			session: {
@@ -104,6 +114,19 @@ describe("account management menu", () => {
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(ui.actions).toEqual(["switch anthropic", "delete account-anthropic-1"]);
 		expect(ui.logout).not.toHaveBeenCalled();
+	});
+
+	it("updates a saved default when deleting the account it uses", async () => {
+		const ui = harness("account-anthropic-1", "account-anthropic-1");
+		ui.mode.showAccountManager();
+		ui.choose(1);
+		ui.choose(4);
+		ui.choose(1);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.setModel).toHaveBeenCalledWith(
+			{ provider: "anthropic", id: "claude-sonnet" },
+			{ persist: true },
+		);
 	});
 
 	it("disconnects the original login without deleting unrelated accounts", async () => {
