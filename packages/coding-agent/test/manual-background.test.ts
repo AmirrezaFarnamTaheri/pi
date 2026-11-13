@@ -15,7 +15,7 @@ describe("Ctrl+B running-command backgrounding", () => {
 
 	it.skipIf(process.platform === "win32")(
 		"detaches the SAME running test process, leaves it executing, and retains its output log",
-			async () => {
+		async () => {
 			const cwd = await mkdtemp(join(tmpdir(), "pi-detach-test-"));
 			const marker = join(cwd, "started.txt");
 			const controller = new ManualBackgroundController();
@@ -42,17 +42,20 @@ describe("Ctrl+B running-command backgrounding", () => {
 				expect(pid).toBeGreaterThan(0);
 				expect(result.background?.outputPath).toBeTruthy();
 				await vi.waitFor(
-						async () => {
-							const log = await readFile(result.background!.outputPath, "utf8");
-					expect(log).toContain("finished");
-				}, { timeout: 8000 });
+					async () => {
+						const log = await readFile(result.background!.outputPath, "utf8");
+						expect(log).toContain("finished");
+					},
+					{ timeout: 8000 },
+				);
 				expect(await readFile(marker, "utf8")).toBe("started\\n");
 				expect(controller.hasActiveCommand).toBe(false);
 			} finally {
 				if (pid) killProcessTree(pid);
 				await rm(cwd, { recursive: true, force: true });
 			}
-		});
+		},
+	);
 
 	it("does not enable detachment for a noninteractive command", async () => {
 		const controller = new ManualBackgroundController();
