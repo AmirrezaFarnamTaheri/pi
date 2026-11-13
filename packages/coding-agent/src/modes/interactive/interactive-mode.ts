@@ -7321,6 +7321,8 @@ export class InteractiveMode {
 		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const scrollLineUp = this.getEditorKeyDisplay("tui.altScreen.lineUp");
+		const scrollLineDown = this.getEditorKeyDisplay("tui.altScreen.lineDown");
 
 		// Editing keybindings
 		const submit = this.getEditorKeyDisplay("tui.input.submit");
@@ -7363,6 +7365,7 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+| \`${scrollLineUp}\` / \`${scrollLineDown}\` | Scroll fullscreen transcript by line |
 
 **Editing**
 | Key | Action |
