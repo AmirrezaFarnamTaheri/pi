@@ -14,7 +14,11 @@ import {
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
-import { type BackgroundedProcess, executeDetachableShell, type ManualBackgroundController } from "./manual-background.ts";
+import {
+	type BackgroundedProcess,
+	executeDetachableShell,
+	type ManualBackgroundController,
+} from "./manual-background.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -43,7 +47,8 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	background: Type.Optional(
 		Type.Boolean({
-			description: "Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
+			description:
+				"Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
 		}),
 	),
 });
