@@ -61,7 +61,7 @@ test("renames a single account without changing its identity or sibling accounts
 	assert.deepEqual(loadAccountProfiles(path), [{ ...work, label: "Client projects" }, personal]);
 	assert.equal(renameAccountProfile(path, "missing", "Unused"), undefined);
 	assert.throws(() => renameAccountProfile(path, work.id, "   "), /name/i);
-	assert.throws(() => renameAccountProfile(path, work.id, "bad\\nname"), /name/i);
+	assert.throws(() => renameAccountProfile(path, work.id, "bad\nname"), /name/i);
 	assert.throws(() => renameAccountProfile(path, work.id, "a".repeat(65)), /name/i);
 	assert.deepEqual(loadAccountProfiles(path)[1], personal);
 });
