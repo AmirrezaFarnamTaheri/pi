@@ -1,4 +1,5 @@
 import { win32 } from "node:path";
+import type { ShellConfig } from "../../utils/shell.ts";
 import { getPowerShellConfig } from "../../utils/shell.ts";
 import {
 	type BashOperations,
@@ -45,19 +46,24 @@ export type PowerShellToolInput = BashToolInput;
 export interface PowerShellToolOptions
 	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook" | "backgroundController"> {}
 
+/** Normalize PowerShell 5.1 native stderr exits on every local execution path. */
+export function preparePowerShellCommand(command: string, shellConfig: ShellConfig = getPowerShellConfig()): string {
+	// A final backtick must not continue the user's last line into the status suffix.
+	const suffix =
+		win32.basename(shellConfig.shell).toLowerCase() === "powershell.exe" && !command.endsWith("`")
+			? WINDOWS_POWERSHELL_EXIT_SUFFIX
+			: "";
+	return `${UTF8_OUTPUT_PREFIX}${command}${suffix}`;
+}
+
 export function createLocalPowerShellOperations(
 	backgroundController?: ManualBackgroundController,
 ): PowerShellOperations {
 	return {
 		exec: async (command, cwd, options) => {
 			const shellConfig = getPowerShellConfig();
-			// A final backtick would continue the user's last line into the suffix, so leave such commands unchanged.
-			const suffix =
-				win32.basename(shellConfig.shell).toLowerCase() === "powershell.exe" && !command.endsWith("`")
-					? WINDOWS_POWERSHELL_EXIT_SUFFIX
-					: "";
 			return createLocalShellOperations("PowerShell", () => shellConfig, backgroundController).exec(
-				`${UTF8_OUTPUT_PREFIX}${command}${suffix}`,
+				preparePowerShellCommand(command, shellConfig),
 				cwd,
 				options,
 			);
@@ -83,7 +89,10 @@ export function createPowerShellToolDefinition(
 		...options,
 		operations: options?.operations ?? createLocalPowerShellOperations(options?.backgroundController),
 		// Default operations are local; injected operations may be remote and cannot be backgrounded.
-		...(options?.operations ? {} : { backgroundShellConfig: getPowerShellConfig }),
+		...(options?.operations ? {} : {
+			backgroundShellConfig: getPowerShellConfig,
+			backgroundCommandTransform: preparePowerShellCommand,
+		}),
 	});
 }
 
