@@ -5,7 +5,12 @@
  */
 import { open, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { killProcessTree, type ShellConfig, trackDetachedChildPid, untrackDetachedChildPid } from "../../utils/shell.ts";
+import {
+	killProcessTree,
+	type ShellConfig,
+	trackDetachedChildPid,
+	untrackDetachedChildPid,
+} from "../../utils/shell.ts";
 import { startBackgroundShell } from "./background-shell.ts";
 
 export interface BackgroundedProcess {
