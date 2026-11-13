@@ -3,7 +3,7 @@
  * A compiled pi.exe does not accept Node's -e option. The normal CLI invokes this
  * internal entrypoint to supervise shell work independently of the foreground TUI.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ShellConfig } from "../../utils/shell.ts";
@@ -39,7 +39,12 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
 		renameSync(tmp, statePath);
 	};
-	const finish = (status: "completed" | "failed", exitCode: number | null, signal: string | null, error: string | null) => {
+	const finish = (
+		status: "completed" | "failed",
+		exitCode: number | null,
+		signal: string | null,
+		error: string | null,
+	) => {
 		if (done) return;
 		done = true;
 		try {
