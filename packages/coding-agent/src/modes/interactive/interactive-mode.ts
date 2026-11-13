@@ -163,10 +163,7 @@ import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMarkdownTransform } from "./components/markdown-transform.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-import {
-	type AuthSelectorProvider,
-	OAuthSelectorComponent,
-} from "./components/oauth-selector.ts";
+import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
