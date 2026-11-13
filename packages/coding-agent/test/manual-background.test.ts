@@ -93,7 +93,7 @@ describe("Ctrl+B running-command backgrounding", () => {
 			let received = false;
 			try {
 				const script =
-					${literal}
+					'process.stdout.write("started\\n"); setTimeout(() => process.stdout.write("done\\n"), 500)';
 				const running = createLocalBashOperations({ backgroundController: controller }).exec(
 					`${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
 					cwd,
