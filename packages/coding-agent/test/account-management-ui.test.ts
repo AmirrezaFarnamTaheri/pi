@@ -53,7 +53,8 @@ describe("account management menu", () => {
 				settingsManager: {
 					getDefaultProvider: () => defaultProvider,
 					getDefaultModel: () => "claude-sonnet",
-					setDefaultModelAndProvider: (provider: string, modelId: string) => actions.push(`default ${provider}/${modelId}`),
+					setDefaultModelAndProvider: (provider: string, modelId: string) =>
+							actions.push(`default ${provider}/${modelId}`),
 				},
 				model: { provider: activeProvider, id: "claude-sonnet" },
 				modelRuntime: runtime,
