@@ -165,7 +165,6 @@ import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
 	type AuthSelectorProvider,
-	formatAuthSelectorProviderStatus,
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
@@ -6080,7 +6079,8 @@ export class InteractiveMode {
 		const runtime = this.session.modelRuntime;
 		const aliases = runtime.getAccountProfiles();
 		const aliasIds = new Set(aliases.map((account) => account.id));
-		const originals = runtime.getProviders()
+		const originals = runtime
+			.getProviders()
 			.filter((provider) => !aliasIds.has(provider.id) && provider.id !== "account-profiles")
 			.filter((provider) => runtime.getProviderAuthStatus(provider.id).configured)
 			.map((provider) => ({
@@ -6089,10 +6089,7 @@ export class InteractiveMode {
 				sourceProviderId: provider.id,
 				original: true,
 			}));
-		const accounts = [
-			...originals,
-			...aliases.map((profile) => ({ ...profile, original: false })),
-		];
+		const accounts = [...originals, ...aliases.map((profile) => ({ ...profile, original: false }))];
 		const baseLabels = accounts.map((profile) => {
 			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
 			return `${profile.label} · ${provider}`;
@@ -6139,7 +6136,12 @@ export class InteractiveMode {
 		});
 	}
 
-	private showAccountActions(profile: { id: string; label: string; sourceProviderId: string; original?: boolean }): void {
+	private showAccountActions(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
 		const signIn = this.session.modelRuntime.hasConfiguredAuth(profile.id) ? "Sign in again" : "Sign in";
 		const choose = "Choose model";
 		const rename = "Rename account";
@@ -6172,9 +6174,12 @@ export class InteractiveMode {
 		});
 	}
 
-	private async renameAccountFromMenu(
-		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
-	): Promise<void> {
+	private async renameAccountFromMenu(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): Promise<void> {
 		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
 		if (entered === undefined) {
 			this.showAccountActions(profile);
@@ -6190,7 +6195,12 @@ export class InteractiveMode {
 		}
 	}
 
-	private showAccountModelSelector(profile: { id: string; label: string; sourceProviderId: string; original?: boolean }): void {
+	private showAccountModelSelector(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
 		const models = this.session.modelRuntime.getModels(profile.id);
 		if (!this.session.modelRuntime.hasConfiguredAuth(profile.id)) {
 			this.showStatus("Sign in to this account before selecting its models.");
@@ -6231,9 +6241,12 @@ export class InteractiveMode {
 		});
 	}
 
-	private confirmAccountRemoval(
-		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
-	): void {
+	private confirmAccountRemoval(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
 		const confirm = profile.original ? "Disconnect" : "Delete";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
@@ -6250,25 +6263,34 @@ export class InteractiveMode {
 						const selected = this.session.model;
 						const connectedAfterRemoval = [
 							profile.sourceProviderId,
-							...runtime.getAccountProfiles()
-								.filter((account) => account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id)
+							...runtime
+								.getAccountProfiles()
+								.filter(
+									(account) =>
+										account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id,
+								)
 								.map((account) => account.id),
 						].filter((id) => id !== profile.id && runtime.hasConfiguredAuth(id)).length;
 						const rotationWillStop = connectedAfterRemoval < 2;
 						const activeNeedsSwitch =
 							selected?.provider === profile.id ||
-							(rotationWillStop && selected?.provider === "account-profiles" && selected.id === profile.sourceProviderId);
+							(rotationWillStop &&
+								selected?.provider === "account-profiles" &&
+								selected.id === profile.sourceProviderId);
 						const defaultProvider = this.settingsManager.getDefaultProvider();
 						const defaultNeedsUpdate =
 							defaultProvider === profile.id ||
-							(rotationWillStop && defaultProvider === "account-profiles" &&
+							(rotationWillStop &&
+								defaultProvider === "account-profiles" &&
 								this.settingsManager.getDefaultModel() === profile.sourceProviderId);
 						if (activeNeedsSwitch || defaultNeedsUpdate) {
-							const fallback = runtime.getAvailableSnapshot().find(
-								(model) =>
-									model.provider !== profile.id &&
-									!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
-							);
+							const fallback = runtime
+								.getAvailableSnapshot()
+								.find(
+									(model) =>
+										model.provider !== profile.id &&
+										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
+								);
 							if (fallback && activeNeedsSwitch) {
 								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
 							} else if (fallback && defaultNeedsUpdate) {
@@ -6281,13 +6303,13 @@ export class InteractiveMode {
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						this.showStatus(
-							profile.original
-								? `Removed saved login for ${profile.label}`
-								: `Deleted ${profile.label}`,
+							profile.original ? `Removed saved login for ${profile.label}` : `Deleted ${profile.label}`,
 						);
 						this.showAccountManager();
 					})().catch((error: unknown) =>
-						this.showError(`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`),
+						this.showError(
+							`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`,
+						),
 					);
 				},
 				() => {
