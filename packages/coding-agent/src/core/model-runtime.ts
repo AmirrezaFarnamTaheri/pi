@@ -662,8 +662,9 @@ export class ModelRuntime implements Models {
 	async removeAccountAlias(id: string): Promise<void> {
 		const path = this.accountProfilesPath;
 		if (!path || !this.accountProfiles.has(id)) return;
-		// Fail closed: a failed logout must never leave an orphaned stored credential.
+		// Remove the saved credential even if the source extension is not currently loaded.
 		if (this.models.getProvider(id)) await this.logout(id);
+		else await this.credentials.delete(id);
 		removeAccountProfile(path, id);
 		const sourceProviderId = this.accountProfiles.get(id)!.sourceProviderId;
 		this.accountProfiles.delete(id);
