@@ -6066,16 +6066,12 @@ export class InteractiveMode {
 	/** Explicit management; each account owns its own credential-store key. */
 	private showAccountManager(): void {
 		const profiles = this.session.modelRuntime.getAccountProfiles();
-		if (profiles.length === 0) {
-			this.showStatus("No additional accounts yet. Open /login and choose Add another account.");
-			return;
-		}
 		const items = profiles.map((profile) => ({
 			profile,
 			label: `${this.session.modelRuntime.getProviderAuthStatus(profile.id).configured ? "✓" : "○"} ${profile.label}  ·  ${profile.sourceProviderId}`,
 		}));
 		const addLabel = "＋ Add another account";
-		const rotateLabel = "↻ Select automatic account rotation";
+		const rotateLabel = "↻ Account rotation";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				`Accounts  ·  ${profiles.length} additional profile${profiles.length === 1 ? "" : "s"}`,
@@ -6239,29 +6235,8 @@ export class InteractiveMode {
 			this.showError("Add another account for this provider to enable rotation.");
 			return;
 		}
-		// A routed request includes existing transcript messages and tool outputs.
-		// Explicitly obtain user consent before exposing that context to another account.
-		const confirm = "Enable rotation and share this conversation across accounts";
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				"Confirm account rotation",
-				["Cancel", confirm],
-				(option) => {
-					done();
-					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual, persist);
-				},
-				() => done(),
-				{
-					description:
-						`The full transcript and tool output may be shared with ${connected.join(", ")}. ` +
-						(persist
-							? "The default is remembered, but each new session needs separate sharing consent."
-							: "This selection is for this session only.") +
-						" Only proceed if authorized.",
-				},
-			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
-		});
+		// Selecting the rotation group already expresses intent; do not ask a second time.
+		await this.activateAccountRotation(sourceProviderId, virtual, persist);
 	}
 
 	private async activateAccountRotation(
@@ -6270,11 +6245,11 @@ export class InteractiveMode {
 		persist: boolean,
 	): Promise<void> {
 		try {
-			await this.session.setModel(virtual, { persist, accountRotationConsent: true });
+			await this.session.setModel(virtual, { persist });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(
-				`Rotation enabled for ${sourceProviderId} in this session${persist ? "; future sessions require confirmation" : ""}. Tool continuations stay on the same identity.`,
+				`Rotation enabled for ${sourceProviderId}${persist ? " (saved as default)" : " (this session)"}. Tool continuations stay on the same account.`,
 			);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
@@ -6318,7 +6293,7 @@ export class InteractiveMode {
 				},
 				{
 					description:
-						"Opt-in round-robin · authenticated accounts only · cooldown on pre-output credential failures",
+						"Choose a group to rotate signed-in accounts on new turns; existing messages and tool results are sent to the selected account.",
 				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
@@ -6337,7 +6312,7 @@ export class InteractiveMode {
 			? `Connect Antigravity Manager gateway${formatAuthSelectorProviderStatus(antigravityOption)}`
 			: undefined;
 		const manageLabel = "Manage saved accounts · sign in, switch or remove";
-		const rotateLabel = "Enable automatic rotation · opt in";
+		const rotateLabel = "Automatic account rotation";
 		const addOAuthLabel = "Add another account · keep existing sign-ins";
 		const addApiKeyLabel = "Add another API key · keep existing keys";
 		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
