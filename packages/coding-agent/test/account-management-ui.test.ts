@@ -28,6 +28,7 @@ describe("account management menu", () => {
 			getProviders: () => [{ id: "anthropic", name: "Anthropic" }],
 			getAccountProfiles: () => [alias],
 			getProviderAuthStatus: () => ({ configured: true }),
+			hasConfiguredAuth: () => true,
 			getProvider: () => ({ name: "Anthropic" }),
 			getAccountLabel: (id: string) => (id === "anthropic" ? "Main" : "Work"),
 			getAvailableSnapshot: () => [{ provider: "anthropic", id: "claude-sonnet" }],
