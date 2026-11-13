@@ -3780,7 +3780,11 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath, backgroundController: this.manualBackgroundController },
+					bash: {
+						commandPrefix: shellCommandPrefix,
+						shellPath,
+						backgroundController: this.manualBackgroundController,
+					},
 					powershell: { backgroundController: this.manualBackgroundController },
 				});
 
@@ -4028,7 +4032,8 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath, backgroundController: this.manualBackgroundController }),
+				options?.operations ??
+					createLocalBashOperations({ shellPath, backgroundController: this.manualBackgroundController }),
 				{
 					onChunk: (delta) => {
 						onChunk?.(delta);
