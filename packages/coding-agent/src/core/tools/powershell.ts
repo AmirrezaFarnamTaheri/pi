@@ -12,7 +12,7 @@ import {
 	createShellToolDefinition,
 	type ShellToolConfig,
 } from "./bash.ts";
-import { ManualBackgroundController } from "./manual-background.ts";
+import type { ManualBackgroundController } from "./manual-background.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
@@ -44,7 +44,9 @@ export type PowerShellToolInput = BashToolInput;
 export interface PowerShellToolOptions
 	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook" | "backgroundController"> {}
 
-export function createLocalPowerShellOperations(backgroundController?: ManualBackgroundController): PowerShellOperations {
+export function createLocalPowerShellOperations(
+	backgroundController?: ManualBackgroundController,
+): PowerShellOperations {
 	return {
 		exec: async (command, cwd, options) => {
 			const shellConfig = getPowerShellConfig();
