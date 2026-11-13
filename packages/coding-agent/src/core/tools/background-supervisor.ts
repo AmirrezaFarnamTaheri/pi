@@ -3,7 +3,7 @@
  * A compiled pi.exe does not accept Node's -e option. The normal CLI invokes this
  * internal entrypoint to supervise shell work independently of the foreground TUI.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { ShellConfig } from "../../utils/shell.ts";
@@ -21,7 +21,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	rmSync(requestPath, { force: true });
 	const statePath = join(folder, "state.json");
 	let fd: number | undefined;
-	let child: ChildProcessWithoutNullStreams | undefined;
+	let child: ChildProcess | undefined;
 	let used = 0;
 	let truncated = false;
 	let done = false;
@@ -76,31 +76,33 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		fd = openSync(join(folder, "output.log"), "wx", 0o600);
 		const cfg = request.shellConfig;
 		const fromStdin = cfg.commandTransport === "stdin";
-		child = spawn(cfg.shell, fromStdin ? cfg.args : [...cfg.args, request.command], {
+		const started = spawn(cfg.shell, fromStdin ? cfg.args : [...cfg.args, request.command], {
 			cwd: request.cwd,
 			env: process.env,
 			detached: process.platform !== "win32",
 			stdio: [fromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 			windowsHide: true,
 		});
-		child.once("spawn", () => save({ status: "running", exitCode: null }));
-		child.once("error", (e) => finish("failed", null, null, (e as NodeJS.ErrnoException).code ?? "spawn failed"));
-		for (const stream of [child.stdout, child.stderr]) {
+		child = started;
+		started.once("spawn", () => save({ status: "running", exitCode: null }));
+		started.once("error", (e) => finish("failed", null, null, (e as NodeJS.ErrnoException).code ?? "spawn failed"));
+		for (const stream of [started.stdout, started.stderr]) {
+			if (!stream) continue;
 			stream.on("data", write);
 			stream.on("error", (e: NodeJS.ErrnoException) => finish("failed", null, null, e.code ?? "stream failure"));
 		}
 		if (fromStdin) {
-			child.stdin.on("error", () => {});
-			child.stdin.end(request.command);
+			started.stdin?.on("error", () => {});
+			started.stdin?.end(request.command);
 		}
-		child.once("exit", () => {
+		started.once("exit", () => {
 			const guard = setTimeout(() => {
-				child?.stdout.destroy();
-				child?.stderr.destroy();
+				started.stdout?.destroy();
+				started.stderr?.destroy();
 			}, 1000);
 			guard.unref();
 		});
-		child.once("close", (code, signal) => finish(code === 0 ? "completed" : "failed", code, signal, null));
+		started.once("close", (code, signal) => finish(code === 0 ? "completed" : "failed", code, signal, null));
 	} catch (error) {
 		try {
 			child?.kill();
