@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { killProcessTree, type ShellConfig } from "../../utils/shell.ts";
 
 export interface BackgroundShellResult {
@@ -13,6 +13,23 @@ export interface BackgroundShellResult {
 
 /** Hard maximum of captured background output; excess bytes are drained, never written. */
 export const BACKGROUND_LOG_MAX_BYTES = 2_000_000;
+
+export const BACKGROUND_SUPERVISOR_FLAG = "--pi-internal-background-supervisor";
+
+/** A compiled Pi binary cannot interpret Node's -e; use Pi's internal worker route. */
+export function backgroundSupervisorInvocation(
+	executable: string,
+	argv: readonly string[],
+	execArgv: readonly string[],
+	folder: string,
+): { executable: string; args: string[] } {
+	const runtime = basename(executable).toLowerCase();
+	if (runtime === "node" || runtime === "node.exe" || runtime === "bun" || runtime === "bun.exe") {
+		return { executable, args: ["-e", SUPERVISOR, folder] };
+	}
+	return { executable, args: [BACKGROUND_SUPERVISOR_FLAG, folder] };
+}
+
 
 /**
  * Self-contained supervisor source. Its Node executable and this source ship
@@ -114,7 +131,8 @@ export async function startBackgroundShell(
 			{ flag: "wx", mode: 0o600 },
 		);
 		// The supervisor's own cwd must not lock the user's project on Windows.
-		worker = spawn(process.execPath, ["-e", SUPERVISOR, folder], {
+		const invocation = backgroundSupervisorInvocation(process.execPath, process.argv, process.execArgv, folder);
+		worker = spawn(invocation.executable, invocation.args, {
 			cwd: tmpdir(),
 			detached: true,
 			env,
