@@ -112,11 +112,15 @@ function withAccountFileLock<T>(
 		if (next || nextNames) {
 			const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
 			try {
-				writeFileSync(temporary, JSON.stringify({ version: 1, accounts: next ?? accounts, names: nextNames ?? names }, null, 2) + "\n", {
-					encoding: "utf8",
-					mode: 0o600,
-					flag: "wx",
-				});
+				writeFileSync(
+					temporary,
+					JSON.stringify({ version: 1, accounts: next ?? accounts, names: nextNames ?? names }, null, 2) + "\n",
+					{
+						encoding: "utf8",
+						mode: 0o600,
+						flag: "wx",
+					},
+				);
 				renameSync(temporary, path);
 			} finally {
 				rmSync(temporary, { force: true });
