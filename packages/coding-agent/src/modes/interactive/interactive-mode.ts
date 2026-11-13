@@ -6062,6 +6062,19 @@ export class InteractiveMode {
 		}
 	}
 
+	/** One source of truth for rotation actions in every account menu. */
+	private getRotatableSources(): string[] {
+		const runtime = this.session.modelRuntime;
+		const profiles = runtime.getAccountProfiles();
+		return [...new Set(profiles.map((profile) => profile.sourceProviderId))].filter((source) => {
+			const members = [
+				source,
+				...profiles.filter((profile) => profile.sourceProviderId === source).map((profile) => profile.id),
+			];
+			return members.filter((id) => runtime.hasConfiguredAuth(id)).length >= 2;
+		});
+	}
+
 	/** A single home for /login and /accounts: see, name, connect, switch and remove identities. */
 	private showAccountManager(): void {
 		const runtime = this.session.modelRuntime;
@@ -6097,8 +6110,11 @@ export class InteractiveMode {
 		});
 		const signIn = "＋ Sign in";
 		const add = "＋ Add another account";
-		const rotation = "↻ Rotate accounts";
-		const actions = [signIn, add, ...(aliases.length > 0 ? [rotation] : [])];
+		const rotation =
+			this.session.model?.provider === "account-profiles"
+				? `↻ Rotation on · ${runtime.getAccountLabel(this.session.model.id)}`
+				: "↻ Rotate accounts";
+		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				"Accounts",
@@ -6124,13 +6140,12 @@ export class InteractiveMode {
 	}
 
 	private showAccountActions(profile: { id: string; label: string; sourceProviderId: string; original?: boolean }): void {
-		const signIn = "Sign in";
+		const signIn = this.session.modelRuntime.hasConfiguredAuth(profile.id) ? "Sign in again" : "Sign in";
 		const choose = "Choose model";
 		const rename = "Rename account";
 		const rotation = "Rotate accounts for this provider";
 		const remove = profile.original ? "Disconnect account" : "Delete account";
-		const canRotate = this.session.modelRuntime.getAccountProfiles()
-			.some((account) => account.sourceProviderId === profile.sourceProviderId);
+		const canRotate = this.getRotatableSources().includes(profile.sourceProviderId);
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				profile.label,
@@ -6330,11 +6345,9 @@ export class InteractiveMode {
 	}
 
 	private showAccountRotationSelector(): void {
-		const sources = [
-			...new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.sourceProviderId)),
-		];
+		const sources = this.getRotatableSources();
 		if (sources.length === 0) {
-			this.showStatus("Add a second account before enabling rotation.");
+			this.showStatus("Sign in to two accounts with the same provider to enable rotation.");
 			return;
 		}
 		const items = sources.map((source) => {
