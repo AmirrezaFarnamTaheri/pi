@@ -4586,7 +4586,6 @@ export class InteractiveMode {
 		}
 	}
 
-
 	/** Detach the existing running shell command; never restart a test or launch another agent. */
 	private handleBackgroundCommand(): void {
 		if (!this.session.manualBackgroundController.backgroundCurrentCommand()) {
