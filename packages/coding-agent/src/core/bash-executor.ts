@@ -12,6 +12,7 @@ import { splitIncompleteAnsiSuffix, stripAnsi } from "../utils/ansi.ts";
 import { createOutputFileStream } from "../utils/output-files.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
 import type { BashOperations } from "./tools/bash.ts";
+import type { BackgroundedProcess } from "./tools/manual-background.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
 // ============================================================================
@@ -36,6 +37,8 @@ export interface BashResult {
 	truncated: boolean;
 	/** Path to temp file containing full output (if output exceeded truncation threshold) */
 	fullOutputPath?: string;
+	/** PID and log for a running process that Ctrl+B detached without restarting it. */
+	background?: BackgroundedProcess;
 }
 
 // ============================================================================
@@ -157,8 +160,9 @@ export async function executeBashWithOperations(
 	};
 
 	let exitCode: number | null = null;
+	let background: BackgroundedProcess | undefined;
 	try {
-		({ exitCode } = await operations.exec(command, cwd, { onData, signal: options?.signal }));
+		({ exitCode, background } = await operations.exec(command, cwd, { onData, signal: options?.signal }));
 	} catch (err) {
 		// An aborted command still returns the output it produced so far
 		if (!options?.signal?.aborted) {
@@ -175,6 +179,16 @@ export async function executeBashWithOperations(
 	}
 	await finishTempFile();
 	const cancelled = options?.signal?.aborted ?? false;
+	if (background) {
+		return {
+			output: `Command detached with Ctrl+B; still running as PID ${background.pid}. Output log: ${background.outputPath}`,
+			exitCode: undefined,
+			cancelled: false,
+			truncated: false,
+			fullOutputPath: background.outputPath,
+			background,
+		};
+	}
 
 	return {
 		output: truncationResult.truncated ? truncationResult.content : fullOutput,
