@@ -64,9 +64,9 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "ctrl+x",
 		description: "Copy selection or last assistant message",
 	},
-	"app.message.background": {
+	"app.command.background": {
 		defaultKeys: "ctrl+b",
-		description: "Launch the editor prompt in a separate background agent session",
+		description: "Detach the currently running local shell command",
 	},
 	"app.message.followUp": {
 		defaultKeys: windowsKeybindings ? "ctrl+q" : "alt+enter",
@@ -183,7 +183,7 @@ declare module "@earendil-works/pi-tui" {
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
-	// Ctrl+B previously moved the cursor left; it now launches an independent agent.
+	// Ctrl+B previously moved the cursor left; it now detaches the active local command.
 	"tui.editor.cursorLeft": {
 		...TUI_KEYBINDINGS["tui.editor.cursorLeft"],
 		defaultKeys: "left",
