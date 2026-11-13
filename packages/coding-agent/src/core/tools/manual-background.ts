@@ -1,11 +1,13 @@
 /**
- * Manual handoff of an already-running local shell command. The process is launched
- * once under the existing detached shell supervisor, so Ctrl+B changes who waits
- * for it; it never restarts a test suite or starts another agent.
+ * Detach an ALREADY-running local shell command; never restart its process or
+ * start another agent. A detached supervisor preserves a capped output log,
+ * while the foreground uses a separate lossless spool until Ctrl+B is pressed.
  */
-import { open, readFile } from "node:fs/promises";
+import { open, readFile, rm, writeFile } from "node:fs/promises";
+import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	getShellEnv,
 	killProcessTree,
 	type ShellConfig,
 	trackDetachedChildPid,
@@ -60,10 +62,12 @@ export interface DetachableShellOptions {
 	env?: NodeJS.ProcessEnv;
 }
 
+const DETACHED = Symbol("detached");
+
 /**
- * Stream the supervisor's capped log while foregrounded. On Ctrl+B, stop
- * awaiting that SAME child PID and leave its supervisor writing the log.
- * Aborts, timeouts and output callback errors still kill foreground jobs.
+ * Stream unlimited foreground output to onData, then either wait for the real
+ * exit status or release the SAME process to its detached supervisor on Ctrl+B.
+ * A hung asynchronous onData must not disable abort, timeout or manual detach.
  */
 export async function executeDetachableShell(
 	command: string,
@@ -75,70 +79,97 @@ export async function executeDetachableShell(
 ): Promise<{ exitCode: number | null; background?: BackgroundedProcess }> {
 	if (options.signal?.aborted) throw new Error("aborted");
 	const timeout = options.timeout;
-	if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-		throw new Error("Invalid timeout: must be a finite number of seconds");
+	if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1_000 > 2_147_483_647)) {
+		throw new Error("Invalid timeout: must be a finite number of seconds within the supported range");
 	}
-	const startedAt = Date.now();
-	const { pid, outputPath } = await startBackgroundShell(
+	const { pid, outputPath, foregroundOutputPath } = await startBackgroundShell(
 		command,
 		cwd,
 		shellConfig,
-		options.env ?? process.env,
+		options.env ?? getShellEnv(),
 		prefix,
+		{ captureForegroundOutput: true },
 	);
+	if (!foregroundOutputPath) {
+		killProcessTree(pid);
+		throw new Error("Detachable shell requires a lossless foreground output spool");
+	}
 	trackDetachedChildPid(pid);
 	let requested = false;
 	let completed = false;
+	let resolveDetach!: (value: typeof DETACHED) => void;
+	let rejectInterruption!: (error: Error) => void;
+	const interruption = new Promise<typeof DETACHED>((resolve, reject) => {
+		resolveDetach = resolve;
+		rejectInterruption = reject;
+	});
+	// This can be rejected by cancellation before the first output read.
+	void interruption.catch(() => {});
 	const unregister = controller.register(() => {
 		requested = true;
+		resolveDetach(DETACHED);
 	});
+	const onAbort = () => rejectInterruption(new Error("aborted"));
+	options.signal?.addEventListener("abort", onAbort, { once: true });
+	if (options.signal?.aborted) onAbort();
+	const timeoutHandle = timeout !== undefined ? setTimeout(() => rejectInterruption(new Error(`timeout:${timeout}`)), timeout * 1_000) : undefined;
+	let stream: Awaited<ReturnType<typeof open>> | undefined;
 	try {
-		const stream = await open(outputPath, "r");
-		try {
-			let offset = 0;
-			for (;;) {
-				if (requested) {
-					return { exitCode: 0, background: { pid, outputPath } };
-				}
-				if (options.signal?.aborted) throw new Error("aborted");
-				if (timeout !== undefined && Date.now() - startedAt >= timeout * 1000) {
-					throw new Error(`timeout:${timeout}`);
-				}
-
-				const size = (await stream.stat()).size;
-				while (offset < size) {
-					const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, size - offset));
-					const { bytesRead } = await stream.read(chunk, 0, chunk.length, offset);
-					if (bytesRead === 0) break;
-					offset += bytesRead;
-					await options.onData(chunk.subarray(0, bytesRead));
-					if (requested) break;
-				}
-				if (requested) return { exitCode: 0, background: { pid, outputPath } };
-
-				const state = JSON.parse(await readFile(join(dirname(outputPath), "state.json"), "utf8")) as {
-					status?: string;
-					exitCode?: number | null;
-					error?: string | null;
-				};
-				if (state.status === "completed" || state.status === "failed") {
-					// Drain any data written just before the supervisor committed its final status.
-					const finalSize = (await stream.stat()).size;
-					if (offset < finalSize) continue;
-					if (state.error) throw new Error(`Background command failed: ${state.error}`);
-					completed = true;
-					return { exitCode: state.exitCode ?? 1 };
-				}
-				await new Promise((resolve) => setTimeout(resolve, 50));
+		stream = await open(foregroundOutputPath, "r");
+		let offset = 0;
+		for (;;) {
+			if (requested) {
+				await writeFile(join(dirname(outputPath), "detached"), "", { flag: "w", mode: 0o600 });
+				return { exitCode: null, background: { pid, outputPath } };
 			}
-		} finally {
-			await stream.close();
+			if (options.signal?.aborted) throw new Error("aborted");
+			const size = (await stream.stat()).size;
+			while (offset < size) {
+				const chunk = Buffer.allocUnsafe(Math.min(64 * 1_024, size - offset));
+				const { bytesRead } = await stream.read(chunk, 0, chunk.length, offset);
+				if (!bytesRead) break;
+				offset += bytesRead;
+				const outcome = await Promise.race([Promise.resolve(options.onData(chunk.subarray(0, bytesRead))), interruption]);
+				if (outcome === DETACHED) break;
+			}
+			if (requested) continue;
+			const state = JSON.parse(await readFile(join(dirname(outputPath), "state.json"), "utf8")) as {
+				status?: "running" | "completed" | "failed";
+				exitCode?: number | null;
+				signal?: string | null;
+				error?: string | null;
+				outputTruncated?: boolean;
+				foregroundOutputTruncated?: boolean;
+			};
+			if (state.status === "completed" || state.status === "failed") {
+				// outputTruncated applies ONLY to the retained background log. Foreground
+				// callers received the full uncapped foreground spool instead.
+				if (state.foregroundOutputTruncated) {
+					throw new Error("Foreground command output was incomplete");
+				}
+				if (offset < (await stream.stat()).size) continue;
+				completed = true;
+				if (state.error) throw new Error(`Background command failed: ${state.error}`);
+				if (typeof state.exitCode === "number") return { exitCode: state.exitCode };
+				return { exitCode: state.signal ? 128 + (osConstants.signals[state.signal as keyof typeof osConstants.signals] ?? 0) : 1 };
+			}
+			const outcome = await Promise.race([
+				new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
+				interruption,
+			]);
+			if (outcome === DETACHED) continue;
 		}
 	} catch (error) {
 		if (!requested && !completed) killProcessTree(pid);
 		throw error;
 	} finally {
 		unregister();
+		options.signal?.removeEventListener("abort", onAbort);
+		if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+		await stream?.close();
+		// The supervisor has stopped writing the foreground spool on completion,
+		// or observes the detached marker and closes it before continuing.
+		await rm(foregroundOutputPath, { force: true }).catch(() => {});
 		untrackDetachedChildPid(pid);
 	}
 }
