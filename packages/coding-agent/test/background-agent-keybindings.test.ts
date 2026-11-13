@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 
-describe("manual background tasks and keyboard transcript scrolling", () => {
-	it("reserves Ctrl+B for an independent background agent and keeps left-arrow editing", () => {
+describe("manual command backgrounding and keyboard transcript scrolling", () => {
+	it("reserves Ctrl+B for detaching a running command and keeps left-arrow editing", () => {
 		const keys = new KeybindingsManager();
-		expect(keys.getKeys("app.message.background")).toEqual(["ctrl+b"]);
+		expect(keys.getKeys("app.command.background")).toEqual(["ctrl+b"]);
 		expect(keys.getKeys("tui.editor.cursorLeft")).toEqual(["left"]);
 		expect(keys.getConflicts().filter((entry) => entry.key === "ctrl+b")).toEqual([]);
 	});
