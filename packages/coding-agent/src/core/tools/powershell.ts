@@ -25,7 +25,7 @@ const WINDOWS_POWERSHELL_EXIT_SUFFIX =
 	'\n;\nif ($?) { exit 0 }\nif (($LASTEXITCODE -eq 0) -and ("$($Error[0].FullyQualifiedErrorId)" -like "NativeCommandError*")) { exit 0 }\nexit 1';
 
 export const powershellToolSystemPromptContribution = {
-	snippet: "Execute PowerShell commands",
+	snippet: "Execute PowerShell commands; use background: true to start long-running local commands without waiting",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
 } as const;
 
@@ -73,6 +73,8 @@ export function createPowerShellToolDefinition(
 	return createShellToolDefinition(cwd, powershellToolConfig, {
 		...options,
 		operations: options?.operations ?? createLocalPowerShellOperations(),
+		// Default operations are local; injected operations may be remote and cannot be backgrounded.
+		...(options?.operations ? {} : { backgroundShellConfig: getPowerShellConfig }),
 	});
 }
 
