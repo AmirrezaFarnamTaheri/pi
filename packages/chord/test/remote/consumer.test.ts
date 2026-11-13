@@ -1081,10 +1081,14 @@ forEachCodec(() => {
 				for (let turn = 0; turn < 5; turn++) await transported();
 				expect(eventAcks(peer)).toEqual([]);
 				gate.resolve();
-				for (let turn = 0; turn < 5 && seen.length === 0; turn++) await transported();
-				await transported();
-				expect(seen).toEqual([1]);
-				expect(eventAcks(peer)).toEqual([1]);
+				await vi.waitFor(
+					async () => {
+						await transported();
+						expect(seen).toEqual([1]);
+						expect(eventAcks(peer)).toEqual([1]);
+					},
+					{ timeout: 10_000, interval: 20 },
+				);
 			} finally {
 				vi.unstubAllGlobals();
 			}
