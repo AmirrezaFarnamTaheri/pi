@@ -15,7 +15,7 @@ const hasNativeBinary = ["win32", "darwin", "linux"].includes(process.platform) 
 
 if (hasNativeBinary) {
 	const biomeBin = createRequire(import.meta.url).resolve("@biomejs/biome/bin/biome");
-	const args = ["check", "--error-on-warnings", ...(write ? ["--write"] : []), "."];
+	const args = ["check", "--error-on-warnings", "--max-diagnostics=100", ...(write ? ["--write"] : []), "."];
 	const result = spawnSync(process.execPath, [biomeBin, ...args], { stdio: "inherit" });
 	if (result.error) throw result.error;
 	process.exit(result.status ?? 1);
