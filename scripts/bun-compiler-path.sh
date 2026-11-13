@@ -12,8 +12,8 @@ pi_bun_compile() {
         ./src/extensions/codemode/worker.ts --outfile "$outfile"
 }
 
-// GitHub's GITHUB_WORKSPACE is D:\\a\\... on Windows; Git Bash must not
-// treat this drive-qualified path as a relative output root.
+# GitHub's GITHUB_WORKSPACE is D:\\a\\... on Windows; Git Bash must not
+# treat this drive-qualified path as a relative output root.
 pi_normalize_output_dir() {
     local dir="$1"
     if [[ "$dir" =~ ^[A-Za-z]:[/\\\\] ]]; then

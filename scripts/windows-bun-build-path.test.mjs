@@ -38,6 +38,11 @@ function mockCompilerArguments(platform, outfile) {
   }
 }
 
+test("Bun compiler helper parses as Bash before invoking a native build", () => {
+  const check = spawnSync("bash", ["-n", join(scripts, "bun-compiler-path.sh")], { encoding: "utf8" });
+  assert.equal(check.status, 0, check.stderr);
+});
+
 test("Bun receives a drive-qualified Windows output path when invoked under Git Bash", () => {
   const args = mockCompilerArguments("windows-x64", "/d/a/pi/binaries/windows-x64/pi.exe");
   assert.equal(args.at(-2), "--outfile");
