@@ -132,7 +132,7 @@ describe("Ctrl+B running-command backgrounding", () => {
 		controller.enable();
 		try {
 			const result = await createLocalBashOperations({ backgroundController: controller }).exec(
-				"kill -TERM $",
+				"kill -TERM $BASHPID",
 				cwd,
 				{ onData: () => {} },
 			);
