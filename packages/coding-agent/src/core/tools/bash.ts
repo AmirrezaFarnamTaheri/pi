@@ -14,6 +14,7 @@ import {
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
+import { type BackgroundedProcess, executeDetachableShell, ManualBackgroundController } from "./manual-background.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -97,7 +98,7 @@ export interface BashOperations {
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
 		},
-	) => Promise<{ exitCode: number | null }>;
+	) => Promise<{ exitCode: number | null; background?: BackgroundedProcess }>;
 }
 
 /**
@@ -115,7 +116,11 @@ class ShellTimeoutError extends Error {
 }
 
 /** Shared process execution used by the built-in shell tools. */
-export function createLocalShellOperations(shellName: string, resolveShellConfig: () => ShellConfig): BashOperations {
+export function createLocalShellOperations(
+	shellName: string,
+	resolveShellConfig: () => ShellConfig,
+	manualBackgroundController?: ManualBackgroundController,
+): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
@@ -123,6 +128,9 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				throw new Error("aborted");
 			}
 			const shellConfig = resolveShellConfig();
+			if (manualBackgroundController?.isEnabled) {
+				return executeDetachableShell(command, cwd, shellConfig, { onData, signal, timeout, env }, manualBackgroundController, "pi-shell");
+			}
 			try {
 				await fsAccess(cwd, constants.F_OK);
 			} catch {
@@ -290,8 +298,8 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
-	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath));
+export function createLocalBashOperations(options?: { shellPath?: string; backgroundController?: ManualBackgroundController }): BashOperations {
+	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath), options?.backgroundController);
 }
 
 export interface BashSpawnContext {
@@ -343,6 +351,8 @@ export interface BashToolOptions {
 	spawnHook?: BashSpawnHook;
 	/** Explicitly allow a built-in local shell implementation to run detached. Never set for remote operations. */
 	backgroundShellConfig?: () => ShellConfig;
+	/** Interactive Ctrl+B controller; only the local shell may be detached. */
+	backgroundController?: ManualBackgroundController;
 }
 
 export type BashRenderState = {
@@ -366,7 +376,7 @@ export function createShellToolDefinition(
 	config: ShellToolConfig,
 	options?: BashToolOptions,
 ): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
-	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
+	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath, backgroundController: options?.backgroundController });
 	const commandPrefix = options?.commandPrefix;
 	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
 	const spawnHook = options?.spawnHook;
@@ -519,6 +529,22 @@ export function createShellToolDefinition(
 						timeout,
 						env: spawnContext.env,
 					});
+					if (result.background) {
+						const { pid, outputPath } = result.background;
+						const snapshot = await finishOutput();
+						const text = `Background command running (PID ${pid}). Output log: ${outputPath}. This is the same process that was already executing, not a restarted command.`;
+						return {
+							content: [{ type: "text", text }],
+							details: snapshot.truncation.truncated ? { truncation: snapshot.truncation, fullOutputPath: snapshot.fullOutputPath } : undefined,
+							structuredContent: {
+								output: snapshot.content,
+								truncated: snapshot.truncation.truncated,
+								background_pid: pid,
+								background_output_path: outputPath,
+								wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+							},
+						};
+					}
 					exitCode = result.exitCode;
 				} catch (err) {
 					const snapshot = await finishOutput();
