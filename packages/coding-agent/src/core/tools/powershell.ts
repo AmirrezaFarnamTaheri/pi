@@ -26,7 +26,8 @@ const WINDOWS_POWERSHELL_EXIT_SUFFIX =
 	'\n;\nif ($?) { exit 0 }\nif (($LASTEXITCODE -eq 0) -and ("$($Error[0].FullyQualifiedErrorId)" -like "NativeCommandError*")) { exit 0 }\nexit 1';
 
 export const powershellToolSystemPromptContribution = {
-	snippet: "Execute PowerShell commands; background: true is for independent local commands, not tests needed for the next decision",
+	snippet:
+		"Execute PowerShell commands; background: true is for independent local commands, not tests needed for the next decision",
 	guidelines: [
 		"You can inspect PI_* environment variables for current model and session details.",
 		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
