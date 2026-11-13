@@ -50,7 +50,7 @@ describe("AgentSession model mutation regression (not merely a consent helper)",
 		await auth.modify("anthropic", async () => ({ type: "api_key", key: "test-key" }));
 		const runtime = await ModelRuntime.create({ credentials: auth, modelsPath: join(dir, "models.json") });
 		vi.spyOn(runtime, "getAvailableSnapshot").mockReturnValue([original, virtual, ordinary]);
-		vi.spyOn(runtime, "checkAuth").mockResolvedValue(true);
+		vi.spyOn(runtime, "checkAuth").mockResolvedValue({ type: "api_key", source: "test" });
 		const { session } = await createAgentSession({
 			cwd: dir,
 			agentDir: dir,
