@@ -54,7 +54,10 @@ function currentPiLauncher(): { executable: string; entryArgs: string[] } {
 }
 
 /** Start a detached, independent agent; the foreground session keeps working. */
-export async function startBackgroundAgent(\n  prompt: string,\n  options: BackgroundAgentOptions,\n): Promise<BackgroundAgentResult> {
+export async function startBackgroundAgent(
+	prompt: string,
+	options: BackgroundAgentOptions,
+): Promise<BackgroundAgentResult> {
 	if (!prompt.trim()) throw new Error("Cannot background an empty prompt");
 	const root = join(options.agentDir, "background-tasks");
 	await mkdir(root, { recursive: true, mode: 0o700 });
