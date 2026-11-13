@@ -169,7 +169,6 @@ import {
 	OAuthSelectorComponent,
 } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
-import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -6001,7 +6000,7 @@ export class InteractiveMode {
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
 		if (!providerRef) {
-			this.showLoginAuthTypeSelector();
+			this.showAccountManager();
 			return;
 		}
 		if (providerRef.startsWith("add ")) {
@@ -6063,79 +6062,115 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Explicit management; each account owns its own credential-store key. */
+	/** A single home for /login and /accounts: see, name, connect, switch and remove identities. */
 	private showAccountManager(): void {
-		const profiles = this.session.modelRuntime.getAccountProfiles();
-		const items = profiles.map((profile) => ({
-			profile,
-			label: `${this.session.modelRuntime.getProviderAuthStatus(profile.id).configured ? "✓" : "○"} ${profile.label}  ·  ${profile.sourceProviderId}`,
-		}));
-		const addLabel = "＋ Add another account";
-		const addKeyLabel = "＋ Add another API key";
-		const rotateLabel = "↻ Account rotation";
+		const runtime = this.session.modelRuntime;
+		const aliases = runtime.getAccountProfiles();
+		const aliasIds = new Set(aliases.map((account) => account.id));
+		const originals = runtime.getProviders()
+			.filter((provider) => !aliasIds.has(provider.id) && provider.id !== "account-profiles")
+			.filter((provider) => runtime.getProviderAuthStatus(provider.id).configured)
+			.map((provider) => ({
+				id: provider.id,
+				label: runtime.getAccountLabel(provider.id),
+				sourceProviderId: provider.id,
+				original: true,
+			}));
+		const accounts = [
+			...originals,
+			...aliases.map((profile) => ({ ...profile, original: false })),
+		];
+		const items = accounts.map((profile) => {
+			const connected = runtime.getProviderAuthStatus(profile.id).configured;
+			const selected = this.session.model?.provider === profile.id;
+			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
+			return {
+				profile,
+				// Keep the provider ID visible so accounts with identical nicknames remain distinguishable.
+				label: `${selected ? "●" : connected ? "✓" : "○"} ${profile.label} · ${provider} · ${profile.original ? "main" : profile.id}`,
+			};
+		});
+		const signIn = "＋ Sign in";
+		const add = "＋ Add another account";
+		const rotation = "↻ Rotate accounts";
+		const actions = [signIn, add, ...(aliases.length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				`Accounts  ·  ${profiles.length} additional profile${profiles.length === 1 ? "" : "s"}`,
-				[...items.map((item) => item.label), addLabel, addKeyLabel, rotateLabel],
-				(label) => {
+				"Accounts",
+				[...items.map((item) => item.label), ...actions],
+				(option) => {
 					done();
-					if (label === addLabel) this.showLoginProviderSelector("oauth", undefined, true);
-					else if (label === addKeyLabel) this.showLoginProviderSelector("api_key", undefined, true);
-					else if (label === rotateLabel) this.showAccountRotationSelector();
+					if (option === signIn) this.showLoginProviderSelector();
+					else if (option === add) this.showLoginProviderSelector(undefined, undefined, true);
+					else if (option === rotation) this.showAccountRotationSelector();
 					else {
-						const match = items.find((item) => item.label === label);
-						if (match) this.showAccountActions(match.profile);
+						const account = items.find((item) => item.label === option)?.profile;
+						if (account) this.showAccountActions(account);
 					}
 				},
 				() => {
 					done();
 					this.ui.requestRender();
 				},
-				{ description: "✓ connected  ·  ○ not signed in  ·  each profile keeps its own credentials" },
+				{ description: "● selected  ·  ✓ connected  ·  ○ sign in  ·  choose an account to manage" },
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private showAccountActions(profile: { id: string; label: string; sourceProviderId: string }): void {
-		const login = "Sign in to this account";
-		const choose = "Choose a model from this account";
-		const rotate = "Enable round-robin rotation for this provider";
-		const remove = "Disconnect and remove only this account";
-		const back = "Back to accounts";
+	private showAccountActions(profile: { id: string; label: string; sourceProviderId: string; original?: boolean }): void {
+		const signIn = "Sign in";
+		const choose = "Choose model";
+		const rename = "Rename account";
+		const rotation = "Rotate accounts for this provider";
+		const remove = profile.original ? "Disconnect account" : "Delete account";
+		const canRotate = this.session.modelRuntime.getAccountProfiles()
+			.some((account) => account.sourceProviderId === profile.sourceProviderId);
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				profile.label,
-				[login, choose, rotate, remove, back],
+				[choose, signIn, rename, ...(canRotate ? [rotation] : []), remove],
 				(option) => {
 					done();
-					if (option === login) {
+					if (option === signIn) {
 						const methods = this.getLoginProviderOptions().filter((item) => item.id === profile.id);
-						if (methods.length === 1)
-							void this.startProviderLogin(methods[0]!, () => this.showAccountActions(profile));
+						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountManager());
 						else if (methods.length > 1) this.showLoginAuthTypeSelector(methods);
-						else this.showError("Provider is not loaded; check installed extensions.");
-					} else if (option === choose) {
-						this.showAccountModelSelector(profile);
-					} else if (option === rotate) {
-						void this.enableAccountRotation(profile.sourceProviderId);
-					} else if (option === remove) {
-						this.confirmAccountRemoval(profile);
-					} else this.showAccountManager();
+						else this.showError("Sign-in provider not available");
+					} else if (option === choose) this.showAccountModelSelector(profile);
+					else if (option === rename) void this.renameAccountFromMenu(profile);
+					else if (option === rotation) void this.enableAccountRotation(profile.sourceProviderId);
+					else if (option === remove) this.confirmAccountRemoval(profile);
 				},
 				() => {
 					done();
 					this.showAccountManager();
 				},
-				{
-					description: `Identity: ${profile.id}  ·  independent from your original ${profile.sourceProviderId} login`,
-				},
+				{ description: `Provider: ${profile.sourceProviderId}  ·  account ID: ${profile.id}` },
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private showAccountModelSelector(profile: { id: string; label: string; sourceProviderId: string }): void {
+	private async renameAccountFromMenu(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+	): Promise<void> {
+		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
+		if (entered === undefined) {
+			this.showAccountActions(profile);
+			return;
+		}
+		try {
+			const name = this.session.modelRuntime.renameAccount(profile.id, entered);
+			this.showStatus(`Renamed ${profile.label} to ${name}`);
+			this.showAccountManager();
+		} catch (error) {
+			this.showError(`Could not rename account: ${error instanceof Error ? error.message : String(error)}`);
+			this.showAccountActions(profile);
+		}
+	}
+
+	private showAccountModelSelector(profile: { id: string; label: string; sourceProviderId: string; original?: boolean }): void {
 		const models = this.session.modelRuntime.getModels(profile.id);
 		if (!this.session.modelRuntime.hasConfiguredAuth(profile.id)) {
 			this.showStatus("Sign in to this account before selecting its models.");
@@ -6176,11 +6211,13 @@ export class InteractiveMode {
 		});
 	}
 
-	private confirmAccountRemoval(profile: { id: string; label: string; sourceProviderId: string }): void {
-		const confirm = "Disconnect and remove this account";
+	private confirmAccountRemoval(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+	): void {
+		const confirm = profile.original ? "Disconnect" : "Delete";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				`Remove ${profile.label}?`,
+				`${confirm} ${profile.label}?`,
 				["Cancel", confirm],
 				(option) => {
 					done();
@@ -6189,34 +6226,44 @@ export class InteractiveMode {
 						return;
 					}
 					void (async () => {
+						const runtime = this.session.modelRuntime;
 						const selected = this.session.model;
 						if (
 							selected?.provider === profile.id ||
 							(selected?.provider === "account-profiles" && selected.id === profile.sourceProviderId)
 						) {
-							const available = this.session.modelRuntime.getAvailableSnapshot();
-							const fallback =
-								available.find((model) => model.provider === profile.sourceProviderId) ??
-								available.find(
-									(model) => model.provider !== profile.id && model.provider !== "account-profiles",
-								);
-							if (!fallback) throw new Error("Select or sign in to another account before removing this one");
-							await this.session.setModel(fallback);
+							const available = runtime.getAvailableSnapshot();
+							const fallback = available.find(
+								(model) =>
+									model.provider !== profile.id &&
+									!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
+							);
+							if (fallback) await this.session.setModel(fallback);
 						}
-						await this.session.modelRuntime.removeAccountAlias(profile.id);
+						if (profile.original) await runtime.logout(profile.id);
+						else await runtime.removeAccountAlias(profile.id);
 						await this.updateAvailableProviderCount();
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
-						this.showStatus(`Removed ${profile.label}; all other accounts were preserved.`);
+						this.showStatus(
+							profile.original
+								? `Removed saved login for ${profile.label}`
+								: `Deleted ${profile.label}`,
+						);
+						this.showAccountManager();
 					})().catch((error: unknown) =>
-						this.showError(`Account removal failed: ${error instanceof Error ? error.message : String(error)}`),
+						this.showError(`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`),
 					);
 				},
 				() => {
 					done();
 					this.showAccountActions(profile);
 				},
-				{ description: "This logs out and removes only this identity. Other accounts are unchanged." },
+				{
+					description: profile.original
+						? "Removes the saved login; the provider remains available to sign in again."
+						: "Removes this account and its saved login. Other accounts stay unchanged.",
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6307,107 +6354,32 @@ export class InteractiveMode {
 	}
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
-		// The top-level selector offers Radius directly, as its last option.
-		const radiusOption = providerOptions
-			? undefined
-			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
-		const antigravityOption = providerOptions
-			? undefined
-			: this.getLoginProviderOptions("api_key").find((provider) => provider.id === "antigravity-manager");
-		const antigravityLabel = antigravityOption
-			? `Connect Antigravity Manager gateway${formatAuthSelectorProviderStatus(antigravityOption)}`
-			: undefined;
-		const manageLabel = "Manage saved accounts · sign in, switch or remove";
-		const rotateLabel = "Automatic account rotation";
-		const addOAuthLabel = "Add another account · keep existing sign-ins";
-		const addApiKeyLabel = "Add another API key · keep existing keys";
-		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
-		const radiusLabel = radiusOption ? `${radiusText}${formatAuthSelectorProviderStatus(radiusOption)}` : undefined;
-		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
-		const oauthLoginLabel =
-			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
-		const subscriptionLabel = oauthLoginLabel ?? "Sign in with an account";
-		const apiKeyLabel = "Sign in with an API key";
-		const availableAuthTypes = providerOptions
-			? new Set(providerOptions.map((provider) => provider.authType))
-			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
-		const options: string[] = [];
-		if (availableAuthTypes.has("oauth")) {
-			options.push(subscriptionLabel);
-		}
-		if (availableAuthTypes.has("api_key")) {
-			options.push(apiKeyLabel);
-		}
 		if (!providerOptions) {
-			options.push(manageLabel, addOAuthLabel, addApiKeyLabel, rotateLabel);
-			if (antigravityLabel) options.push(antigravityLabel);
-		}
-		if (radiusLabel) options.push(radiusLabel);
-
-		if (options.length === 0) {
-			this.showStatus("No login methods available.");
+			this.showAccountManager();
 			return;
 		}
-
-		if (providerOptions && options.length === 1) {
-			const providerOption = providerOptions[0];
-			if (providerOption) {
-				void this.startProviderLogin(providerOption);
-			}
+		if (providerOptions.length === 1) {
+			void this.startProviderLogin(providerOptions[0]!, () => this.showAccountManager());
 			return;
 		}
-
-		const title = providerOptions?.[0]
-			? `Select authentication method for ${providerOptions[0].name}:`
-			: `Accounts · ${this.session.modelRuntime.getAccountProfiles().length} additional profiles · choose action:`;
+		const choices = providerOptions.map((provider) => ({
+			provider,
+			label: provider.authType === "oauth" ? "Sign in with an account" : "Use an API key",
+		}));
 		this.showSelector((done) => {
-			const onSelect = (option: string) => {
-				done();
-				if (radiusOption && option === radiusLabel) {
-					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
-					return;
-				}
-				if (antigravityOption && option === antigravityLabel) {
-					void this.startProviderLogin(antigravityOption, () => this.showLoginAuthTypeSelector());
-					return;
-				}
-				if (option === manageLabel) {
+			const selector = new ExtensionSelectorComponent(
+				`Sign in · ${providerOptions[0]?.name ?? "Provider"}`,
+				choices.map((item) => item.label),
+				(label) => {
+					done();
+					const selected = choices.find((item) => item.label === label)?.provider;
+					if (selected) void this.startProviderLogin(selected, () => this.showAccountManager());
+				},
+				() => {
+					done();
 					this.showAccountManager();
-					return;
-				}
-				if (option === rotateLabel) {
-					this.showAccountRotationSelector();
-					return;
-				}
-				if (option === addOAuthLabel || option === addApiKeyLabel) {
-					this.showLoginProviderSelector(option === addOAuthLabel ? "oauth" : "api_key", undefined, true);
-					return;
-				}
-				const authType = option === subscriptionLabel ? "oauth" : "api_key";
-				if (providerOptions) {
-					const providerOption = providerOptions.find((provider) => provider.authType === authType);
-					if (providerOption) {
-						void this.startProviderLogin(providerOption, () => this.showLoginAuthTypeSelector(providerOptions));
-					}
-					return;
-				}
-				this.showLoginProviderSelector(authType);
-			};
-			const onCancel = () => {
-				done();
-				this.ui.requestRender();
-			};
-			const selector =
-				radiusLabel && radiusText
-					? createLoginMenuSelector(
-							this.ui,
-							title,
-							options,
-							{ label: radiusLabel, text: radiusText },
-							onSelect,
-							onCancel,
-						)
-					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+				},
+			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
@@ -6458,11 +6430,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					if (authType) {
-						this.showLoginAuthTypeSelector();
-					} else {
-						this.ui.requestRender();
-					}
+					this.showAccountManager();
 				},
 				initialSearchInput,
 				this.ui,
