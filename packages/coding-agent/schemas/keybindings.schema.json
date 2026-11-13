@@ -251,9 +251,9 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Copy selection or last assistant message"
     },
-    "app.message.background": {
+    "app.command.background": {
       "$ref": "#/$defs/KeybindingValue",
-      "description": "Launch the editor prompt in a separate background agent session"
+      "description": "Detach the currently running local shell command"
     },
     "app.message.followUp": {
       "$ref": "#/$defs/KeybindingValue",
