@@ -39,11 +39,6 @@ describe("account management menu", () => {
 		let selected: ExtensionSelectorComponent | undefined;
 		const mode = Object.create(InteractiveMode.prototype) as {
 			runtimeHost: unknown;
-			settingsManager: {
-				getDefaultProvider: () => string | undefined;
-				getDefaultModel: () => string | undefined;
-				setDefaultModelAndProvider: (provider: string, modelId: string) => void;
-			};
 			showSelector: (factory: (done: () => void) => { component: ExtensionSelectorComponent }) => void;
 			showExtensionInput: (label: string, initial?: string) => Promise<string | undefined>;
 			showStatus: (message: string) => void;
@@ -53,13 +48,13 @@ describe("account management menu", () => {
 			updateEditorBorderColor: () => void;
 			footer: { invalidate: () => void };
 		};
-		mode.settingsManager = {
-			getDefaultProvider: () => defaultProvider,
-			getDefaultModel: () => "claude-sonnet",
-			setDefaultModelAndProvider: (provider, modelId) => actions.push(`default ${provider}/${modelId}`),
-		};
 		mode.runtimeHost = {
 			session: {
+				settingsManager: {
+					getDefaultProvider: () => defaultProvider,
+					getDefaultModel: () => "claude-sonnet",
+					setDefaultModelAndProvider: (provider: string, modelId: string) => actions.push(`default ${provider}/${modelId}`),
+				},
 				model: { provider: activeProvider, id: "claude-sonnet" },
 				modelRuntime: runtime,
 				setModel,
