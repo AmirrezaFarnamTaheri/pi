@@ -64,6 +64,10 @@ const APP_KEYBINDINGS = {
 		defaultKeys: "ctrl+x",
 		description: "Copy selection or last assistant message",
 	},
+	"app.command.background": {
+		defaultKeys: "ctrl+b",
+		description: "Detach the currently running local shell command",
+	},
 	"app.message.followUp": {
 		defaultKeys: windowsKeybindings ? "ctrl+q" : "alt+enter",
 		description: "Queue follow-up message",
@@ -179,6 +183,20 @@ declare module "@earendil-works/pi-tui" {
 
 export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
+	// Ctrl+B previously moved the cursor left; it now detaches the active local command.
+	"tui.editor.cursorLeft": {
+		...TUI_KEYBINDINGS["tui.editor.cursorLeft"],
+		defaultKeys: "left",
+	},
+	// Fullscreen scrolling already handles these actions; expose keyboard defaults.
+	"tui.altScreen.lineUp": {
+		...TUI_KEYBINDINGS["tui.altScreen.lineUp"],
+		defaultKeys: "shift+up",
+	},
+	"tui.altScreen.lineDown": {
+		...TUI_KEYBINDINGS["tui.altScreen.lineDown"],
+		defaultKeys: "shift+down",
+	},
 	"tui.editor.undo": {
 		...TUI_KEYBINDINGS["tui.editor.undo"],
 		defaultKeys: process.platform === "win32" ? "ctrl+z" : windowsKeybindings ? "alt+z" : "ctrl+-",

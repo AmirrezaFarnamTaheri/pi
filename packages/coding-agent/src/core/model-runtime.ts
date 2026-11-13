@@ -75,7 +75,10 @@ import {
 	type AccountProfile,
 	addAccountProfile,
 	loadAccountProfiles,
+	loadPrimaryAccountNames,
 	removeAccountProfile,
+	renameAccountProfile,
+	renamePrimaryAccount,
 } from "./account-profiles.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
@@ -195,6 +198,7 @@ export class ModelRuntime implements Models {
 	private readonly modelsPath: string | undefined;
 	private readonly accountProfilesPath: string | undefined;
 	private readonly accountProfiles = new Map<string, AccountProfile>();
+	private readonly accountNames = new Map<string, string>();
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -559,8 +563,46 @@ export class ModelRuntime implements Models {
 		return [...this.accountProfiles.values()];
 	}
 
+	/** A memorable display name, separate from the stable provider ID used by credentials and sessions. */
+	getAccountLabel(providerId: string): string {
+		return (
+			this.accountProfiles.get(providerId)?.label ??
+			this.accountNames.get(providerId) ??
+			this.getProvider(providerId)?.name ??
+			providerId
+		);
+	}
+
+	/** Rename either an additional account or the original provider without touching credentials. */
+	renameAccount(providerId: string, label: string): string {
+		const path = this.accountProfilesPath;
+		if (!path) throw new Error("Account names cannot be saved in this runtime");
+		const existing = this.accountProfiles.get(providerId);
+		if (existing) {
+			const updated = renameAccountProfile(path, providerId, label);
+			if (!updated) throw new Error("Account no longer exists");
+			this.accountProfiles.set(providerId, updated);
+			const source = this.models.getProvider(updated.sourceProviderId);
+			if (source) {
+				this.nativeExtensionProviders.set(providerId, createStoredAccountAlias(source, providerId, updated.label));
+				this.recomposeProvider(providerId);
+				this.updateModelSnapshot();
+			}
+			return updated.label;
+		}
+		if (providerId === "account-profiles" || !this.models.getProvider(providerId)) {
+			throw new Error("Unknown account");
+		}
+		const name = renamePrimaryAccount(path, providerId, label);
+		this.accountNames.set(providerId, name);
+		return name;
+	}
+
 	private restoreAccountAliases(): void {
 		if (!this.accountProfilesPath) return;
+		for (const [id, name] of Object.entries(loadPrimaryAccountNames(this.accountProfilesPath))) {
+			this.accountNames.set(id, name);
+		}
 		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
 			if (this.models.getProvider(profile.id))
 				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
@@ -622,8 +664,9 @@ export class ModelRuntime implements Models {
 	async removeAccountAlias(id: string): Promise<void> {
 		const path = this.accountProfilesPath;
 		if (!path || !this.accountProfiles.has(id)) return;
-		// Fail closed: a failed logout must never leave an orphaned stored credential.
+		// Remove the saved credential even if the source extension is not currently loaded.
 		if (this.models.getProvider(id)) await this.logout(id);
+		else await this.credentials.delete(id);
 		removeAccountProfile(path, id);
 		const sourceProviderId = this.accountProfiles.get(id)!.sourceProviderId;
 		this.accountProfiles.delete(id);

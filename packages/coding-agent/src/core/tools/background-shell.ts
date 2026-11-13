@@ -3,16 +3,34 @@ import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { killProcessTree, type ShellConfig } from "../../utils/shell.ts";
 
 export interface BackgroundShellResult {
 	pid: number;
 	outputPath: string;
+	/** Uncapped foreground spool; only requested for commands that Ctrl+B may detach. */
+	foregroundOutputPath?: string;
 }
 
 /** Hard maximum of captured background output; excess bytes are drained, never written. */
 export const BACKGROUND_LOG_MAX_BYTES = 2_000_000;
+
+export const BACKGROUND_SUPERVISOR_FLAG = "--pi-internal-background-supervisor";
+
+/** A compiled Pi binary cannot interpret Node's -e; use Pi's internal worker route. */
+export function backgroundSupervisorInvocation(
+	executable: string,
+	_argv: readonly string[],
+	_execArgv: readonly string[],
+	folder: string,
+): { executable: string; args: string[] } {
+	const runtime = basename(executable).toLowerCase();
+	if (runtime === "node" || runtime === "node.exe" || runtime === "bun" || runtime === "bun.exe") {
+		return { executable, args: ["-e", SUPERVISOR, folder] };
+	}
+	return { executable, args: [BACKGROUND_SUPERVISOR_FLAG, folder] };
+}
 
 /**
  * Self-contained supervisor source. Its Node executable and this source ship
@@ -23,57 +41,86 @@ export const BACKGROUND_LOG_MAX_BYTES = 2_000_000;
 const SUPERVISOR = `
 "use strict";
 const fs=require("node:fs");
-const {spawn}=require("node:child_process");
+const {spawn,spawnSync}=require("node:child_process");
 const {join}=require("node:path");
 const folder=process.argv[1];
 const requestPath=join(folder,"request.json");
 const request=JSON.parse(fs.readFileSync(requestPath,"utf8"));
 fs.rmSync(requestPath,{force:true});
 const statePath=join(folder,"state.json");
-let fd=null,child=null,used=0,truncated=false,done=false;
+const detachPath=join(folder,"detached");
+let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false;
 const save=(patch)=>{
   const state={version:1,workerPid:process.pid,childPid:child?.pid??null,
-    outputTruncated:truncated,updatedAt:Date.now(),...patch};
+    outputTruncated:truncated,foregroundOutputTruncated:false,updatedAt:Date.now(),...patch};
   const tmp=statePath+"."+process.pid+".tmp";
   fs.writeFileSync(tmp,JSON.stringify(state),{mode:0o600});
   fs.renameSync(tmp,statePath);
 };
+const closeForeground=()=>{
+  if(foregroundFd!==null){fs.closeSync(foregroundFd);foregroundFd=null;}
+};
 const finish=(status,exitCode,signal,error)=>{
   if(done)return;
   done=true;
-  try{if(fd!==null){fs.closeSync(fd);fd=null;}}catch{}
+  try{if(fd!==null){fs.closeSync(fd);fd=null;}closeForeground();}catch{}
   try{save({status,exitCode,signal:signal||null,error:error||null,finishedAt:Date.now()});}
   catch{process.exitCode=1;}
 };
-const write=buf=>{
-  if(done||fd===null)return;
-  const remaining=request.maxLogBytes-used;
-  if(remaining<=0){if(buf.length>0)truncated=true;return;}
-  let count=Math.min(remaining,buf.length),pos=0;
+const stopChildTree=()=>{
+  if(!child?.pid)return;
+  try{
+    if(process.platform==="win32"){
+      spawnSync("taskkill",["/PID",String(child.pid),"/T","/F"],{windowsHide:true});
+    }else{
+      process.kill(-child.pid,"SIGKILL");
+    }
+  }catch{try{child.kill();}catch{}}
+};
+const fail=e=>{
+  if(done)return;
+  stopChildTree();
+  finish("failed",null,null,e?.message||e?.code||String(e));
+};
+const writeFully=(target,buf,count)=>{
+  let pos=0;
   while(pos<count){
-    const n=fs.writeSync(fd,buf,pos,count-pos);
-    if(n<=0)throw new Error("background log write failed");
+    const n=fs.writeSync(target,buf,pos,count-pos);
+    if(n<=0)throw new Error("Background output write failed");
     pos+=n;
   }
+};
+const write=buf=>{
+  if(done)return;
+  if(foregroundFd!==null){
+    if(fs.existsSync(detachPath))closeForeground();
+    else writeFully(foregroundFd,buf,buf.length);
+  }
+  if(fd===null)return;
+  const remaining=request.maxLogBytes-used;
+  if(remaining<=0){if(buf.length>0)truncated=true;return;}
+  const count=Math.min(remaining,buf.length);
+  writeFully(fd,buf,count);
   used+=count;
   if(buf.length>count)truncated=true;
 };
 try{
   fd=fs.openSync(join(folder,"output.log"),"wx",0o600);
-  const opts=request.shellConfig;
-  const fromStdin=opts.commandTransport==="stdin";
-  child=spawn(opts.shell,fromStdin?opts.args:[...opts.args,request.command],{
+  if(request.captureForegroundOutput)foregroundFd=fs.openSync(join(folder,"foreground.log"),"wx",0o600);
+  const cfg=request.shellConfig;
+  const fromStdin=cfg.commandTransport==="stdin";
+  child=spawn(cfg.shell,fromStdin?cfg.args:[...cfg.args,request.command],{
     cwd:request.cwd,env:process.env,detached:process.platform!=="win32",
     stdio:[fromStdin?"pipe":"ignore","pipe","pipe"],windowsHide:true
   });
-  child.once("spawn",()=>save({status:"running",exitCode:null}));
-  child.once("error",e=>finish("failed",null,null,e.code||"spawn failed"));
+  child.once("spawn",()=>{try{save({status:"running",exitCode:null});}catch(e){fail(e);}});
+  child.once("error",fail);
   for(const stream of [child.stdout,child.stderr]){
-    stream.on("data",write);
-    stream.on("error",e=>finish("failed",null,null,e.code||"stream failure"));
+    stream.on("data",buf=>{try{write(buf);}catch(e){fail(e);}});
+    stream.on("error",fail);
   }
   if(fromStdin){
-    child.stdin.on("error",()=>{});
+    child.stdin.on("error",fail);
     child.stdin.end(request.command);
   }
   child.once("exit",()=>{
@@ -81,10 +128,7 @@ try{
     guard.unref();
   });
   child.once("close",(code,signal)=>finish(code===0?"completed":"failed",code,signal,null));
-}catch(e){
-  try{if(child?.pid)child.kill();}catch{}
-  finish("failed",null,null,e.code||"supervisor failure");
-}
+}catch(e){fail(e);}
 `;
 
 /**
@@ -98,6 +142,7 @@ export async function startBackgroundShell(
 	shellConfig: ShellConfig,
 	env: NodeJS.ProcessEnv,
 	tempFilePrefix: string,
+	options?: { captureForegroundOutput?: boolean },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
 	const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
@@ -110,11 +155,13 @@ export async function startBackgroundShell(
 				cwd,
 				shellConfig,
 				maxLogBytes: BACKGROUND_LOG_MAX_BYTES,
+				captureForegroundOutput: options?.captureForegroundOutput === true,
 			}),
 			{ flag: "wx", mode: 0o600 },
 		);
 		// The supervisor's own cwd must not lock the user's project on Windows.
-		worker = spawn(process.execPath, ["-e", SUPERVISOR, folder], {
+		const invocation = backgroundSupervisorInvocation(process.execPath, process.argv, process.execArgv, folder);
+		worker = spawn(invocation.executable, invocation.args, {
 			cwd: tmpdir(),
 			detached: true,
 			env,
@@ -135,7 +182,11 @@ export async function startBackgroundShell(
 					error?: string;
 				};
 				if (typeof state.childPid === "number" && state.childPid > 0) {
-					return { pid: state.childPid, outputPath: join(folder, "output.log") };
+					return {
+						pid: state.childPid,
+						outputPath: join(folder, "output.log"),
+						...(options?.captureForegroundOutput ? { foregroundOutputPath: join(folder, "foreground.log") } : {}),
+					};
 				}
 				if (state.status === "failed") {
 					throw new Error(`Background command failed: ${state.error || "spawn error"}`);

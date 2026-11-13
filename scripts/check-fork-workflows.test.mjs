@@ -129,7 +129,7 @@ test("fork prerelease verifies exact-SHA CI and publishes six installable platfo
     { runner: "ubuntu-latest", platform: "linux-x64", arch: "X64" },
     { runner: "ubuntu-24.04-arm", platform: "linux-arm64", arch: "ARM64" },
     { runner: "macos-15-intel", platform: "darwin-x64", arch: "X64" },
-    { runner: "macos-15", platform: "darwin-arm64", arch: "ARM64" },
+    { runner: "macos-26", platform: "darwin-arm64", arch: "ARM64" },
     { runner: "windows-latest", platform: "windows-x64", arch: "X64" },
     { runner: "windows-11-arm", platform: "windows-arm64", arch: "ARM64" },
   ]);

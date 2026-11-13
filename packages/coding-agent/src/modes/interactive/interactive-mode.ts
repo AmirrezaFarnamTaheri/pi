@@ -163,13 +163,8 @@ import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMarkdownTransform } from "./components/markdown-transform.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-import {
-	type AuthSelectorProvider,
-	formatAuthSelectorProviderStatus,
-	OAuthSelectorComponent,
-} from "./components/oauth-selector.ts";
+import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
-import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -953,6 +948,8 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
+
+		this.session.manualBackgroundController.enable();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
@@ -2136,6 +2133,7 @@ export class InteractiveMode {
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		const session = this.session;
+		session?.manualBackgroundController?.enable();
 
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
@@ -3158,6 +3156,7 @@ export class InteractiveMode {
 			"app.message.copy",
 			() => void this.handleCopyCommand({ flashConfirmation: true, preferSelection: true }),
 		);
+		this.defaultEditor.onAction("app.command.background", () => this.handleBackgroundCommand());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
@@ -4583,6 +4582,15 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Detach the existing running shell command; never restart a test or launch another agent. */
+	private handleBackgroundCommand(): void {
+		if (!this.session.manualBackgroundController.backgroundCurrentCommand()) {
+			this.showWarning("No running local shell command to send to background");
+			return;
+		}
+		this.showStatus("Running command detached; PID and output log will appear in its shell result");
+	}
+
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
@@ -5949,7 +5957,7 @@ export class InteractiveMode {
 			if ((!authType || authType === "oauth") && provider.auth.oauth) {
 				options.push({
 					id: provider.id,
-					name: provider.name,
+					name: this.session.modelRuntime.getAccountLabel(provider.id),
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5959,7 +5967,7 @@ export class InteractiveMode {
 			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
 				options.push({
 					id: provider.id,
-					name: provider.name,
+					name: this.session.modelRuntime.getAccountLabel(provider.id),
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -5977,7 +5985,7 @@ export class InteractiveMode {
 				const provider = this.session.modelRuntime.getProvider(providerId);
 				return {
 					id: providerId,
-					name: provider?.name ?? providerId,
+					name: this.session.modelRuntime.getAccountLabel(providerId),
 					authType: type,
 					status: { type, source: "stored credential" },
 					subscription: provider?.auth.oauth?.isSubscription === true,
@@ -5988,7 +5996,7 @@ export class InteractiveMode {
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
 		if (!providerRef) {
-			this.showLoginAuthTypeSelector();
+			this.showAccountManager();
 			return;
 		}
 		if (providerRef.startsWith("add ")) {
@@ -6050,81 +6058,146 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Explicit management; each account owns its own credential-store key. */
+	/** One source of truth for rotation actions in every account menu. */
+	private getRotatableSources(): string[] {
+		const runtime = this.session.modelRuntime;
+		const profiles = runtime.getAccountProfiles();
+		return [...new Set(profiles.map((profile) => profile.sourceProviderId))].filter((source) => {
+			const members = [
+				source,
+				...profiles.filter((profile) => profile.sourceProviderId === source).map((profile) => profile.id),
+			];
+			return members.filter((id) => runtime.hasConfiguredAuth(id)).length >= 2;
+		});
+	}
+
+	/** A single home for /login and /accounts: see, name, connect, switch and remove identities. */
 	private showAccountManager(): void {
-		const profiles = this.session.modelRuntime.getAccountProfiles();
-		if (profiles.length === 0) {
-			this.showStatus("No additional accounts yet. Open /login and choose Add another account.");
-			return;
-		}
-		const items = profiles.map((profile) => ({
-			profile,
-			label: `${this.session.modelRuntime.getProviderAuthStatus(profile.id).configured ? "✓" : "○"} ${profile.label}  ·  ${profile.sourceProviderId}`,
-		}));
-		const addLabel = "＋ Add another account";
-		const rotateLabel = "↻ Select automatic account rotation";
+		const runtime = this.session.modelRuntime;
+		const aliases = runtime.getAccountProfiles();
+		const aliasIds = new Set(aliases.map((account) => account.id));
+		const originals = runtime
+			.getProviders()
+			.filter((provider) => !aliasIds.has(provider.id) && provider.id !== "account-profiles")
+			.filter((provider) => runtime.getProviderAuthStatus(provider.id).configured)
+			.map((provider) => ({
+				id: provider.id,
+				label: runtime.getAccountLabel(provider.id),
+				sourceProviderId: provider.id,
+				original: true,
+			}));
+		const accounts = [...originals, ...aliases.map((profile) => ({ ...profile, original: false }))];
+		const baseLabels = accounts.map((profile) => {
+			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
+			return `${profile.label} · ${provider}`;
+		});
+		const duplicates = new Set(baseLabels.filter((name, index) => baseLabels.indexOf(name) !== index));
+		const items = accounts.map((profile, index) => {
+			const connected = runtime.getProviderAuthStatus(profile.id).configured;
+			const selected = this.session.model?.provider === profile.id;
+			const name = baseLabels[index]!;
+			return {
+				profile,
+				// Show stable IDs only when two accounts have the same nickname and provider.
+				label: `${selected ? "●" : connected ? "✓" : "○"} ${name}${duplicates.has(name) ? ` · ${profile.id}` : ""}`,
+			};
+		});
+		const signIn = "＋ Sign in";
+		const add = "＋ Add another account";
+		const rotation =
+			this.session.model?.provider === "account-profiles"
+				? `↻ Rotation on · ${runtime.getAccountLabel(this.session.model.id)}`
+				: "↻ Rotate accounts";
+		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				`Accounts  ·  ${profiles.length} additional profile${profiles.length === 1 ? "" : "s"}`,
-				[...items.map((item) => item.label), addLabel, rotateLabel],
-				(label) => {
+				"Accounts",
+				[...items.map((item) => item.label), ...actions],
+				(option) => {
 					done();
-					if (label === addLabel) this.showLoginAuthTypeSelector();
-					else if (label === rotateLabel) this.showAccountRotationSelector();
+					if (option === signIn) this.showLoginProviderSelector();
+					else if (option === add) this.showLoginProviderSelector(undefined, undefined, true);
+					else if (option === rotation) this.showAccountRotationSelector();
 					else {
-						const match = items.find((item) => item.label === label);
-						if (match) this.showAccountActions(match.profile);
+						const account = items.find((item) => item.label === option)?.profile;
+						if (account) this.showAccountActions(account);
 					}
 				},
 				() => {
 					done();
 					this.ui.requestRender();
 				},
-				{ description: "✓ connected  ·  ○ not signed in  ·  each profile keeps its own credentials" },
+				{ description: "● selected  ·  ✓ connected  ·  ○ sign in  ·  choose an account to manage" },
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private showAccountActions(profile: { id: string; label: string; sourceProviderId: string }): void {
-		const login = "Sign in to this account";
-		const choose = "Choose a model from this account";
-		const rotate = "Enable round-robin rotation for this provider";
-		const remove = "Disconnect and remove only this account";
-		const back = "Back to accounts";
+	private showAccountActions(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
+		const signIn = this.session.modelRuntime.hasConfiguredAuth(profile.id) ? "Sign in again" : "Sign in";
+		const choose = "Choose model";
+		const rename = "Rename account";
+		const rotation = "Rotate accounts for this provider";
+		const remove = profile.original ? "Disconnect account" : "Delete account";
+		const canRotate = this.getRotatableSources().includes(profile.sourceProviderId);
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				profile.label,
-				[login, choose, rotate, remove, back],
+				[choose, signIn, rename, ...(canRotate ? [rotation] : []), remove],
 				(option) => {
 					done();
-					if (option === login) {
+					if (option === signIn) {
 						const methods = this.getLoginProviderOptions().filter((item) => item.id === profile.id);
-						if (methods.length === 1)
-							void this.startProviderLogin(methods[0]!, () => this.showAccountActions(profile));
+						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountManager());
 						else if (methods.length > 1) this.showLoginAuthTypeSelector(methods);
-						else this.showError("Provider is not loaded; check installed extensions.");
-					} else if (option === choose) {
-						this.showAccountModelSelector(profile);
-					} else if (option === rotate) {
-						void this.enableAccountRotation(profile.sourceProviderId);
-					} else if (option === remove) {
-						this.confirmAccountRemoval(profile);
-					} else this.showAccountManager();
+						else this.showError("Sign-in provider not available");
+					} else if (option === choose) this.showAccountModelSelector(profile);
+					else if (option === rename) void this.renameAccountFromMenu(profile);
+					else if (option === rotation) void this.enableAccountRotation(profile.sourceProviderId);
+					else if (option === remove) this.confirmAccountRemoval(profile);
 				},
 				() => {
 					done();
 					this.showAccountManager();
 				},
-				{
-					description: `Identity: ${profile.id}  ·  independent from your original ${profile.sourceProviderId} login`,
-				},
+				{ description: `Provider: ${profile.sourceProviderId}  ·  account ID: ${profile.id}` },
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private showAccountModelSelector(profile: { id: string; label: string; sourceProviderId: string }): void {
+	private async renameAccountFromMenu(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): Promise<void> {
+		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
+		if (entered === undefined) {
+			this.showAccountActions(profile);
+			return;
+		}
+		try {
+			const name = this.session.modelRuntime.renameAccount(profile.id, entered);
+			this.showStatus(`Renamed ${profile.label} to ${name}`);
+			this.showAccountManager();
+		} catch (error) {
+			this.showError(`Could not rename account: ${error instanceof Error ? error.message : String(error)}`);
+			this.showAccountActions(profile);
+		}
+	}
+
+	private showAccountModelSelector(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
 		const models = this.session.modelRuntime.getModels(profile.id);
 		if (!this.session.modelRuntime.hasConfiguredAuth(profile.id)) {
 			this.showStatus("Sign in to this account before selecting its models.");
@@ -6165,18 +6238,16 @@ export class InteractiveMode {
 		});
 	}
 
-	private confirmAccountRemoval(profile: { id: string; label: string; sourceProviderId: string }): void {
-		if (
-			this.session.model?.provider === profile.id ||
-			(this.session.model?.provider === "account-profiles" && this.session.model.id === profile.sourceProviderId)
-		) {
-			this.showError("Select another model before disconnecting an active account or rotation group.");
-			return;
-		}
-		const confirm = "Disconnect and remove this account";
+	private confirmAccountRemoval(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
+		const confirm = profile.original ? "Disconnect" : "Delete";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				`Remove ${profile.label}?`,
+				`${confirm} ${profile.label}?`,
 				["Cancel", confirm],
 				(option) => {
 					done();
@@ -6184,24 +6255,69 @@ export class InteractiveMode {
 						this.showAccountActions(profile);
 						return;
 					}
-					void this.session.modelRuntime
-						.removeAccountAlias(profile.id)
-						.then(async () => {
-							await this.updateAvailableProviderCount();
-							this.footer.invalidate();
-							this.showStatus(`Removed ${profile.label}; all other accounts were preserved.`);
-						})
-						.catch((error: unknown) =>
-							this.showError(
-								`Account removal failed: ${error instanceof Error ? error.message : String(error)}`,
-							),
+					void (async () => {
+						const runtime = this.session.modelRuntime;
+						const selected = this.session.model;
+						const connectedAfterRemoval = [
+							profile.sourceProviderId,
+							...runtime
+								.getAccountProfiles()
+								.filter(
+									(account) =>
+										account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id,
+								)
+								.map((account) => account.id),
+						].filter((id) => id !== profile.id && runtime.hasConfiguredAuth(id)).length;
+						const rotationWillStop = connectedAfterRemoval < 2;
+						const activeNeedsSwitch =
+							selected?.provider === profile.id ||
+							(rotationWillStop &&
+								selected?.provider === "account-profiles" &&
+								selected.id === profile.sourceProviderId);
+						const defaultProvider = this.settingsManager.getDefaultProvider();
+						const defaultNeedsUpdate =
+							defaultProvider === profile.id ||
+							(rotationWillStop &&
+								defaultProvider === "account-profiles" &&
+								this.settingsManager.getDefaultModel() === profile.sourceProviderId);
+						if (activeNeedsSwitch || defaultNeedsUpdate) {
+							const fallback = runtime
+								.getAvailableSnapshot()
+								.find(
+									(model) =>
+										model.provider !== profile.id &&
+										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
+								);
+							if (fallback && activeNeedsSwitch) {
+								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
+							} else if (fallback && defaultNeedsUpdate) {
+								this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
+							}
+						}
+						if (profile.original) await runtime.logout(profile.id);
+						else await runtime.removeAccountAlias(profile.id);
+						await this.updateAvailableProviderCount();
+						this.footer.invalidate();
+						this.updateEditorBorderColor();
+						this.showStatus(
+							profile.original ? `Removed saved login for ${profile.label}` : `Deleted ${profile.label}`,
 						);
+						this.showAccountManager();
+					})().catch((error: unknown) =>
+						this.showError(
+							`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`,
+						),
+					);
 				},
 				() => {
 					done();
 					this.showAccountActions(profile);
 				},
-				{ description: "This logs out and removes only this identity. Other accounts are unchanged." },
+				{
+					description: profile.original
+						? "Removes the saved login; the provider remains available to sign in again."
+						: "Removes this account and its saved login. Other accounts stay unchanged.",
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6226,29 +6342,8 @@ export class InteractiveMode {
 			this.showError("Add another account for this provider to enable rotation.");
 			return;
 		}
-		// A routed request includes existing transcript messages and tool outputs.
-		// Explicitly obtain user consent before exposing that context to another account.
-		const confirm = "Enable rotation and share this conversation across accounts";
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				"Confirm account rotation",
-				["Cancel", confirm],
-				(option) => {
-					done();
-					if (option === confirm) void this.activateAccountRotation(sourceProviderId, virtual, persist);
-				},
-				() => done(),
-				{
-					description:
-						`The full transcript and tool output may be shared with ${connected.join(", ")}. ` +
-						(persist
-							? "The default is remembered, but each new session needs separate sharing consent."
-							: "This selection is for this session only.") +
-						" Only proceed if authorized.",
-				},
-			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
-		});
+		// Selecting the rotation group already expresses intent; do not ask a second time.
+		await this.activateAccountRotation(sourceProviderId, virtual, persist);
 	}
 
 	private async activateAccountRotation(
@@ -6257,11 +6352,11 @@ export class InteractiveMode {
 		persist: boolean,
 	): Promise<void> {
 		try {
-			await this.session.setModel(virtual, { persist, accountRotationConsent: true });
+			await this.session.setModel(virtual, { persist });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
 			this.showStatus(
-				`Rotation enabled for ${sourceProviderId} in this session${persist ? "; future sessions require confirmation" : ""}. Tool continuations stay on the same identity.`,
+				`Rotation enabled for ${sourceProviderId}${persist ? " (saved as default)" : " (this session)"}. Tool continuations stay on the same account.`,
 			);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
@@ -6269,11 +6364,9 @@ export class InteractiveMode {
 	}
 
 	private showAccountRotationSelector(): void {
-		const sources = [
-			...new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.sourceProviderId)),
-		];
+		const sources = this.getRotatableSources();
 		if (sources.length === 0) {
-			this.showStatus("Add a second account before enabling rotation.");
+			this.showStatus("Sign in to two accounts with the same provider to enable rotation.");
 			return;
 		}
 		const items = sources.map((source) => {
@@ -6305,7 +6398,7 @@ export class InteractiveMode {
 				},
 				{
 					description:
-						"Opt-in round-robin · authenticated accounts only · cooldown on pre-output credential failures",
+						"Choose a group to rotate signed-in accounts on new turns; existing messages and tool results are sent to the selected account.",
 				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
@@ -6313,107 +6406,32 @@ export class InteractiveMode {
 	}
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
-		// The top-level selector offers Radius directly, as its last option.
-		const radiusOption = providerOptions
-			? undefined
-			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
-		const antigravityOption = providerOptions
-			? undefined
-			: this.getLoginProviderOptions("api_key").find((provider) => provider.id === "antigravity-manager");
-		const antigravityLabel = antigravityOption
-			? `Connect Antigravity Manager gateway${formatAuthSelectorProviderStatus(antigravityOption)}`
-			: undefined;
-		const manageLabel = "Manage saved accounts · sign in, switch or remove";
-		const rotateLabel = "Enable automatic rotation · opt in";
-		const addOAuthLabel = "Add another account · keep existing sign-ins";
-		const addApiKeyLabel = "Add another API key · keep existing keys";
-		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
-		const radiusLabel = radiusOption ? `${radiusText}${formatAuthSelectorProviderStatus(radiusOption)}` : undefined;
-		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
-		const oauthLoginLabel =
-			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
-		const subscriptionLabel = oauthLoginLabel ?? "Sign in with an account";
-		const apiKeyLabel = "Sign in with an API key";
-		const availableAuthTypes = providerOptions
-			? new Set(providerOptions.map((provider) => provider.authType))
-			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
-		const options: string[] = [];
-		if (availableAuthTypes.has("oauth")) {
-			options.push(subscriptionLabel);
-		}
-		if (availableAuthTypes.has("api_key")) {
-			options.push(apiKeyLabel);
-		}
 		if (!providerOptions) {
-			options.push(manageLabel, addOAuthLabel, addApiKeyLabel, rotateLabel);
-			if (antigravityLabel) options.push(antigravityLabel);
-		}
-		if (radiusLabel) options.push(radiusLabel);
-
-		if (options.length === 0) {
-			this.showStatus("No login methods available.");
+			this.showAccountManager();
 			return;
 		}
-
-		if (providerOptions && options.length === 1) {
-			const providerOption = providerOptions[0];
-			if (providerOption) {
-				void this.startProviderLogin(providerOption);
-			}
+		if (providerOptions.length === 1) {
+			void this.startProviderLogin(providerOptions[0]!, () => this.showAccountManager());
 			return;
 		}
-
-		const title = providerOptions?.[0]
-			? `Select authentication method for ${providerOptions[0].name}:`
-			: `Accounts · ${this.session.modelRuntime.getAccountProfiles().length} additional profiles · choose action:`;
+		const choices = providerOptions.map((provider) => ({
+			provider,
+			label: provider.authType === "oauth" ? "Sign in with an account" : "Use an API key",
+		}));
 		this.showSelector((done) => {
-			const onSelect = (option: string) => {
-				done();
-				if (radiusOption && option === radiusLabel) {
-					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
-					return;
-				}
-				if (antigravityOption && option === antigravityLabel) {
-					void this.startProviderLogin(antigravityOption, () => this.showLoginAuthTypeSelector());
-					return;
-				}
-				if (option === manageLabel) {
+			const selector = new ExtensionSelectorComponent(
+				`Sign in · ${providerOptions[0]?.name ?? "Provider"}`,
+				choices.map((item) => item.label),
+				(label) => {
+					done();
+					const selected = choices.find((item) => item.label === label)?.provider;
+					if (selected) void this.startProviderLogin(selected, () => this.showAccountManager());
+				},
+				() => {
+					done();
 					this.showAccountManager();
-					return;
-				}
-				if (option === rotateLabel) {
-					this.showAccountRotationSelector();
-					return;
-				}
-				if (option === addOAuthLabel || option === addApiKeyLabel) {
-					this.showLoginProviderSelector(option === addOAuthLabel ? "oauth" : "api_key", undefined, true);
-					return;
-				}
-				const authType = option === subscriptionLabel ? "oauth" : "api_key";
-				if (providerOptions) {
-					const providerOption = providerOptions.find((provider) => provider.authType === authType);
-					if (providerOption) {
-						void this.startProviderLogin(providerOption, () => this.showLoginAuthTypeSelector(providerOptions));
-					}
-					return;
-				}
-				this.showLoginProviderSelector(authType);
-			};
-			const onCancel = () => {
-				done();
-				this.ui.requestRender();
-			};
-			const selector =
-				radiusLabel && radiusText
-					? createLoginMenuSelector(
-							this.ui,
-							title,
-							options,
-							{ label: radiusLabel, text: radiusText },
-							onSelect,
-							onCancel,
-						)
-					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+				},
+			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
@@ -6464,11 +6482,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					if (authType) {
-						this.showLoginAuthTypeSelector();
-					} else {
-						this.ui.requestRender();
-					}
+					this.showAccountManager();
 				},
 				initialSearchInput,
 				this.ui,
@@ -7282,6 +7296,8 @@ export class InteractiveMode {
 		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const scrollLineUp = this.getEditorKeyDisplay("tui.altScreen.lineUp");
+		const scrollLineDown = this.getEditorKeyDisplay("tui.altScreen.lineDown");
 
 		// Editing keybindings
 		const submit = this.getEditorKeyDisplay("tui.input.submit");
@@ -7308,6 +7324,7 @@ export class InteractiveMode {
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
+		const backgroundPrompt = this.getAppKeyDisplay("app.command.background");
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
@@ -7323,6 +7340,7 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+| \`${scrollLineUp}\` / \`${scrollLineDown}\` | Scroll fullscreen transcript by line |
 
 **Editing**
 | Key | Action |
@@ -7352,7 +7370,7 @@ export class InteractiveMode {
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |
-| \`${followUp}\` | Queue follow-up message |
+| \`${backgroundPrompt}\` | Detach a running local shell command without restarting it |\n| \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
 | \`/\` | Slash commands |
@@ -7522,6 +7540,9 @@ export class InteractiveMode {
 				{ excludeFromContext, operations: eventResult?.operations },
 			);
 
+			if (result.background && this.bashComponent) {
+				this.bashComponent.appendOutput(`\n${result.output}\n`);
+			}
 			if (this.bashComponent) {
 				this.bashComponent.setComplete(
 					result.exitCode,
@@ -7552,6 +7573,7 @@ export class InteractiveMode {
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+		this.session.manualBackgroundController.disable();
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

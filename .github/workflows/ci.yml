@@ -16,6 +16,76 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-standalone-smoke:
+    name: build native Windows x64 standalone release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+
+      - name: Hydrate pinned model data
+        run: npm run hydrate:fork-model-data
+
+      - name: Build native standalone Windows executable and archive
+        shell: bash
+        run: bash scripts/build-binaries.sh --offline-model-data --platform windows-x64 --out "$GITHUB_WORKSPACE/binaries"
+
+      - name: Smoke-test native Windows x64 executable
+        shell: pwsh
+        run: |
+          & "./binaries/windows-x64/pi.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Windows binary version check failed" }
+          & "./binaries/windows-x64/pi.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Windows binary help check failed" }
+          if (!(Test-Path "binaries/pi-windows-x64.zip")) { throw "Missing installable Windows ZIP archive" }
+
+      - name: Smoke-test compiled Windows background-command supervisor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $folder = Join-Path $env:RUNNER_TEMP ("pi-background-smoke-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $worker = $null
+          try {
+              @{
+                  command = "Write-Output 'pi-supervisor-ok'"
+                  cwd = (Get-Location).Path
+                  shellConfig = @{ shell = "powershell.exe"; args = @("-NoProfile", "-NonInteractive", "-Command") }
+                  maxLogBytes = 2000000
+              } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $folder "request.json") -Encoding utf8
+              $binary = (Resolve-Path "./binaries/windows-x64/pi.exe").Path
+              $worker = Start-Process -FilePath $binary -ArgumentList @("--pi-internal-background-supervisor", $folder) -PassThru -WindowStyle Hidden
+              $stateFile = Join-Path $folder "state.json"
+              $state = $null
+              for ($i = 0; $i -lt 150; $i++) {
+                  if (Test-Path -LiteralPath $stateFile) {
+                      try { $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json } catch { $state = $null }
+                      if ($state.status -in @("completed", "failed")) { break }
+                  }
+                  Start-Sleep -Milliseconds 100
+              }
+              if ($state.status -ne "completed" -or $state.exitCode -ne 0) {
+                  throw "Standalone background supervisor failed: $($state | ConvertTo-Json -Compress)"
+              }
+              $output = Get-Content -LiteralPath (Join-Path $folder "output.log") -Raw
+              if ($output -notmatch "pi-supervisor-ok") { throw "Background output was not captured" }
+          }
+          finally {
+              if ($worker -and -not $worker.HasExited) { Stop-Process -Id $worker.Id -Force -ErrorAction SilentlyContinue }
+              Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
   build-check:
     runs-on: ubuntu-latest
     steps:

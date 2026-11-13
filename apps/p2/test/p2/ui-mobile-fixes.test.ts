@@ -468,10 +468,15 @@ describe("Pi Mobile audit fixes in the browser", { skip: !browserTests }, () => 
 			await browser.click(".diff-line button.diff-number");
 			await browser.wait(`document.querySelector('textarea[aria-label=Comment]')`);
 			await browser.evaluate(input("textarea[aria-label=Comment]", "Why 42?"));
-			await browser.evaluate(
-				`[...document.querySelectorAll('.line-comment-actions button')].find((e) => e.textContent === 'Add comment').classList.add('test-add')`,
-			);
-			await browser.click(".test-add");
+			// React can replace the comment action button after the textarea changes.
+			// Find and activate it in one browser turn rather than tagging a transient node.
+			await browser.wait(`(() => {
+				const button = [...document.querySelectorAll('.line-comment-actions button')]
+					.find((item) => item.textContent === 'Add comment');
+				if (!button || button.disabled) return false;
+				button.click();
+				return true;
+			})()`);
 			await browser.wait(`document.querySelector('.review-bar')?.textContent.includes('1 comment')`);
 			const rows = await browser.evaluate<number>(`Number(document.querySelector('.rows').dataset.rows)`);
 			await browser.click(".review-bar .button.primary");

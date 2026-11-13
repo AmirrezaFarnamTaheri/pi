@@ -25,6 +25,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/bun-compiler-path.sh
 
 SKIP_INSTALL=false
 SKIP_BUILD=false
@@ -77,9 +78,7 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="packages/coding-agent/binaries"
 fi
-if [[ "$OUTPUT_DIR" != /* ]]; then
-    OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
-fi
+OUTPUT_DIR="$(pi_normalize_output_dir "$OUTPUT_DIR")"
 
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
@@ -131,11 +130,11 @@ for platform in "${PLATFORMS[@]}"; do
     # project env files do not leak into pi's environment (see #10473). Enable
     # package.json autoload so extension dependencies resolve through their
     # package.json main/exports entries instead of only a root index.* (see #12012).
+    outfile="$OUTPUT_DIR/$platform/pi"
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
-    else
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        outfile="$OUTPUT_DIR/$platform/pi.exe"
     fi
+    pi_bun_compile "$platform" "$bun_target" "$outfile"
 done
 
 echo "==> Creating release archives..."

@@ -1,38 +1,32 @@
-# Account management and automatic rotation
+# Accounts and automatic rotation
 
-This fork supports multiple separately authenticated identities for the same provider. Adding a profile **does not overwrite** the existing provider credential. It creates a new provider ID with its own credential-store entry.
+`/accounts` and `/login` open the same account manager. It shows the main provider logins and any additional accounts, with their names, providers, and connection states.
 
-## Login and manage accounts
+## Everyday account actions
 
-- `/login`: open the sign-in menu. Choose **Add another account** or **Add another API key** to create a separate identity. The ordinary provider sign-in remains available if you want to update the original account.
-- `/login add <provider>`: directly initiate an additional sign-in; the provider must support its own OAuth or API-key login.
-- `/accounts`: list additional identities and their configuration status. Select one to sign in again, choose a model using that identity, enable its rotation group, or disconnect and remove only that identity.
-- `/logout`: remove an individual stored credential. Disconnecting an additional identity via `/accounts` also removes its saved profile after logging out.
+Choose an account and then:
 
-The original provider's ID is preserved. Additional identities receive stable IDs such as `account-antigravity-manager-1` and `account-antigravity-manager-2`. The credential-free `account-profiles.json` keeps the account IDs and display labels; the normal auth store keeps credentials separately under those IDs. No API keys or OAuth tokens belong in the profile file.
+- **Choose model:** use a model from that particular account.
+- **Sign in:** connect or replace that account's credentials.
+- **Rename account:** give the account a memorable nickname, such as "Personal", "Client projects" or "Backup". Names persist across restarts and do not change credentials or stable provider IDs.
+- **Delete account:** remove an additional account and its saved credentials, without touching other accounts. Main provider logins offer **Disconnect account** instead; the provider remains available for a future sign-in.
+- **Rotate accounts:** use a group of connected accounts from the same provider. Choosing a rotation group enables it immediately without a second confirmation prompt.
 
-If an extension supplies a provider, Pi retains its additional account profiles at startup and connects them once the extension registers the provider.
+From the manager, select **Sign in** to connect a provider, or **Add another account** to create another independently authenticated identity using browser login or an API key. Use `/login add <provider>` to start adding an account directly. `/logout` removes a saved provider credential.
 
-## Enable automatic rotation
+A separate account keeps a stable provider ID, such as `account-antigravity-manager-1`, even after you rename it. Friendly names live in `account-profiles.json` without secrets. Saved credentials remain stored separately under their corresponding IDs. Pi can restore accounts from extension-provided providers after those extensions register.
 
-Select **Enable automatic rotation** from `/login` or `/accounts`. This is **opt-in** and selects a virtual model under `account-profiles/<source-provider-id>`. To return to one account, use `/model` or choose **Choose a model from this account**.
+## Automatic rotation
 
-- New user turns select available, independently authenticated identities round-robin, for the same physical model ID.
-- Tool continuations keep the identity used earlier in that turn.
-- On recognized authentication/rate-limit/overload failures, a retry may move to another identity **only before any model output has been emitted**.
-- Unavailable identities are skipped. Cooldowns avoid immediate reuse of a failing identity.
-- The legacy opt-in `account-rotation.json` extension continues to support explicit pools and advanced strategies. When referencing a profile created by `/accounts`, use its ID without `sourceProvider` in that manual pool.
+Rotation is represented by a virtual model at `account-profiles/<source-provider-id>`. Use the account manager or `/model` to select an individual account again. Saving a rotation model as your default keeps it selected for future sessions.
 
-Rotation never bypasses provider quotas, permissions, or account entitlements. It uses separate credentials you authorized; do not configure the same key more than once.
+- New user turns select connected identities round-robin for the same model.
+- Tool continuations stay on the identity that started the turn.
+- A retry may switch identities on recognized pre-output authentication or availability failures; output-producing requests do not silently restart elsewhere.
+- Unavailable identities are skipped and cooldowns prevent immediate reuse of failing accounts.
+
+Rotation may send the current session context to another account in that group; keep unrelated contexts in separate sessions. Account quotas and entitlements are unchanged. The legacy `account-rotation.json` extension remains available for custom strategies.
 
 ## Antigravity Manager
 
-The main `/login` menu includes **Connect Antigravity Manager gateway**. This is the locally or remotely hosted, OpenAI-compatible Antigravity Manager gateway integration—not Google Antigravity OAuth and not an import of another application's Google tokens. You provide a gateway URL and gateway access key.
-
-The default gateway URL is `http://127.0.0.1:8045/v1`. Non-loopback gateways require HTTPS. Additional Antigravity Manager identities can use distinct gateway URLs and keys without replacing the original configuration.
-
-## Secret input and troubleshooting
-
-Secret prompts mask values on-screen, clear their input buffer on completion/cancellation, and erase undo/kill-ring history when returning to ordinary input. Never paste credentials into chat messages or `account-profiles.json`.
-
-Account and rotation changes in this document are part of the unified **draft PR #14**, not the published v1.5.0 release. They require the complete CI/build/test matrix and benchmark checks before release.
+Under **Sign in**, choose **Antigravity Manager** to connect the gateway, or use **Add another account** for a separate gateway connection. The default gateway URL is `http://127.0.0.1:8045/v1`. Additional identities may have different URLs and keys without replacing the original connection.

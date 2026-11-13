@@ -175,3 +175,73 @@ test("two gateway logins retain distinct keys and endpoints without replacing ea
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("renamed accounts persist across restarts without replacing providers or stored account IDs", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-account-rename-runtime-"));
+	try {
+		const options = {
+			credentials: AuthStorage.inMemory(),
+			modelsPath: null,
+			accountProfilesPath: join(directory, "account-profiles.json"),
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		};
+		const runtime = await ModelRuntime.create(options);
+		const original = runtime.getProvider("antigravity-manager");
+		const work = runtime.addAccountAlias("antigravity-manager", "Account 1");
+		const personal = runtime.addAccountAlias("antigravity-manager", "Account 2");
+		assert.equal(runtime.renameAccount(work.id, "  Company gateway  "), "Company gateway");
+		assert.equal(runtime.renameAccount("antigravity-manager", "  Main gateway  "), "Main gateway");
+		assert.equal(runtime.getAccountLabel(work.id), "Company gateway");
+		assert.equal(runtime.getProvider(work.id)?.name, "Company gateway");
+		assert.equal(runtime.getAccountLabel("antigravity-manager"), "Main gateway");
+		assert.equal(runtime.getProvider("antigravity-manager"), original);
+		assert.equal(runtime.getProvider(personal.id)?.name, "Account 2");
+
+		const reopened = await ModelRuntime.create(options);
+		assert.equal(reopened.getAccountLabel(work.id), "Company gateway");
+		assert.equal(reopened.getProvider(work.id)?.name, "Company gateway");
+		assert.equal(reopened.getAccountLabel("antigravity-manager"), "Main gateway");
+		assert.deepEqual(
+			reopened.getAccountProfiles().map((account) => account.id),
+			[work.id, personal.id],
+		);
+
+		await reopened.removeAccountAlias(work.id);
+		assert.equal(reopened.getProvider(work.id), undefined);
+		assert.equal(reopened.getProvider(personal.id)?.name, "Account 2");
+		const again = await ModelRuntime.create(options);
+		assert.equal(again.getAccountLabel("antigravity-manager"), "Main gateway");
+		assert.deepEqual(
+			again.getAccountProfiles().map((account) => account.id),
+			[personal.id],
+		);
+		assert.throws(() => again.renameAccount(work.id, "Deleted"), /unknown/i);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("deleting an account also clears credentials if its extension is unavailable", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-account-orphan-cleanup-"));
+	try {
+		const path = join(directory, "account-profiles.json");
+		const { addAccountProfile } = await import("../src/core/account-profiles.ts");
+		const account = addAccountProfile(path, "unloaded-provider", [], "Old account");
+		const credentials = AuthStorage.inMemory();
+		await credentials.modify(account.id, async () => ({ type: "api_key", key: "stale-key" }));
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsPath: null,
+			accountProfilesPath: path,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		assert.equal(runtime.getProvider(account.id), undefined);
+		await runtime.removeAccountAlias(account.id);
+		assert.equal(await credentials.read(account.id), undefined);
+		assert.deepEqual(runtime.getAccountProfiles(), []);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});

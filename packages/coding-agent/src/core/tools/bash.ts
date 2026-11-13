@@ -14,6 +14,11 @@ import {
 } from "../../utils/shell.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { BACKGROUND_LOG_MAX_BYTES, startBackgroundShell } from "./background-shell.ts";
+import {
+	type BackgroundedProcess,
+	executeDetachableShell,
+	type ManualBackgroundController,
+} from "./manual-background.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -42,14 +47,20 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	background: Type.Optional(
 		Type.Boolean({
-			description: "Run the command detached, returning a PID and output log path immediately (local bash only)",
+			description:
+				"Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
 		}),
 	),
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.); use background: true for long-running local commands",
-	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
+	snippet: "Execute bash commands; background: true is available for independent local commands, not blocking tests",
+	guidelines: [
+		"You can inspect PI_* environment variables for current model and session details.",
+		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
+		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
+		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+	],
 } as const;
 
 export type BashToolInput = Static<typeof bashSchema>;
@@ -97,7 +108,7 @@ export interface BashOperations {
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
 		},
-	) => Promise<{ exitCode: number | null }>;
+	) => Promise<{ exitCode: number | null; background?: BackgroundedProcess }>;
 }
 
 /**
@@ -115,7 +126,11 @@ class ShellTimeoutError extends Error {
 }
 
 /** Shared process execution used by the built-in shell tools. */
-export function createLocalShellOperations(shellName: string, resolveShellConfig: () => ShellConfig): BashOperations {
+export function createLocalShellOperations(
+	shellName: string,
+	resolveShellConfig: () => ShellConfig,
+	manualBackgroundController?: ManualBackgroundController,
+): BashOperations {
 	return {
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
@@ -123,6 +138,16 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				throw new Error("aborted");
 			}
 			const shellConfig = resolveShellConfig();
+			if (manualBackgroundController?.isEnabled) {
+				return executeDetachableShell(
+					command,
+					cwd,
+					shellConfig,
+					{ onData, signal, timeout, env: env ?? getShellEnv() },
+					manualBackgroundController,
+					"pi-shell",
+				);
+			}
 			try {
 				await fsAccess(cwd, constants.F_OK);
 			} catch {
@@ -290,8 +315,11 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
  * This is useful for extensions that intercept user_bash and still want pi's
  * standard local shell behavior while wrapping or rewriting commands.
  */
-export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
-	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath));
+export function createLocalBashOperations(options?: {
+	shellPath?: string;
+	backgroundController?: ManualBackgroundController;
+}): BashOperations {
+	return createLocalShellOperations("bash", () => getShellConfig(options?.shellPath), options?.backgroundController);
 }
 
 export interface BashSpawnContext {
@@ -341,6 +369,12 @@ export interface BashToolOptions {
 	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Explicitly allow a built-in local shell implementation to run detached. Never set for remote operations. */
+	backgroundShellConfig?: () => ShellConfig;
+	/** Normalize commands before explicitly detached local execution (e.g. Windows PowerShell 5.1). */
+	backgroundCommandTransform?: (command: string) => string;
+	/** Interactive Ctrl+B controller; only the local shell may be detached. */
+	backgroundController?: ManualBackgroundController;
 }
 
 export type BashRenderState = {
@@ -364,14 +398,16 @@ export function createShellToolDefinition(
 	config: ShellToolConfig,
 	options?: BashToolOptions,
 ): ToolDefinition<typeof bashSchema, BashToolDetails | undefined, BashRenderState> {
-	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
+	const ops =
+		options?.operations ??
+		createLocalBashOperations({ shellPath: options?.shellPath, backgroundController: options?.backgroundController });
 	const commandPrefix = options?.commandPrefix;
 	const exposeSessionEnvironment = options?.exposeSessionEnvironment ?? true;
 	const spawnHook = options?.spawnHook;
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -394,7 +430,7 @@ export function createShellToolDefinition(
 			);
 
 			if (background) {
-				if (options?.operations || config.name !== "bash" || config.shellName !== "bash") {
+				if (options?.operations && !options.backgroundShellConfig) {
 					throw new Error("Background execution is not supported by this shell backend");
 				}
 				if (timeout !== undefined) {
@@ -403,9 +439,9 @@ export function createShellToolDefinition(
 				if (signal?.aborted) throw new Error("aborted");
 				const startedAt = performance.now();
 				const { pid, outputPath } = await startBackgroundShell(
-					spawnContext.command,
+					options?.backgroundCommandTransform?.(spawnContext.command) ?? spawnContext.command,
 					spawnContext.cwd,
-					getShellConfig(options?.shellPath),
+					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
@@ -517,6 +553,24 @@ export function createShellToolDefinition(
 						timeout,
 						env: spawnContext.env,
 					});
+					if (result.background) {
+						const { pid, outputPath } = result.background;
+						const snapshot = await finishOutput();
+						const text = `Background command running (PID ${pid}). Output log: ${outputPath}. This is the same process that was already executing, not a restarted command.`;
+						return {
+							content: [{ type: "text", text }],
+							details: snapshot.truncation.truncated
+								? { truncation: snapshot.truncation, fullOutputPath: snapshot.fullOutputPath }
+								: undefined,
+							structuredContent: {
+								output: snapshot.content,
+								truncated: snapshot.truncation.truncated,
+								background_pid: pid,
+								background_output_path: outputPath,
+								wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+							},
+						};
+					}
 					exitCode = result.exitCode;
 				} catch (err) {
 					const snapshot = await finishOutput();
