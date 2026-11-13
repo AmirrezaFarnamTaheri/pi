@@ -43,14 +43,19 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	background: Type.Optional(
 		Type.Boolean({
-			description: "Run the command detached, returning a PID and output log path immediately (local shell only)",
+			description: "Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
 		}),
 	),
 });
 
 export const bashToolSystemPromptContribution = {
-	snippet: "Execute bash commands (ls, grep, find, etc.); use background: true for long-running local commands",
-	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
+	snippet: "Execute bash commands; background: true is available for independent local commands, not blocking tests",
+	guidelines: [
+		"You can inspect PI_* environment variables for current model and session details.",
+		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
+		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
+		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+	],
 } as const;
 
 export type BashToolInput = Static<typeof bashSchema>;
