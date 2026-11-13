@@ -42,7 +42,7 @@ const bashSchema = Type.Object({
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	background: Type.Optional(
 		Type.Boolean({
-			description: "Run the command detached, returning a PID and output log path immediately (local bash only)",
+			description: "Run the command detached, returning a PID and output log path immediately (local shell only)",
 		}),
 	),
 });
@@ -341,6 +341,8 @@ export interface BashToolOptions {
 	exposeSessionEnvironment?: boolean;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
+	/** Explicitly allow a built-in local shell implementation to run detached. Never set for remote operations. */
+	backgroundShellConfig?: () => ShellConfig;
 }
 
 export type BashRenderState = {
@@ -371,7 +373,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For local bash only, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -394,7 +396,7 @@ export function createShellToolDefinition(
 			);
 
 			if (background) {
-				if (options?.operations || config.name !== "bash" || config.shellName !== "bash") {
+				if (options?.operations && !options.backgroundShellConfig) {
 					throw new Error("Background execution is not supported by this shell backend");
 				}
 				if (timeout !== undefined) {
@@ -405,7 +407,7 @@ export function createShellToolDefinition(
 				const { pid, outputPath } = await startBackgroundShell(
 					spawnContext.command,
 					spawnContext.cwd,
-					getShellConfig(options?.shellPath),
+					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
