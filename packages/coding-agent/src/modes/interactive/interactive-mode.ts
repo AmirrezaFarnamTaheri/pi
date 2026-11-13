@@ -6071,14 +6071,16 @@ export class InteractiveMode {
 			label: `${this.session.modelRuntime.getProviderAuthStatus(profile.id).configured ? "✓" : "○"} ${profile.label}  ·  ${profile.sourceProviderId}`,
 		}));
 		const addLabel = "＋ Add another account";
+		const addKeyLabel = "＋ Add another API key";
 		const rotateLabel = "↻ Account rotation";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				`Accounts  ·  ${profiles.length} additional profile${profiles.length === 1 ? "" : "s"}`,
-				[...items.map((item) => item.label), addLabel, rotateLabel],
+				[...items.map((item) => item.label), addLabel, addKeyLabel, rotateLabel],
 				(label) => {
 					done();
-					if (label === addLabel) this.showLoginAuthTypeSelector();
+					if (label === addLabel) this.showLoginProviderSelector("oauth", undefined, true);
+					else if (label === addKeyLabel) this.showLoginProviderSelector("api_key", undefined, true);
 					else if (label === rotateLabel) this.showAccountRotationSelector();
 					else {
 						const match = items.find((item) => item.label === label);
@@ -6175,13 +6177,6 @@ export class InteractiveMode {
 	}
 
 	private confirmAccountRemoval(profile: { id: string; label: string; sourceProviderId: string }): void {
-		if (
-			this.session.model?.provider === profile.id ||
-			(this.session.model?.provider === "account-profiles" && this.session.model.id === profile.sourceProviderId)
-		) {
-			this.showError("Select another model before disconnecting an active account or rotation group.");
-			return;
-		}
 		const confirm = "Disconnect and remove this account";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
@@ -6193,18 +6188,29 @@ export class InteractiveMode {
 						this.showAccountActions(profile);
 						return;
 					}
-					void this.session.modelRuntime
-						.removeAccountAlias(profile.id)
-						.then(async () => {
-							await this.updateAvailableProviderCount();
-							this.footer.invalidate();
-							this.showStatus(`Removed ${profile.label}; all other accounts were preserved.`);
-						})
-						.catch((error: unknown) =>
-							this.showError(
-								`Account removal failed: ${error instanceof Error ? error.message : String(error)}`,
-							),
-						);
+					void (async () => {
+						const selected = this.session.model;
+						if (
+							selected?.provider === profile.id ||
+							(selected?.provider === "account-profiles" && selected.id === profile.sourceProviderId)
+						) {
+							const available = this.session.modelRuntime.getAvailableSnapshot();
+							const fallback =
+								available.find((model) => model.provider === profile.sourceProviderId) ??
+								available.find(
+									(model) => model.provider !== profile.id && model.provider !== "account-profiles",
+								);
+							if (!fallback) throw new Error("Select or sign in to another account before removing this one");
+							await this.session.setModel(fallback);
+						}
+						await this.session.modelRuntime.removeAccountAlias(profile.id);
+						await this.updateAvailableProviderCount();
+						this.footer.invalidate();
+						this.updateEditorBorderColor();
+						this.showStatus(`Removed ${profile.label}; all other accounts were preserved.`);
+					})().catch((error: unknown) =>
+						this.showError(`Account removal failed: ${error instanceof Error ? error.message : String(error)}`),
+					);
 				},
 				() => {
 					done();
