@@ -47,7 +47,8 @@ describe("OAuthSelectorComponent", () => {
 					getProviders: () => providers,
 					getProviderAuthStatus: () => ({ configured: false }),
 					isUsingOAuth: () => false,
-					getAccountLabel: (providerId: string) => providers.find((provider) => provider.id === providerId)?.name ?? providerId,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
 				},
 			},
 		};
@@ -172,7 +173,8 @@ describe("OAuthSelectorComponent", () => {
 					getProviders: () => providers,
 					getProviderAuthStatus: () => ({ configured: false }),
 					isUsingOAuth: () => false,
-					getAccountLabel: (providerId: string) => providers.find((provider) => provider.id === providerId)?.name ?? providerId,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
 				},
 			},
 		};
