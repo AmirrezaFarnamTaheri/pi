@@ -54,7 +54,7 @@ Examples: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `super+k`, `ctrl+sup
 | `tui.editor.cursorDown` | `down` | Move cursor down, browsing newer history at the bottom |
 | `tui.editor.historyPrevious` | None | Select the previous prompt history entry |
 | `tui.editor.historyNext` | None | Select the next prompt history entry |
-| `tui.editor.cursorLeft` | `left` | Move cursor left (`Ctrl+B` starts a background agent) |
+| `tui.editor.cursorLeft` | `left` | Move cursor left (`Ctrl+B` detaches a running local command) |
 | `tui.editor.cursorRight` | `right`, `ctrl+f` | Move cursor right |
 | `tui.editor.cursorWordLeft` | `alt+left`, `ctrl+left`, `alt+b` | Move cursor word left |
 | `tui.editor.cursorWordRight` | `alt+right`, `ctrl+right`, `alt+f` | Move cursor word right |
@@ -122,7 +122,7 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 
 While a local shell command (for example a long test suite) is running, press `Ctrl+B` to detach **that same process** into the background. This works with agent-issued local Bash/PowerShell tool calls and direct `!` shell commands in the interactive UI; it never launches another agent or reruns the command. The shell result shows its PID and persistent `output.log` path. You can keep chatting while the process continues; later inspect the log with `Get-Content -Wait <path>` on Windows or `tail -f <path>` on Unix. Ctrl+B does nothing destructive if there is no active local command. Remote/custom shell backends must provide their own lifecycle management.
 
-For commands known in advance to take a long time, the agent should use the local Bash/PowerShell tool's `background: true` option *from the outset*, then check the log and status before claiming the task passed. This saves waiting without skipping tests.
+For independent commands whose result is not needed for the next decision, the agent can use the local Bash/PowerShell tool's `background: true` option. If a test's result or exit code determines the next action, run it in the foreground and await completion, regardless of duration. Before using a background result or reporting a test passed, verify completion and the final exit code in the job's `state.json`; starting the command is not success.
 
 `Shift+Up` and `Shift+Down` scroll the fullscreen transcript one line at a time without changing the editor cursor. If your terminal intercepts these shortcuts for selection, configure it to forward the keys to Pi. Page Up/Down and the mouse wheel remain available.
 
@@ -172,7 +172,8 @@ On native Windows, `app.suspend` has no default because Windows terminals do not
 |--------|---------|-------------|
 | `app.tools.expand` | `ctrl+o` | Collapse or expand tool output |
 | `app.message.copy` | `ctrl+x` | Copy the selected message in `/tree`; in fullscreen mode, copy the active selection when `fullscreenCopyOnSelect` is `false`; otherwise copy the last assistant message. On OAuth sign-in screens, copy the sign-in URL |
-| `app.command.background` | `ctrl+b` | Detach the currently running local shell command to the background without restarting it |\n| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
+| `app.command.background` | `ctrl+b` | Detach the currently running local shell command to the background without restarting it |
+| `app.message.followUp` | `alt+enter` (`ctrl+q` on Windows and WSL) | Queue follow-up message |
 | `app.message.dequeue` | `alt+up` (`alt+q` on Windows and WSL) | Restore queued messages to editor |
 
 ### Tree Navigation
