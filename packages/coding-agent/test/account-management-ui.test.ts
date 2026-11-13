@@ -124,10 +124,7 @@ describe("account management menu", () => {
 		ui.choose(4);
 		ui.choose(1);
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.setModel).toHaveBeenCalledWith(
-			{ provider: "anthropic", id: "claude-sonnet" },
-			{ persist: true },
-		);
+		expect(ui.setModel).toHaveBeenCalledWith({ provider: "anthropic", id: "claude-sonnet" }, { persist: true });
 	});
 
 	it("disconnects the original login without deleting unrelated accounts", async () => {
