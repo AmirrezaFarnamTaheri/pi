@@ -185,7 +185,8 @@ export async function executeBashWithOperations(
 			exitCode: undefined,
 			cancelled: false,
 			truncated: false,
-			fullOutputPath: background.outputPath,
+			// The background log may be capped while the command is still running.
+			// It is not a complete foreground-output archive.
 			background,
 		};
 	}
