@@ -102,6 +102,7 @@ fi
 
 echo "==> Building binaries..."
 cd packages/coding-agent
+source ../../scripts/bun-compiler-path.sh
 
 # Clean previous builds
 rm -rf "$OUTPUT_DIR"
@@ -131,18 +132,11 @@ for platform in "${PLATFORMS[@]}"; do
     # project env files do not leak into pi's environment (see #10473). Enable
     # package.json autoload so extension dependencies resolve through their
     # package.json main/exports entries instead of only a root index.* (see #12012).
+    outfile="$OUTPUT_DIR/$platform/pi"
     if [[ "$platform" == windows-* ]]; then
         outfile="$OUTPUT_DIR/$platform/pi.exe"
-        # Git Bash uses /d/a/... paths, which native bun.exe interprets as relative
-        # when passed as --outfile. Convert just the Bun path to D:\\a\\...
-        # while keeping POSIX paths for the shell's cp, mkdir and archive commands.
-        if command -v cygpath >/dev/null 2>&1; then
-            outfile="$(cygpath -w "$outfile")"
-        fi
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$outfile"
-    else
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
     fi
+    pi_bun_compile "$platform" "$bun_target" "$outfile"
 done
 
 echo "==> Creating release archives..."

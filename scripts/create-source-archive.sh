@@ -124,6 +124,7 @@ required_paths=(
     "package.json"
     "package-lock.json"
     "scripts/build-binaries.sh"
+    "scripts/bun-compiler-path.sh"
     "scripts/install-standalone.sh"
     "scripts/install-standalone.ps1"
     "packages/ai/src/models.generated.ts"
