@@ -215,3 +215,27 @@ test("renamed accounts persist across restarts without replacing providers or st
 		rmSync(directory, { recursive: true, force: true });
 	}
 });
+
+test("deleting an account also clears credentials if its extension is unavailable", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-account-orphan-cleanup-"));
+	try {
+		const path = join(directory, "account-profiles.json");
+		const { addAccountProfile } = await import("../src/core/account-profiles.ts");
+		const account = addAccountProfile(path, "unloaded-provider", [], "Old account");
+		const credentials = AuthStorage.inMemory();
+		await credentials.modify(account.id, async () => ({ type: "api_key", key: "stale-key" }));
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsPath: null,
+			accountProfilesPath: path,
+			allowModelNetwork: false,
+			refreshOnCreate: false,
+		});
+		assert.equal(runtime.getProvider(account.id), undefined);
+		await runtime.removeAccountAlias(account.id);
+		assert.equal(await credentials.read(account.id), undefined);
+		assert.deepEqual(runtime.getAccountProfiles(), []);
+	} finally {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
