@@ -132,7 +132,14 @@ for platform in "${PLATFORMS[@]}"; do
     # package.json autoload so extension dependencies resolve through their
     # package.json main/exports entries instead of only a root index.* (see #12012).
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
+        outfile="$OUTPUT_DIR/$platform/pi.exe"
+        # Git Bash uses /d/a/... paths, which native bun.exe interprets as relative
+        # when passed as --outfile. Convert just the Bun path to D:\\a\\...
+        # while keeping POSIX paths for the shell's cp, mkdir and archive commands.
+        if command -v cygpath >/dev/null 2>&1; then
+            outfile="$(cygpath -w "$outfile")"
+        fi
+        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$outfile"
     else
         bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
     fi
