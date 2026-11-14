@@ -362,7 +362,7 @@ describe("command menu", { skip: !browserTests }, () => {
 			// (Change model…, by its keyword "switch model").
 			for (let i = 0; i < 4; i++) await press("Backspace");
 			await type("switch");
-			await browser.wait(`${TITLES}.includes('Switch session…')`);
+			await browser.wait(`${SELECTED}==='Switch session…'`);
 			assert.equal(await browser.evaluate(SELECTED), "Switch session…", JSON.stringify(await menu()));
 			// "model": ranked inside the Model group, "Change model…" (a word start) above "Set default model…".
 			for (let i = 0; i < 6; i++) await press("Backspace");

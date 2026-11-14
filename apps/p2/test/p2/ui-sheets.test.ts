@@ -104,10 +104,17 @@ describe("sheet parity", { skip: !browserTests }, () => {
 		);
 		await poll(() => existsSync(join(profile, "DevToolsActivePort")), 20_000, "Chromium debugging port");
 		const port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
-		const pages = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
-			type: string;
-			webSocketDebuggerUrl: string;
-		}[];
+		// DevToolsActivePort appears before Chromium is guaranteed to serve /json.
+		const pages = await poll(async () => {
+			try {
+				const response = await fetch(`http://127.0.0.1:${port}/json`);
+				return response.ok
+					? ((await response.json()) as { type: string; webSocketDebuggerUrl: string }[])
+					: undefined;
+			} catch {
+				return undefined;
+			}
+		}, 20_000, "Chromium DevTools targets");
 		// Google Chrome also lists its component extensions' background pages; drive the tab.
 		const page = pages.find((target) => target.type === "page") ?? pages[0]!;
 		socket = new WebSocket(page.webSocketDebuggerUrl);

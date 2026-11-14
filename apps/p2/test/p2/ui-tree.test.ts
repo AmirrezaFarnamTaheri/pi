@@ -383,6 +383,11 @@ describe("branches in the browser", { skip: !browserTests }, () => {
 		const before = (await row()).branches.length;
 		// Alt+Enter: a fork of conversation 1 at its end becomes the main conversation, labelled with the message.
 		await browser.evaluate(input("a side question"));
+		// The textarea's native input event queues a React update. Wait until its
+		// committed draft enables the alternate branch action before pressing Enter.
+		await browser.wait(
+			"document.querySelector('.composer button.send:not(:disabled)')?.getAttribute('aria-haspopup') === 'menu'",
+		);
 		await browser.evaluate(
 			`document.querySelector('.composer textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',altKey:true,bubbles:true,cancelable:true}))`,
 		);

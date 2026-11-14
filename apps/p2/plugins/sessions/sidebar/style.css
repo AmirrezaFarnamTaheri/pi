@@ -617,7 +617,7 @@
 	display: none;
 	margin: 0;
 }
-@media (hover: hover) and (not (pointer: coarse)) {
+@media (hover: hover) and (pointer: fine), (min-width: 900px) {
 	.nav-row > .nav-control.branch-rename {
 		display: inline-flex;
 		opacity: 0;

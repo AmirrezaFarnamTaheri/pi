@@ -479,7 +479,11 @@ function Composer({
 						onStop();
 						return;
 					}
-					if (event.key === "Enter" && !event.shiftKey && window.matchMedia("(pointer: fine)").matches) {
+					if (
+						event.key === "Enter" &&
+						!event.shiftKey &&
+						window.matchMedia("(pointer: fine), (min-width: 900px)").matches
+					) {
 						event.preventDefault();
 						// Without another way here (a guest, a subagent), Alt+Enter sends as Enter does.
 						(event.altKey && alternate && !disabled ? alternate : send).run();

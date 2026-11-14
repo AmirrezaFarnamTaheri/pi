@@ -97,6 +97,15 @@ export async function startPage<P extends Principal>(options: PageOptions<P>): P
 			const socket = options.connect();
 			socket.addEventListener("open", () => events.opened());
 			socket.addEventListener("message", () => events.received());
+			// Going offline need not close an established WebSocket. Retire its link
+			// explicitly so the page reports disconnection and retries on wake.
+			const offline = () => socket.close();
+			const closed = () => {
+				window.removeEventListener("offline", offline);
+				socket.removeEventListener("close", closed);
+			};
+			window.addEventListener("offline", offline);
+			socket.addEventListener("close", closed);
 			return webSocketLink(socket);
 		},
 		fetchScript: (entry) => scripts.fetch(entry),
