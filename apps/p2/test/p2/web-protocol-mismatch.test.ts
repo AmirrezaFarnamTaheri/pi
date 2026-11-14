@@ -12,7 +12,11 @@ import { binaryCodec, type Fixture, poll, startFixture } from "./helpers.ts";
  * Stands in for the server on `port`: serves a plain page and answers every Chord link's hello with a hello of the
  * page's protocol plus `offset` (Chord's binary codec), then closes it.
  */
-function fakeServer(port: number, offset: () => number, base: string): Promise<{ server: Server; links: () => number }> {
+function fakeServer(
+	port: number,
+	offset: () => number,
+	base: string,
+): Promise<{ server: Server; links: () => number }> {
 	let links = 0;
 	const sockets = new WebSocketServer({ noServer: true });
 	const server = createServer((request, response) => {
