@@ -179,7 +179,9 @@ describe("web host", () => {
 				await browser.open(`http://127.0.0.1:${framerPort}/`);
 				await new Promise((resolve) => setTimeout(resolve, 1500));
 				// The parent owns an iframe element, even when CSP refuses the child before Chrome attaches a frame.
-				await browser.wait(`document.querySelector("iframe#app")?.getAttribute("src") === "http://127.0.0.1:${fixture.server.port}/"`);
+				await browser.wait(
+					`document.querySelector("iframe#app")?.getAttribute("src") === "http://127.0.0.1:${fixture.server.port}/"`,
+				);
 				const tree = (await browser.call("Page.getFrameTree")) as {
 					frameTree: { childFrames?: { frame: { url: string; unreachableUrl?: string } }[] };
 				};
