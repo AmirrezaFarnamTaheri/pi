@@ -2223,7 +2223,7 @@ describe("aborted tool-call batches", () => {
 				parameters: schema,
 				async execute() {
 					executed++;
-					return { content: [{ type: "text", text: "unexpected" }] };
+					return { content: [{ type: "text", text: "unexpected" }], details: { value: "unexpected" } };
 				},
 			};
 			const config: AgentLoopConfig = {
