@@ -5947,6 +5947,9 @@ export class InteractiveMode {
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
 		for (const provider of this.session.modelRuntime.getProviders()) {
+			// A provider's brand and an account's editable nickname are different fields.
+			const label = this.session.modelRuntime.getAccountLabel(provider.id);
+			const accountLabel = label === provider.name ? {} : { accountLabel: label };
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
 			const status = authStatus.configured
 				? {
@@ -5958,7 +5961,8 @@ export class InteractiveMode {
 			if ((!authType || authType === "oauth") && provider.auth.oauth) {
 				options.push({
 					id: provider.id,
-					name: this.session.modelRuntime.getAccountLabel(provider.id),
+					name: provider.name,
+					...accountLabel,
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5968,7 +5972,8 @@ export class InteractiveMode {
 			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
 				options.push({
 					id: provider.id,
-					name: this.session.modelRuntime.getAccountLabel(provider.id),
+					name: provider.name,
+					...accountLabel,
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -5988,10 +5993,14 @@ export class InteractiveMode {
 		if (providerRef.startsWith("add ")) {
 			const search = providerRef.slice(4).trim();
 			const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
-			const providerOptions = findMatchingProviders(
-				this.getLoginProviderOptions().filter((provider) => !aliases.has(provider.id) && !!provider.method?.login),
-				search,
+			const eligible = this.getLoginProviderOptions().filter(
+				(provider) => !aliases.has(provider.id) && !!provider.method?.login,
 			);
+			// Adding an identity does not choose an auth method. Each source provider appears once.
+			const sources = eligible.filter(
+				(provider, index) => eligible.findIndex((item) => item.id === provider.id) === index,
+			);
+			const providerOptions = findMatchingProviders(sources, search);
 			if (providerOptions.length === 1) {
 				await this.startAdditionalAccountLogin(providerOptions[0]!);
 			} else {
@@ -6028,19 +6037,23 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Add a separate provider identity rather than replacing the current account's credentials. */
+	/**
+	 * Create a distinct, unsigned-in identity. Connecting credentials is a separate
+	 * explicit action so Add cannot accidentally replace the source provider's login.
+	 */
 	private async startAdditionalAccountLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+		const label = await this.showExtensionInput(`Name new ${providerOption.name} account`);
+		if (label === undefined) {
+			onBack?.();
+			return;
+		}
 		try {
-			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id);
-			const aliasOption = this.getLoginProviderOptions(providerOption.authType).find(
-				(provider) => provider.id === profile.id,
-			);
-			if (!aliasOption) throw new Error("New account was not registered for login");
-			// Keep the identity after cancellation: a late OAuth completion may already
-			// have saved its credential, and deleting it would orphan that secret.
-			await this.startProviderLogin(aliasOption, onBack);
+			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id, label);
+			this.showStatus(`Created ${profile.label} for ${providerOption.name}. Sign in when ready.`);
+			this.showAccountActions(profile);
 		} catch (error) {
 			this.showError(`Could not add account: ${error instanceof Error ? error.message : String(error)}`);
+			onBack?.();
 		}
 	}
 
@@ -6088,11 +6101,11 @@ export class InteractiveMode {
 				label: `${selected ? "●" : connected ? "✓" : "○"} ${name}${duplicates.has(name) ? ` · ${profile.id}` : ""}`,
 			};
 		});
-		const signIn = "＋ Sign in";
-		const add = "＋ Add another account";
+		const signIn = "＋ Sign in to existing account";
+		const add = "＋ Create separate account";
 		const rotation =
 			this.session.model?.provider === "account-profiles"
-				? `↻ Rotation on · ${runtime.getAccountLabel(this.session.model.id)}`
+				? `↻ Rotation on · ${runtime.getProvider(this.session.model.id)?.name ?? this.session.model.id}`
 				: "↻ Rotate accounts";
 		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
@@ -6114,7 +6127,11 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				{
-					description: "● active · ✓ connected · ○ sign in · → manage · r rename · x remove",
+					description: "Labels identify accounts; provider brands are fixed. ● active · ✓ connected · ○ unsigned · → manage · r rename · x remove",
+					sectionLabels:
+						items.length > 0
+							? { 0: "Existing accounts", [items.length]: "Account actions" }
+							: { 0: "Account actions" },
 					onShortcut: (keyData, label) => {
 						const profile = items.find((item) => item.label === label)?.profile;
 						if (!profile) return false;
@@ -6306,9 +6323,14 @@ export class InteractiveMode {
 										model.provider !== profile.id &&
 										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
 								);
-							if (fallback && activeNeedsSwitch) {
+							if (!fallback) {
+								throw new Error(
+									"No other available model. Choose a different model or sign in to another account before removing the active or default account.",
+								);
+							}
+							if (activeNeedsSwitch) {
 								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
-							} else if (fallback && defaultNeedsUpdate) {
+							} else if (defaultNeedsUpdate) {
 								this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
 							}
 						}
@@ -6461,15 +6483,23 @@ export class InteractiveMode {
 		addAccount = false,
 	): void {
 		const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
-		const providerOptions = this.getLoginProviderOptions(authType).filter(
+		const eligible = this.getLoginProviderOptions(authType).filter(
 			(provider) => !addAccount || (!aliases.has(provider.id) && !!provider.method?.login),
 		);
+		// The new account has no auth method until Sign in is chosen later.
+		const providerOptions = addAccount
+			? eligible
+					.filter((provider, index) => eligible.findIndex((item) => item.id === provider.id) === index)
+					.map((provider) => ({ ...provider, accountLabel: undefined }))
+			: eligible;
 		if (providerOptions.length === 0) {
 			const message =
 				authType === "oauth"
 					? "No account providers available."
 					: authType === "api_key"
 						? "No API key providers available."
+						: addAccount
+						? "No providers support a separate account."
 						: "No login providers available.";
 			this.showStatus(message);
 			return;

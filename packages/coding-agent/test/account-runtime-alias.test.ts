@@ -214,6 +214,7 @@ test("renamed accounts persist across restarts without replacing providers or st
 		);
 
 		await reopened.removeAccountAlias(work.id);
+		await assert.rejects(reopened.removeAccountAlias(work.id), /no longer exists/i);
 		assert.equal(reopened.getProvider(work.id), undefined);
 		assert.equal(reopened.getProvider(personal.id)?.name, original?.name);
 		const again = await ModelRuntime.create(options);

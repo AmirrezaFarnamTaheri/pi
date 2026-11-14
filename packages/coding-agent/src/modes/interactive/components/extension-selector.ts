@@ -16,6 +16,8 @@ export interface ExtensionSelectorOptions {
 	description?: string;
 	/** Optional contextual shortcuts for the currently highlighted row. */
 	onShortcut?: (keyData: string, selectedOption: string | undefined) => boolean;
+	/** Non-selectable, visually separated section headings before these option indices. */
+	sectionLabels?: Readonly<Record<number, string>>;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -29,6 +31,7 @@ export class ExtensionSelectorComponent extends Container {
 	private countdown: CountdownTimer | undefined;
 	private onToggleToolsExpanded: (() => void) | undefined;
 	private onShortcut: ExtensionSelectorOptions["onShortcut"];
+	private sectionLabels: ExtensionSelectorOptions["sectionLabels"];
 
 	constructor(
 		title: string,
@@ -44,6 +47,7 @@ export class ExtensionSelectorComponent extends Container {
 		this.onCancelCallback = onCancel;
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
 		this.onShortcut = opts?.onShortcut;
+		this.sectionLabels = opts?.sectionLabels;
 		this.baseTitle = title;
 
 		this.addChild(new DynamicBorder());
@@ -98,6 +102,11 @@ export class ExtensionSelectorComponent extends Container {
 		const endIndex = Math.min(startIndex + maxVisible, this.options.length);
 
 		for (let i = startIndex; i < endIndex; i++) {
+			const heading = this.sectionLabels?.[i];
+			if (heading) {
+				// A visual boundary, not another selectable menu option.
+				this.listContainer.addChild(new Text(theme.fg("border", `  ───── ${heading} ─────`), 1, 0));
+			}
 			const isSelected = i === this.selectedIndex;
 			const text = isSelected
 				? theme.fg("accent", "→ ") + theme.fg("accent", this.options[i])

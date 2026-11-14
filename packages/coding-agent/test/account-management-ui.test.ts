@@ -17,7 +17,10 @@ describe("account management menu", () => {
 		available = [{ provider: "anthropic", id: "claude-sonnet" }],
 	) {
 		const actions: string[] = [];
-		const names = new Map([["anthropic", "Main"], ["account-anthropic-1", "Work"]]);
+		const names = new Map([
+			["anthropic", "Main"],
+			["account-anthropic-1", "Work"],
+		]);
 		const renameAccount = vi.fn((id: string, name: string) => {
 			names.set(id, name.trim());
 			return name.trim();
@@ -193,7 +196,7 @@ describe("account management menu", () => {
 		ui.getSelector().handleInput("\x1b[C");
 		expect(ui.getSelector().render(100).join("\n")).toContain("Rename account");
 		ui.getSelector().handleInput("\x1b[D");
-		expect(ui.getSelector().render(100).join("\n")).toContain("＋ Add another account");
+		expect(ui.getSelector().render(100).join("\n")).toContain("＋ Create separate account");
 	});
 
 	it("shows original and additional accounts in the same menu and renames the original", async () => {

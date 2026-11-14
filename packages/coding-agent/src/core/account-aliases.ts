@@ -196,7 +196,7 @@ export function createApiKeyAccountAlias(source: Provider, id: string, envVar: s
  * adapter must NEVER fall back to ambient environment keys or models.json keys.
  * Only credentials explicitly stored under this alias may authorize requests.
  */
-export function createStoredAccountAlias(source: Provider, id: string, name?: string): Provider {
+export function createStoredAccountAlias(source: Provider, id: string): Provider {
 	if (!source.auth.oauth && !source.auth.apiKey?.login) {
 		throw new Error(`Provider ${source.id} cannot add an independent login`);
 	}
@@ -226,5 +226,6 @@ export function createStoredAccountAlias(source: Provider, id: string, name?: st
 		...(isolatedApiKey ? { apiKey: isolatedApiKey } : {}),
 		...(source.auth.oauth ? { oauth: source.auth.oauth } : {}),
 	});
-	return name ? { ...alias, name } : alias;
+	// The registered provider keeps its real brand; the account's editable nickname is metadata only.
+	return { ...alias, name: source.name };
 }

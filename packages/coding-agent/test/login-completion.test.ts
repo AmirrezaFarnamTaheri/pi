@@ -6,6 +6,17 @@ import {
 } from "../src/modes/interactive/login-completion.ts";
 
 describe("login provider completion helpers", () => {
+	it("uses searchable nicknames without replacing provider names in completion", () => {
+		const choices = getLoginProviderCompletionOptions([
+			{ id: "account-anthropic-1", name: "Anthropic", accountLabel: "Client projects", authType: "oauth" },
+		]);
+		expect(choices[0]?.name).toBe("Anthropic");
+		expect(getLoginProviderSearchText(choices[0]!)).toContain("Client projects");
+		expect(formatLoginProviderCompletionDescription(choices[0]!)).toContain(
+			"Anthropic · Client projects",
+		);
+	});
+
 	it("deduplicates auth methods and preserves alphabetical provider ordering", () => {
 		const choices = getLoginProviderCompletionOptions([
 			{ id: "zeta", name: "Zeta", authType: "api_key" },

@@ -568,8 +568,7 @@ export class ModelRuntime implements Models {
 		return (
 			this.accountProfiles.get(providerId)?.label ??
 			this.accountNames.get(providerId) ??
-			this.getProvider(providerId)?.name ??
-			providerId
+			(this.getProvider(providerId) ? "Primary" : providerId)
 		);
 	}
 
@@ -581,13 +580,9 @@ export class ModelRuntime implements Models {
 		if (existing) {
 			const updated = renameAccountProfile(path, providerId, label);
 			if (!updated) throw new Error("Account no longer exists");
+			// Labels belong to account-profiles.json, not provider registration.
+			// Replacing the provider would discard its refreshed catalog and live auth state.
 			this.accountProfiles.set(providerId, updated);
-			const source = this.models.getProvider(updated.sourceProviderId);
-			if (source) {
-				this.nativeExtensionProviders.set(providerId, createStoredAccountAlias(source, providerId, updated.label));
-				this.recomposeProvider(providerId);
-				this.updateModelSnapshot();
-			}
 			return updated.label;
 		}
 		if (providerId === "account-profiles" || !this.models.getProvider(providerId)) {
@@ -628,7 +623,7 @@ export class ModelRuntime implements Models {
 			}
 			const source = this.models.getProvider(profile.sourceProviderId);
 			if (!source) continue;
-			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id, profile.label));
+			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id));
 			this.recomposeProvider(profile.id);
 		}
 	}
@@ -648,7 +643,7 @@ export class ModelRuntime implements Models {
 		try {
 			if (this.models.getProvider(profile.id))
 				throw new Error("Account identity conflicts with an existing provider");
-			const provider = createStoredAccountAlias(source, profile.id, profile.label);
+			const provider = createStoredAccountAlias(source, profile.id);
 			this.registerNativeProvider(provider);
 			this.accountProfiles.set(profile.id, profile);
 			this.configureAutomaticAccountRotation(sourceProviderId);
@@ -663,7 +658,7 @@ export class ModelRuntime implements Models {
 	/** Explicitly disconnect the selected identity before removing only its profile. */
 	async removeAccountAlias(id: string): Promise<void> {
 		const path = this.accountProfilesPath;
-		if (!path || !this.accountProfiles.has(id)) return;
+		if (!path || !this.accountProfiles.has(id)) throw new Error("Account no longer exists");
 		// Remove the saved credential even if the source extension is not currently loaded.
 		if (this.models.getProvider(id)) await this.logout(id);
 		else await this.credentials.delete(id);
