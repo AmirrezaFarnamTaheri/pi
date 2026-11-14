@@ -59,7 +59,7 @@ export function agentLoop(
 		context,
 		config,
 		async (event) => {
-			await stream.pushWithBackpressure(event, 128, signal);
+			await stream.pushWithBackpressure(event, 128, signal?.aborted ? undefined : signal);
 		},
 		signal,
 		streamFn,
@@ -99,7 +99,7 @@ export function agentLoopContinue(
 		context,
 		config,
 		async (event) => {
-			await stream.pushWithBackpressure(event, 128, signal);
+			await stream.pushWithBackpressure(event, 128, signal?.aborted ? undefined : signal);
 		},
 		signal,
 		streamFn,
