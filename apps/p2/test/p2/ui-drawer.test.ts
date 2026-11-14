@@ -208,13 +208,11 @@ describe("drawer and new-session parity", { skip: !browserTests }, () => {
 		await browser.wait(`!${conversations}.hidden && ${conversations}.querySelector('.subagent-row')`);
 		// An idle subagent's row ends with when it was last active, in its session's time column; its model and where it
 		// works are its tooltip.
-		const subagentRow = `document.querySelector('.sidebar-section[data-key=recent] .nav-row:has(> .subagent-row)')`;
-		await browser.wait(`${subagentRow}?.querySelector('.session-time')?.textContent === 'now'`);
+		const subagentRow = `document.querySelector('.nav-row:has(> .subagent-row)')`;
+		await browser.wait(`${subagentRow}.querySelector('.session-time')?.textContent === 'now'`);
 		assert.equal(await browser.evaluate<number>(`${subagentRow}.querySelectorAll('.subagent-model').length`), 0);
-		const headerTime = `document.querySelector('.sidebar-section[data-key=recent] .session-header.has-subagents .session-time')`;
-		await browser.wait(`${headerTime} && ${subagentRow}?.querySelector('.session-time')`);
 		const edges = await browser.evaluate<number[]>(
-			`[${headerTime}, ${subagentRow}.querySelector('.session-time')].map(e=>Math.round(e.getBoundingClientRect().right))`,
+			`[${subagentRow}.closest('.session-row').querySelector('.session-header .session-time'), ${subagentRow}.querySelector('.session-time')].map(e=>Math.round(e.getBoundingClientRect().right))`,
 		);
 		assert.equal(edges[0], edges[1]);
 		assert.equal(
@@ -230,10 +228,12 @@ describe("drawer and new-session parity", { skip: !browserTests }, () => {
 			"participant",
 		);
 		await childChat.send({ text: "slow child", requestId: "drawer-busy" }, BACKGROUND_CONTEXT);
-		await browser.wait(`document.querySelector('.session-header.has-subagents :is(.working-frame, .working-mark)')`);
+		await browser.wait(
+			`document.querySelector('.session-header.has-subagents :is(.working-frame, .run-mark[data-state=working])')`,
+		);
 		await browser.click(".session-header.has-subagents .subagent-toggle");
 		await browser.wait(
-			`!${conversations}.hidden && document.querySelector('.nav-row:has(> .subagent-row) .working-mark')`,
+			`!${conversations}.hidden && document.querySelector('.nav-row:has(> .subagent-row) .run-mark[data-state=working]')`,
 		);
 		// While it works, its row ends with its step: the model's answer streams.
 		await browser.wait(`${subagentRow}.querySelector('.subagent-step')?.textContent === 'Thinking'`);
@@ -556,9 +556,9 @@ describe("guest drawer in Chromium", { skip: !browserTests }, () => {
 			assert.equal(state.search, false);
 			await browser.click('nav[aria-label="Shared session"] .theme-toggle');
 			await browser.wait(`document.documentElement.dataset.theme==='light'`);
-			// A shared session installs as a home-screen app too, and can poll the current bundle manifest.
+			// A shared session installs as a home-screen app too, and can ask the current base bundle.
 			const fetched = await browser.evaluate<{ manifest: number; icon: number; bundle: number; title: string }>(
-				`Promise.all(['/manifest.webmanifest','/icons/icon-192.png','/__p2_web'].map((path)=>fetch(path).then((r)=>r.status))).then(([manifest,icon,bundle])=>({manifest,icon,bundle,title:document.title}))`,
+				`Promise.all(['/manifest.webmanifest','/icons/icon-192.png','/_chord/web/base'].map((path)=>fetch(path).then((r)=>r.status))).then(([manifest,icon,bundle])=>({manifest,icon,bundle,title:document.title}))`,
 			);
 			assert.deepEqual(fetched, { manifest: 200, icon: 200, bundle: 200, title: "Pi" });
 			assert.equal(
