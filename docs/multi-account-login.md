@@ -1,10 +1,10 @@
 # Accounts and automatic rotation
 
-`/accounts` and `/login` open the same account manager. It shows the main provider logins and any additional accounts, with their names, providers, and connection states.
+`/login` is the single account-management screen. `/accounts` and `/logout` without arguments open that same screen for compatibility. It shows connected provider logins and additional accounts, with their names, providers, and connection states.
 
 ## Everyday account actions
 
-Choose an account and then:
+Highlight a logged-in account to manage it. Press **R** to rename it directly (the existing name is prefilled), **X** to delete/disconnect it, or **Right Arrow** / **Enter** to open the action list; **Left Arrow** goes back. Removing an account asks once for confirmation. You can also choose an account and then:
 
 - **Choose model:** use a model from that particular account.
 - **Sign in:** connect or replace that account's credentials.
@@ -12,7 +12,7 @@ Choose an account and then:
 - **Delete account:** remove an additional account and its saved credentials, without touching other accounts. Main provider logins offer **Disconnect account** instead; the provider remains available for a future sign-in.
 - **Rotate accounts:** use a group of connected accounts from the same provider. Choosing a rotation group enables it immediately without a second confirmation prompt.
 
-From the manager, select **Sign in** to connect a provider, or **Add another account** to create another independently authenticated identity using browser login or an API key. Use `/login add <provider>` to start adding an account directly. `/logout` removes a saved provider credential.
+From the manager, select **Sign in** to connect a provider, or **Add another account** to create another independently authenticated identity using browser login or an API key. Use `/login add <provider>` to start adding an account directly. Use `/logout` or `/accounts` to open the same login manager; from there select the account and choose **Disconnect** or **Delete**.
 
 A separate account keeps a stable provider ID, such as `account-antigravity-manager-1`, even after you rename it. Friendly names live in `account-profiles.json` without secrets. Saved credentials remain stored separately under their corresponding IDs. Pi can restore accounts from extension-provided providers after those extensions register.
 
