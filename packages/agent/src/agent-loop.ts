@@ -574,13 +574,12 @@ async function executeToolCallsMixed(
 			continue;
 		}
 		await flushParallel();
-		if (signal?.aborted) break;
+		// Aborted calls still receive matching tool results; preparation will skip execution.
 		const batch = await executeToolCallsSequential(context, assistantMessage, [call], config, signal, emit);
 		batches.push(batch);
 		messages.push(...batch.messages);
-		if (signal?.aborted) break;
 	}
-	if (!signal?.aborted) await flushParallel();
+	await flushParallel();
 	return {
 		messages,
 		terminate: batches.length > 0 && batches.every((batch) => batch.terminate),
@@ -632,10 +631,6 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
-
-		if (signal?.aborted) {
-			break;
-		}
 	}
 
 	return {
@@ -674,9 +669,6 @@ async function executeToolCallsParallel(
 			} satisfies FinalizedToolCallOutcome;
 			await emitToolExecutionEnd(finalized, emit);
 			finalizedCalls.push(finalized);
-			if (signal?.aborted) {
-				break;
-			}
 			continue;
 		}
 
@@ -702,9 +694,6 @@ async function executeToolCallsParallel(
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
 		});
-		if (signal?.aborted) {
-			break;
-		}
 	}
 
 	// Preparation remains ordered (especially permission hooks), but execution
@@ -777,6 +766,14 @@ async function prepareToolCall(
 	signal: AbortSignal | undefined,
 	tools: readonly AgentTool<any>[] = currentContext.tools ?? [],
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+	// Record an aborted outcome without running validation or permission hooks.
+	if (signal?.aborted) {
+		return {
+			kind: "immediate",
+			result: createErrorToolResult("Operation aborted"),
+			isError: true,
+		};
+	}
 	const tool = tools.find((t) => t.name === toolCall.name);
 	if (!tool) {
 		return {
