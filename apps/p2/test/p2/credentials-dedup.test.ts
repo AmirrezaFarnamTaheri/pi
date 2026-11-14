@@ -40,14 +40,16 @@ test("P2 propagates an explicit OAuth refresh but not an independent login", asy
 			{ propagateSharedOAuthRefresh: true },
 		);
 		assert.equal((await store.read("two"))?.type, "oauth");
-		assert.equal((await store.read("two") as { refresh?: string })?.refresh, "rotated-refresh");
+		const shared = await store.read("two");
+		assert.equal(shared?.type === "oauth" ? shared.refresh : undefined, "rotated-refresh");
 		await store.modify("two", async () => ({
 			type: "oauth",
 			refresh: "separate-refresh",
 			access: "separate-access",
 			expires: 9999999999999,
 		}));
-		assert.equal((await store.read("one") as { refresh?: string })?.refresh, "rotated-refresh");
+		const original = await store.read("one");
+		assert.equal(original?.type === "oauth" ? original.refresh : undefined, "rotated-refresh");
 	} finally {
 		await store.close();
 		rmSync(directory, { recursive: true, force: true });

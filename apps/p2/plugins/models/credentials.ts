@@ -2,13 +2,13 @@
 // auth-storage.ts (MIT); see third-party/pi.LICENSE. Locking lives in LockedFile.
 import { statSync } from "node:fs";
 import {
-	parseCredentialArchive,
-	sameStoredCredential,
-	serializeCredentialArchive,
 	type AuthOperationOptions,
 	type Credential,
 	type CredentialInfo,
 	type CredentialStore,
+	parseCredentialArchive,
+	sameStoredCredential,
+	serializeCredentialArchive,
 } from "@earendil-works/pi-ai";
 import { LockedFile, normalizePath, stripBom } from "@p2/app/v1/node";
 import { resolveConfigValueUncached } from "./config-value.ts";

@@ -137,10 +137,13 @@ test("re-login to one OAuth account detaches its shared secret without changing 
 
 test("malformed or dangling shared-secret references fail closed instead of being overwritten", async () => {
 	const { path, storage } = fixture();
-	writeFileSync(path, JSON.stringify({
-		account: { "$piOAuthRef": "missing" },
-		"$piSharedCredentials": { version: 1, apiKeys: {}, oauth: {} },
-	}));
+	writeFileSync(
+		path,
+		JSON.stringify({
+			account: { $piOAuthRef: "missing" },
+			$piSharedCredentials: { version: 1, apiKeys: {}, oauth: {} },
+		}),
+	);
 	const original = readFileSync(path, "utf8");
 	await expect(storage.read("account", { signal: new AbortController().signal })).rejects.toThrow();
 	await expect(storage.modify("another", async () => ({ type: "api_key", key: "not-written" }))).rejects.toThrow();

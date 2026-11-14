@@ -4,13 +4,13 @@
  */
 
 import {
-	parseCredentialArchive,
-	sameStoredCredential,
-	serializeCredentialArchive,
 	type AuthOperationOptions,
 	type Credential,
 	type CredentialInfo,
 	type CredentialStore,
+	parseCredentialArchive,
+	sameStoredCredential,
+	serializeCredentialArchive,
 } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";

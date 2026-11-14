@@ -55,17 +55,17 @@ describe("credential archive", () => {
 	});
 
 	it("rejects corrupt references, invalid keys, and reserved provider IDs", () => {
-		expect(() => parseCredentialArchive({ one: { "$piOAuthRef": "missing" } })).toThrow(/reference/i);
+		expect(() => parseCredentialArchive({ one: { $piOAuthRef: "missing" } })).toThrow(/reference/i);
 		expect(() =>
 			parseCredentialArchive({
-				one: { type: "api_key", key: { "$piApiKeyRef": "missing" } },
-				"$piSharedCredentials": { version: 1, apiKeys: {}, oauth: {} },
+				one: { type: "api_key", key: { $piApiKeyRef: "missing" } },
+				$piSharedCredentials: { version: 1, apiKeys: {}, oauth: {} },
 			}),
 		).toThrow(/reference/i);
 		expect(() => parseCredentialArchive({ one: { type: "api_key", key: 100 } })).toThrow();
 		expect(() =>
 			serializeCredentialArchive({
-				"$piSharedCredentials": { type: "api_key", key: "forbidden" },
+				$piSharedCredentials: { type: "api_key", key: "forbidden" },
 			}),
 		).toThrow(/reserved/i);
 	});
