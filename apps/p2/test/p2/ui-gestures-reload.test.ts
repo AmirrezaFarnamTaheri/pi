@@ -184,7 +184,9 @@ describe("phone gestures across a live plugin reload", { skip: !browserTests }, 
 		await browser.wait("document.querySelector('.messages') && !document.querySelector('.offline')");
 		// No wheel can show this layer. The route must remove it so the drawer can swipe;
 		// the wheel and sheet gestures already ran at detail 3 in the previous test.
-		await browser.wait(`!${sheet} && history.state?.route?.layers?.length === 0`);
+		await browser.wait(
+			`!${sheet} && !history.state?.route?.activity && history.state?.route?.layers?.length === 0`,
+		);
 		assert.equal(
 			await browser.evaluate<boolean>("!document.querySelector('[data-testid=activity] .el-ticker')"),
 			true,
