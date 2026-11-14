@@ -3341,8 +3341,9 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/logout") {
-				this.showOAuthSelector("logout");
+				// Keep the command alias, but use the same identity manager as /login.
 				this.editor.setText("");
+				this.showAccountManager();
 				return;
 			}
 			if (text === "/accounts") {
@@ -5979,21 +5980,6 @@ export class InteractiveMode {
 		return options.sort(compareProviders);
 	}
 
-	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
-			.map(({ providerId, type }) => {
-				const provider = this.session.modelRuntime.getProvider(providerId);
-				return {
-					id: providerId,
-					name: this.session.modelRuntime.getAccountLabel(providerId),
-					authType: type,
-					status: { type, source: "stored credential" },
-					subscription: provider?.auth.oauth?.isSubscription === true,
-				};
-			})
-			.sort(compareProviders);
-	}
-
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
 		if (!providerRef) {
 			this.showAccountManager();
@@ -6111,7 +6097,7 @@ export class InteractiveMode {
 		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				"Accounts",
+				"Login · accounts",
 				[...items.map((item) => item.label), ...actions],
 				(option) => {
 					done();
@@ -6127,7 +6113,24 @@ export class InteractiveMode {
 					done();
 					this.ui.requestRender();
 				},
-				{ description: "● selected  ·  ✓ connected  ·  ○ sign in  ·  choose an account to manage" },
+				{
+					description: "● active · ✓ connected · ○ sign in · → manage · r rename · x remove",
+					onShortcut: (keyData, label) => {
+						const profile = items.find((item) => item.label === label)?.profile;
+						if (!profile) return false;
+						if (matchesKey(keyData, "right")) {
+							done();
+							this.showAccountActions(profile);
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile, true);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile, true);
+						} else return false;
+						return true;
+					},
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6165,21 +6168,35 @@ export class InteractiveMode {
 					done();
 					this.showAccountManager();
 				},
-				{ description: `Provider: ${profile.sourceProviderId}  ·  account ID: ${profile.id}` },
+				{
+					description: `Provider: ${profile.sourceProviderId} · account ID: ${profile.id} · ← back · r rename · x remove`,
+					onShortcut: (keyData) => {
+						if (matchesKey(keyData, "left")) {
+							done();
+							this.showAccountManager();
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile);
+						} else return false;
+						return true;
+					},
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private async renameAccountFromMenu(profile: {
-		id: string;
-		label: string;
-		sourceProviderId: string;
-		original?: boolean;
-	}): Promise<void> {
+	private async renameAccountFromMenu(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): Promise<void> {
 		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
 		if (entered === undefined) {
-			this.showAccountActions(profile);
+			if (returnToLogin) this.showAccountManager();
+			else this.showAccountActions(profile);
 			return;
 		}
 		try {
@@ -6238,12 +6255,10 @@ export class InteractiveMode {
 		});
 	}
 
-	private confirmAccountRemoval(profile: {
-		id: string;
-		label: string;
-		sourceProviderId: string;
-		original?: boolean;
-	}): void {
+	private confirmAccountRemoval(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): void {
 		const confirm = profile.original ? "Disconnect" : "Delete";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
@@ -6252,7 +6267,8 @@ export class InteractiveMode {
 				(option) => {
 					done();
 					if (option !== confirm) {
-						this.showAccountActions(profile);
+						if (returnToLogin) this.showAccountManager();
+						else this.showAccountActions(profile);
 						return;
 					}
 					void (async () => {
@@ -6311,7 +6327,8 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.showAccountActions(profile);
+					if (returnToLogin) this.showAccountManager();
+					else this.showAccountActions(profile);
 				},
 				{
 					description: profile.original
@@ -6485,68 +6502,6 @@ export class InteractiveMode {
 					this.showAccountManager();
 				},
 				initialSearchInput,
-				this.ui,
-			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
-		});
-	}
-
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		if (mode === "login") {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		let providerOptions: AuthSelectorProvider[];
-		try {
-			providerOptions = await this.getLogoutProviderOptions();
-		} catch (error) {
-			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
-			return;
-		}
-		if (providerOptions.length === 0) {
-			this.showStatus(
-				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
-			);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				mode,
-				providerOptions,
-				async (providerId: string) => {
-					done();
-
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
-					if (!providerOption) {
-						return;
-					}
-
-					try {
-						await this.session.modelRuntime.logout(providerOption.id, {
-							signal: AbortSignal.timeout(15_000),
-						});
-						await this.updateAvailableProviderCount();
-						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
-						this.showStatus(message);
-					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : String(error);
-						this.showError(
-							error instanceof CredentialSynchronizationError
-								? `Credentials removed for ${providerOption.name}, but local model state could not be synchronized: ${message}`
-								: `Logout failed: ${message}`,
-						);
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				undefined,
 				this.ui,
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
