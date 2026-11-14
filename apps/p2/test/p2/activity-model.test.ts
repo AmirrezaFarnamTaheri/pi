@@ -312,6 +312,36 @@ test("unchanged turns keep their items; in a changed one, only what shows differ
 	assert.notEqual(rebuilt[4], first[4]);
 });
 
+test("equivalent rebuilt snapshots preserve existing user and answer row identities", () => {
+	const firstUser: Item = {
+		...user("rebuild-user-1", "First"),
+		author: { kind: "owner", id: "owner", name: "Owner" },
+	};
+	const firstAnswer = response("rebuild-answer-1", 2, [{ type: "text", text: "Done." }]);
+	const before = chatItems([firstUser, firstAnswer], false);
+	const rebuiltUser: Item = {
+		...firstUser,
+		author: { kind: "owner", id: "owner", name: "Owner" },
+		images: [],
+		files: [],
+	};
+	const rebuiltAnswer = { ...firstAnswer, message: structuredClone(firstAnswer.message) };
+	const again = chatItems([rebuiltUser, rebuiltAnswer], false);
+	assert.equal(again[0], before[0], "a user with unchanged values keeps its row object");
+	assert.equal(again[1], before[1], "an answer with rebuilt, identical message data keeps its row object");
+	const changed = chatItems(
+		[
+			rebuiltUser,
+			{
+				...rebuiltAnswer,
+				message: { ...rebuiltAnswer.message, content: [{ type: "text", text: "Changed." }] },
+			},
+		],
+		false,
+	);
+	assert.notEqual(changed[1], before[1], "an answer with changed text must update");
+});
+
 test("while an answer streams, the parts before its newest words keep their objects", () => {
 	const streaming = (text: string): Item => ({
 		...response("live", 9, [
