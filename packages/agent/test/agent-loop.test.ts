@@ -2209,6 +2209,73 @@ describe("agentLoopContinue with AgentMessage", () => {
 	});
 });
 
+describe("aborted tool-call batches", () => {
+	for (const toolExecution of ["sequential", "parallel"] as const) {
+		it(`records all requested tool results after abort (${toolExecution})`, async () => {
+			const controller = new AbortController();
+			const schema = obj({ value: str() });
+			let executed = 0;
+			const calls: string[] = [];
+			const tool: AgentTool<typeof schema, { value: string }> = {
+				name: "echo",
+				label: "Echo",
+				description: "Echo arguments",
+				parameters: schema,
+				async execute() {
+					executed++;
+					return { content: [{ type: "text", text: "unexpected" }] };
+				},
+			};
+			const config: AgentLoopConfig = {
+				model: createModel(),
+				convertToLlm: identityConverter,
+				toolExecution,
+				beforeToolCall: async ({ toolCall }) => {
+					calls.push(toolCall.id);
+					controller.abort();
+					return undefined;
+				},
+				finishTurn: () => ({ action: "end" }),
+			};
+			const stream = agentLoop(
+				[createUserMessage("run three tools")],
+				{ messages: [], tools: [tool] },
+				config,
+				controller.signal,
+				() => {
+					const response = createAssistantMessageEventStream();
+					queueMicrotask(() =>
+						response.push({
+							type: "done",
+							reason: "toolUse",
+							message: createAssistantMessage(
+								["one", "two", "three"].map((id) => ({
+									type: "toolCall",
+									id,
+									name: "echo",
+									arguments: { value: id },
+								})),
+								"toolUse",
+							),
+						}),
+					);
+					return response;
+				},
+			);
+			for await (const _event of stream) {
+				// Collect the completed batch.
+			}
+			const results = (await stream.result()).filter(
+				(message): message is ToolResultMessage => message.role === "toolResult",
+			);
+			expect(results.map((result) => result.toolCallId)).toEqual(["one", "two", "three"]);
+			expect(results.every((result) => result.isError)).toBe(true);
+			expect(executed).toBe(0);
+			expect(calls).toEqual(["one"]);
+		});
+	}
+});
+
 describe("runToolCall", () => {
 	const echoSchema = obj({ value: str() });
 	const echo: AgentTool<typeof echoSchema> = {
