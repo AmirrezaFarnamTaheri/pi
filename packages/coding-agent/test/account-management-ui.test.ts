@@ -84,6 +84,44 @@ describe("account management menu", () => {
 		return { mode, actions, renameAccount, removeAccountAlias, logout, setModel, getSelector, choose };
 	}
 
+
+	it("/login home shows management actions without a separate accounts screen", () => {
+		const ui = harness();
+		ui.mode.showAccountManager();
+		const view = ui.getSelector().render(100).join("\n");
+		expect(view).toContain("Login");
+		expect(view).toContain("Main");
+		expect(view).toContain("Work");
+	});
+
+	it("renames the highlighted login directly with r", async () => {
+		const ui = harness();
+		ui.mode.showAccountManager();
+		ui.getSelector().handleInput("r");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.renameAccount).toHaveBeenCalledWith("anthropic", "  Client projects  ");
+	});
+
+	it("deletes the highlighted additional account directly with x", async () => {
+		const ui = harness("account-anthropic-1");
+		ui.mode.showAccountManager();
+		ui.getSelector().handleInput("j"); // Additional login
+		ui.getSelector().handleInput("x");
+		ui.choose(1); // Single removal confirmation
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.removeAccountAlias).toHaveBeenCalledWith("account-anthropic-1");
+		expect(ui.logout).not.toHaveBeenCalled();
+	});
+
+	it("right opens account actions and left returns to login list", async () => {
+		const ui = harness();
+		ui.mode.showAccountManager();
+		ui.getSelector().handleInput("\x1b[C");
+		expect(ui.getSelector().render(100).join("\n")).toContain("Rename account");
+		ui.getSelector().handleInput("\x1b[D");
+		expect(ui.getSelector().render(100).join("\n")).toContain("＋ Add another account");
+	});
+
 	it("shows original and additional accounts in the same menu and renames the original", async () => {
 		const ui = harness();
 		ui.mode.showAccountManager();
