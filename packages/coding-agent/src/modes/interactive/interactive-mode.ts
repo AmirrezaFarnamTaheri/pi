@@ -2839,7 +2839,7 @@ export class InteractiveMode {
 	private showExtensionInput(
 		title: string,
 		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
+		opts?: ExtensionUIDialogOptions & { initialValue?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2861,7 +2861,7 @@ export class InteractiveMode {
 				placeholder,
 				(value) => finish(value),
 				() => finish(undefined),
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, initialValue: opts?.initialValue },
 			);
 			this.pushExtensionDialog(input, { kind: "question", message: title });
 		});
@@ -6193,7 +6193,9 @@ export class InteractiveMode {
 		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
 		returnToLogin = false,
 	): Promise<void> {
-		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
+		const entered = await this.showExtensionInput(`Rename ${profile.label}`, undefined, {
+			initialValue: profile.label,
+		});
 		if (entered === undefined) {
 			if (returnToLogin) this.showAccountManager();
 			else this.showAccountActions(profile);
@@ -7251,6 +7253,8 @@ export class InteractiveMode {
 		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const scrollPageUp = this.getEditorKeyDisplay("tui.altScreen.pageUp");
+		const scrollPageDown = this.getEditorKeyDisplay("tui.altScreen.pageDown");
 		const scrollLineUp = this.getEditorKeyDisplay("tui.altScreen.lineUp");
 		const scrollLineDown = this.getEditorKeyDisplay("tui.altScreen.lineDown");
 
@@ -7296,6 +7300,7 @@ export class InteractiveMode {
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
 | \`${scrollLineUp}\` / \`${scrollLineDown}\` | Scroll fullscreen transcript by line |
+| \`${scrollPageUp}\` / \`${scrollPageDown}\` | Scroll fullscreen transcript by page |
 
 **Editing**
 | Key | Action |
