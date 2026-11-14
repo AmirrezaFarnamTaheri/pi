@@ -36,6 +36,11 @@ describe("Windows keybinding defaults", () => {
 	it("applies the detected defaults consistently", () => {
 		const windowsKeybindings = useWindowsKeybindings();
 		const nativeWindows = process.platform === "win32";
+		// Left/right provide page-sized transcript navigation; up/down remain single-line.
+		expect(KEYBINDINGS["tui.altScreen.lineUp"].defaultKeys).toBe("shift+up");
+		expect(KEYBINDINGS["tui.altScreen.lineDown"].defaultKeys).toBe("shift+down");
+		expect(KEYBINDINGS["tui.altScreen.pageUp"].defaultKeys).toEqual(["pageUp", "shift+left"]);
+		expect(KEYBINDINGS["tui.altScreen.pageDown"].defaultKeys).toEqual(["pageDown", "shift+right"]);
 
 		expect(KEYBINDINGS["app.clipboard.pasteImage"].defaultKeys).toEqual(
 			windowsKeybindings ? ["alt+v", "ctrl+v"] : "ctrl+v",

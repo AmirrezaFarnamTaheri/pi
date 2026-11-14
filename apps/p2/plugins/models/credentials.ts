@@ -1,7 +1,15 @@
 // CredentialStore semantics and validation adapted from earendil-works/pi
 // auth-storage.ts (MIT); see third-party/pi.LICENSE. Locking lives in LockedFile.
 import { statSync } from "node:fs";
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import {
+	type AuthOperationOptions,
+	type Credential,
+	type CredentialInfo,
+	type CredentialStore,
+	parseCredentialArchive,
+	sameStoredCredential,
+	serializeCredentialArchive,
+} from "@earendil-works/pi-ai";
 import { LockedFile, normalizePath, stripBom } from "@p2/app/v1/node";
 import { resolveConfigValueUncached } from "./config-value.ts";
 
@@ -13,32 +21,7 @@ function parseCredentials(content: string | undefined): Credentials {
 	} catch {
 		throw new Error("Invalid auth.json syntax");
 	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-		throw new Error("Invalid auth.json: expected object");
-	for (const credential of Object.values(parsed)) {
-		if (!credential || typeof credential !== "object" || Array.isArray(credential))
-			throw new Error("Invalid auth.json credential");
-		const value = credential as Record<string, unknown>;
-		if (value.type === "api_key") {
-			const key = value.key === undefined || typeof value.key === "string";
-			const env =
-				value.env === undefined ||
-				(value.env !== null &&
-					typeof value.env === "object" &&
-					!Array.isArray(value.env) &&
-					Object.values(value.env).every((entry) => typeof entry === "string"));
-			if (key && env) continue;
-		} else if (
-			value.type === "oauth" &&
-			typeof value.access === "string" &&
-			typeof value.refresh === "string" &&
-			typeof value.expires === "number" &&
-			Number.isFinite(value.expires)
-		)
-			continue;
-		throw new Error("Invalid auth.json credential");
-	}
-	return parsed as Credentials;
+	return parseCredentialArchive(parsed);
 }
 
 export class FileCredentials implements CredentialStore {
@@ -118,11 +101,17 @@ export class FileCredentials implements CredentialStore {
 				const data = parseCredentials(content);
 				const current = Object.hasOwn(data, providerId) ? data[providerId] : undefined;
 				const candidate = await update(structuredClone(current));
-				const next =
-					candidate === undefined ? data : parseCredentials(JSON.stringify({ ...data, [providerId]: candidate }));
+				const next: Credentials = candidate === undefined ? data : { ...data, [providerId]: candidate };
+				if (options?.propagateSharedOAuthRefresh && current?.type === "oauth" && candidate?.type === "oauth") {
+					for (const [id, credential] of Object.entries(data)) {
+						if (id !== providerId && credential.type === "oauth" && sameStoredCredential(credential, current)) {
+							next[id] = structuredClone(candidate);
+						}
+					}
+				}
 				return {
 					result: { data: next, credential: Object.hasOwn(next, providerId) ? next[providerId] : undefined },
-					...(candidate === undefined ? {} : { next: JSON.stringify(next, null, 2) }),
+					...(candidate === undefined ? {} : { next: serializeCredentialArchive(next) }),
 				};
 			}, options)
 			.then((result) => {
@@ -138,7 +127,7 @@ export class FileCredentials implements CredentialStore {
 		const data = await this.file.withLockAsync(async (content) => {
 			const next = parseCredentials(content);
 			delete next[providerId];
-			return { result: next, next: JSON.stringify(next, null, 2) };
+			return { result: next, next: serializeCredentialArchive(next) };
 		}, options);
 		this.lastGood = data;
 	}

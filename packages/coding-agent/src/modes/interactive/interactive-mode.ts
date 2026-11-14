@@ -2839,7 +2839,7 @@ export class InteractiveMode {
 	private showExtensionInput(
 		title: string,
 		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
+		opts?: ExtensionUIDialogOptions & { initialValue?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2861,7 +2861,7 @@ export class InteractiveMode {
 				placeholder,
 				(value) => finish(value),
 				() => finish(undefined),
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, initialValue: opts?.initialValue },
 			);
 			this.pushExtensionDialog(input, { kind: "question", message: title });
 		});
@@ -3341,8 +3341,9 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/logout") {
-				this.showOAuthSelector("logout");
+				// Keep the command alias, but use the same identity manager as /login.
 				this.editor.setText("");
+				this.showAccountManager();
 				return;
 			}
 			if (text === "/accounts") {
@@ -5946,6 +5947,9 @@ export class InteractiveMode {
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
 		for (const provider of this.session.modelRuntime.getProviders()) {
+			// A provider's brand and an account's editable nickname are different fields.
+			const label = this.session.modelRuntime.getAccountLabel(provider.id);
+			const accountLabel = label === provider.name ? {} : { accountLabel: label };
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
 			const status = authStatus.configured
 				? {
@@ -5957,7 +5961,8 @@ export class InteractiveMode {
 			if ((!authType || authType === "oauth") && provider.auth.oauth) {
 				options.push({
 					id: provider.id,
-					name: this.session.modelRuntime.getAccountLabel(provider.id),
+					name: provider.name,
+					...accountLabel,
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5967,7 +5972,8 @@ export class InteractiveMode {
 			if ((!authType || authType === "api_key") && provider.auth.apiKey) {
 				options.push({
 					id: provider.id,
-					name: this.session.modelRuntime.getAccountLabel(provider.id),
+					name: provider.name,
+					...accountLabel,
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -5979,21 +5985,6 @@ export class InteractiveMode {
 		return options.sort(compareProviders);
 	}
 
-	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
-			.map(({ providerId, type }) => {
-				const provider = this.session.modelRuntime.getProvider(providerId);
-				return {
-					id: providerId,
-					name: this.session.modelRuntime.getAccountLabel(providerId),
-					authType: type,
-					status: { type, source: "stored credential" },
-					subscription: provider?.auth.oauth?.isSubscription === true,
-				};
-			})
-			.sort(compareProviders);
-	}
-
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
 		if (!providerRef) {
 			this.showAccountManager();
@@ -6002,10 +5993,14 @@ export class InteractiveMode {
 		if (providerRef.startsWith("add ")) {
 			const search = providerRef.slice(4).trim();
 			const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
-			const providerOptions = findMatchingProviders(
-				this.getLoginProviderOptions().filter((provider) => !aliases.has(provider.id) && !!provider.method?.login),
-				search,
+			const eligible = this.getLoginProviderOptions().filter(
+				(provider) => !aliases.has(provider.id) && !!provider.method?.login,
 			);
+			// Adding an identity does not choose an auth method. Each source provider appears once.
+			const sources = eligible.filter(
+				(provider, index) => eligible.findIndex((item) => item.id === provider.id) === index,
+			);
+			const providerOptions = findMatchingProviders(sources, search);
 			if (providerOptions.length === 1) {
 				await this.startAdditionalAccountLogin(providerOptions[0]!);
 			} else {
@@ -6042,19 +6037,23 @@ export class InteractiveMode {
 		}
 	}
 
-	/** Add a separate provider identity rather than replacing the current account's credentials. */
+	/**
+	 * Create a distinct, unsigned-in identity. Connecting credentials is a separate
+	 * explicit action so Add cannot accidentally replace the source provider's login.
+	 */
 	private async startAdditionalAccountLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+		const label = await this.showExtensionInput(`Name new ${providerOption.name} account`);
+		if (label === undefined) {
+			onBack?.();
+			return;
+		}
 		try {
-			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id);
-			const aliasOption = this.getLoginProviderOptions(providerOption.authType).find(
-				(provider) => provider.id === profile.id,
-			);
-			if (!aliasOption) throw new Error("New account was not registered for login");
-			// Keep the identity after cancellation: a late OAuth completion may already
-			// have saved its credential, and deleting it would orphan that secret.
-			await this.startProviderLogin(aliasOption, onBack);
+			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id, label);
+			this.showStatus(`Created ${profile.label} for ${providerOption.name}. Sign in when ready.`);
+			this.showAccountActions(profile);
 		} catch (error) {
 			this.showError(`Could not add account: ${error instanceof Error ? error.message : String(error)}`);
+			onBack?.();
 		}
 	}
 
@@ -6102,16 +6101,16 @@ export class InteractiveMode {
 				label: `${selected ? "●" : connected ? "✓" : "○"} ${name}${duplicates.has(name) ? ` · ${profile.id}` : ""}`,
 			};
 		});
-		const signIn = "＋ Sign in";
-		const add = "＋ Add another account";
+		const signIn = "＋ Sign in to existing account";
+		const add = "＋ Create separate account";
 		const rotation =
 			this.session.model?.provider === "account-profiles"
-				? `↻ Rotation on · ${runtime.getAccountLabel(this.session.model.id)}`
+				? `↻ Rotation on · ${runtime.getProvider(this.session.model.id)?.name ?? this.session.model.id}`
 				: "↻ Rotate accounts";
 		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				"Accounts",
+				"Login · accounts",
 				[...items.map((item) => item.label), ...actions],
 				(option) => {
 					done();
@@ -6127,7 +6126,29 @@ export class InteractiveMode {
 					done();
 					this.ui.requestRender();
 				},
-				{ description: "● selected  ·  ✓ connected  ·  ○ sign in  ·  choose an account to manage" },
+				{
+					description:
+						"Labels identify accounts; provider brands are fixed. ● active · ✓ connected · ○ unsigned · → manage · r rename · x remove",
+					sectionLabels:
+						items.length > 0
+							? { 0: "Existing accounts", [items.length]: "Account actions" }
+							: { 0: "Account actions" },
+					onShortcut: (keyData, label) => {
+						const profile = items.find((item) => item.label === label)?.profile;
+						if (!profile) return false;
+						if (matchesKey(keyData, "right")) {
+							done();
+							this.showAccountActions(profile);
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile, true);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile, true);
+						} else return false;
+						return true;
+					},
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6165,21 +6186,37 @@ export class InteractiveMode {
 					done();
 					this.showAccountManager();
 				},
-				{ description: `Provider: ${profile.sourceProviderId}  ·  account ID: ${profile.id}` },
+				{
+					description: `Provider: ${profile.sourceProviderId} · account ID: ${profile.id} · ← back · r rename · x remove`,
+					onShortcut: (keyData) => {
+						if (matchesKey(keyData, "left")) {
+							done();
+							this.showAccountManager();
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile);
+						} else return false;
+						return true;
+					},
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private async renameAccountFromMenu(profile: {
-		id: string;
-		label: string;
-		sourceProviderId: string;
-		original?: boolean;
-	}): Promise<void> {
-		const entered = await this.showExtensionInput(`Rename ${profile.label}`, profile.label);
+	private async renameAccountFromMenu(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): Promise<void> {
+		const entered = await this.showExtensionInput(`Rename ${profile.label}`, undefined, {
+			initialValue: profile.label,
+		});
 		if (entered === undefined) {
-			this.showAccountActions(profile);
+			if (returnToLogin) this.showAccountManager();
+			else this.showAccountActions(profile);
 			return;
 		}
 		try {
@@ -6238,12 +6275,10 @@ export class InteractiveMode {
 		});
 	}
 
-	private confirmAccountRemoval(profile: {
-		id: string;
-		label: string;
-		sourceProviderId: string;
-		original?: boolean;
-	}): void {
+	private confirmAccountRemoval(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): void {
 		const confirm = profile.original ? "Disconnect" : "Delete";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
@@ -6252,7 +6287,8 @@ export class InteractiveMode {
 				(option) => {
 					done();
 					if (option !== confirm) {
-						this.showAccountActions(profile);
+						if (returnToLogin) this.showAccountManager();
+						else this.showAccountActions(profile);
 						return;
 					}
 					void (async () => {
@@ -6288,9 +6324,14 @@ export class InteractiveMode {
 										model.provider !== profile.id &&
 										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
 								);
-							if (fallback && activeNeedsSwitch) {
+							if (!fallback) {
+								throw new Error(
+									"No other available model. Choose a different model or sign in to another account before removing the active or default account.",
+								);
+							}
+							if (activeNeedsSwitch) {
 								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
-							} else if (fallback && defaultNeedsUpdate) {
+							} else if (defaultNeedsUpdate) {
 								this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
 							}
 						}
@@ -6311,7 +6352,8 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					this.showAccountActions(profile);
+					if (returnToLogin) this.showAccountManager();
+					else this.showAccountActions(profile);
 				},
 				{
 					description: profile.original
@@ -6442,16 +6484,24 @@ export class InteractiveMode {
 		addAccount = false,
 	): void {
 		const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
-		const providerOptions = this.getLoginProviderOptions(authType).filter(
+		const eligible = this.getLoginProviderOptions(authType).filter(
 			(provider) => !addAccount || (!aliases.has(provider.id) && !!provider.method?.login),
 		);
+		// The new account has no auth method until Sign in is chosen later.
+		const providerOptions = addAccount
+			? eligible
+					.filter((provider, index) => eligible.findIndex((item) => item.id === provider.id) === index)
+					.map((provider) => ({ ...provider, accountLabel: undefined }))
+			: eligible;
 		if (providerOptions.length === 0) {
 			const message =
 				authType === "oauth"
 					? "No account providers available."
 					: authType === "api_key"
 						? "No API key providers available."
-						: "No login providers available.";
+						: addAccount
+							? "No providers support a separate account."
+							: "No login providers available.";
 			this.showStatus(message);
 			return;
 		}
@@ -6485,68 +6535,6 @@ export class InteractiveMode {
 					this.showAccountManager();
 				},
 				initialSearchInput,
-				this.ui,
-			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
-		});
-	}
-
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		if (mode === "login") {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		let providerOptions: AuthSelectorProvider[];
-		try {
-			providerOptions = await this.getLogoutProviderOptions();
-		} catch (error) {
-			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
-			return;
-		}
-		if (providerOptions.length === 0) {
-			this.showStatus(
-				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
-			);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				mode,
-				providerOptions,
-				async (providerId: string) => {
-					done();
-
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
-					if (!providerOption) {
-						return;
-					}
-
-					try {
-						await this.session.modelRuntime.logout(providerOption.id, {
-							signal: AbortSignal.timeout(15_000),
-						});
-						await this.updateAvailableProviderCount();
-						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
-						this.showStatus(message);
-					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : String(error);
-						this.showError(
-							error instanceof CredentialSynchronizationError
-								? `Credentials removed for ${providerOption.name}, but local model state could not be synchronized: ${message}`
-								: `Logout failed: ${message}`,
-						);
-					}
-				},
-				() => {
-					done();
-					this.ui.requestRender();
-				},
-				undefined,
 				this.ui,
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
@@ -7296,6 +7284,8 @@ export class InteractiveMode {
 		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const scrollPageUp = this.getEditorKeyDisplay("tui.altScreen.pageUp");
+		const scrollPageDown = this.getEditorKeyDisplay("tui.altScreen.pageDown");
 		const scrollLineUp = this.getEditorKeyDisplay("tui.altScreen.lineUp");
 		const scrollLineDown = this.getEditorKeyDisplay("tui.altScreen.lineDown");
 
@@ -7341,6 +7331,7 @@ export class InteractiveMode {
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
 | \`${scrollLineUp}\` / \`${scrollLineDown}\` | Scroll fullscreen transcript by line |
+| \`${scrollPageUp}\` / \`${scrollPageDown}\` | Scroll fullscreen transcript by page |
 
 **Editing**
 | Key | Action |

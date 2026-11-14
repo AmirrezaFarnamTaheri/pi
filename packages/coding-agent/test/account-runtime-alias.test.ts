@@ -23,11 +23,13 @@ test("account aliases persist and do not replace the source provider or each oth
 		const work = runtime.addAccountAlias("antigravity-manager", "Antigravity Work");
 		const personal = runtime.addAccountAlias("antigravity-manager", "Antigravity Personal");
 		assert.notEqual(work.id, personal.id);
-		assert.equal(runtime.getProvider(work.id)?.name, "Antigravity Work");
-		assert.equal(runtime.getProvider(personal.id)?.name, "Antigravity Personal");
+		assert.equal(runtime.getAccountLabel(work.id), "Antigravity Work");
+		assert.equal(runtime.getAccountLabel(personal.id), "Antigravity Personal");
+		assert.equal(runtime.getProvider(work.id)?.name, primary?.name);
+		assert.equal(runtime.getProvider(personal.id)?.name, primary?.name);
 		assert.equal(runtime.getProvider("antigravity-manager"), primary);
 		assert.throws(() => runtime.unregisterProvider(work.id), /managed account/i);
-		assert.equal(runtime.getProvider(work.id)?.name, "Antigravity Work");
+		assert.equal(runtime.getProvider(work.id)?.name, primary?.name);
 		assert.deepEqual(runtime.getAccountProfiles(), [work, personal]);
 		assert.throws(() => runtime.addAccountAlias(work.id), /original provider/);
 		const restarted = await ModelRuntime.create(options);
@@ -114,7 +116,8 @@ test("restores an account whose extension source provider is registered after ru
 				throw new Error("unused");
 			},
 		});
-		assert.equal(runtime.getProvider(profile.id)?.name, "Delayed sign-in");
+		assert.equal(runtime.getProvider(profile.id)?.name, "Late test provider");
+		assert.equal(runtime.getAccountLabel(profile.id), "Delayed sign-in");
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -190,17 +193,20 @@ test("renamed accounts persist across restarts without replacing providers or st
 		const original = runtime.getProvider("antigravity-manager");
 		const work = runtime.addAccountAlias("antigravity-manager", "Account 1");
 		const personal = runtime.addAccountAlias("antigravity-manager", "Account 2");
+		const workProvider = runtime.getProvider(work.id);
+		assert.equal(runtime.getAccountLabel("antigravity-manager"), "Primary");
 		assert.equal(runtime.renameAccount(work.id, "  Company gateway  "), "Company gateway");
 		assert.equal(runtime.renameAccount("antigravity-manager", "  Main gateway  "), "Main gateway");
 		assert.equal(runtime.getAccountLabel(work.id), "Company gateway");
-		assert.equal(runtime.getProvider(work.id)?.name, "Company gateway");
+		assert.equal(runtime.getProvider(work.id), workProvider, "renaming a label must not re-register its provider");
+		assert.equal(runtime.getProvider(work.id)?.name, original?.name);
 		assert.equal(runtime.getAccountLabel("antigravity-manager"), "Main gateway");
 		assert.equal(runtime.getProvider("antigravity-manager"), original);
-		assert.equal(runtime.getProvider(personal.id)?.name, "Account 2");
+		assert.equal(runtime.getProvider(personal.id)?.name, original?.name);
 
 		const reopened = await ModelRuntime.create(options);
 		assert.equal(reopened.getAccountLabel(work.id), "Company gateway");
-		assert.equal(reopened.getProvider(work.id)?.name, "Company gateway");
+		assert.equal(reopened.getProvider(work.id)?.name, original?.name);
 		assert.equal(reopened.getAccountLabel("antigravity-manager"), "Main gateway");
 		assert.deepEqual(
 			reopened.getAccountProfiles().map((account) => account.id),
@@ -208,8 +214,9 @@ test("renamed accounts persist across restarts without replacing providers or st
 		);
 
 		await reopened.removeAccountAlias(work.id);
+		await assert.rejects(reopened.removeAccountAlias(work.id), /no longer exists/i);
 		assert.equal(reopened.getProvider(work.id), undefined);
-		assert.equal(reopened.getProvider(personal.id)?.name, "Account 2");
+		assert.equal(reopened.getProvider(personal.id)?.name, original?.name);
 		const again = await ModelRuntime.create(options);
 		assert.equal(again.getAccountLabel("antigravity-manager"), "Main gateway");
 		assert.deepEqual(

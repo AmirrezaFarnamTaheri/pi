@@ -1,9 +1,5 @@
 // p2's plugin API, version 1, for web facets (`@p2/app/v1/web`): the browser runtime (objects as React hooks, slots,
 // sheets, navigation) and the shared components and stores of p2's page (chat, drawer, viewers, icons).
-
-// Plugins share the host ReactDOM and glyph implementation; no cross-plugin source import.
-export { createPortal } from "react-dom";
-export { GlyphIcon } from "../../../plugins/glyphs/GlyphIcon.tsx";
 export * from "../../runtime/web.tsx";
 export * from "../../web/AppLayout.tsx";
 export * from "../../web/activity/api.ts";
@@ -19,9 +15,12 @@ export {
 	useCommandQuery,
 	useCommandTarget,
 } from "../../web/command-menu/context.ts";
+export { type KeyBinding, matchesBinding } from "../../web/command-menu/keys.ts";
 export { useCommandMatches } from "../../web/command-menu/match.ts";
 export {
+	type CommandMenuRow,
 	type CommandTargetRow,
+	useCommandMenuRow,
 	useCommandRouteTarget,
 	useCommandTargetRow,
 } from "../../web/command-menu/targets.ts";
@@ -34,8 +33,10 @@ export * from "../../web/file-completion.tsx";
 export * from "../../web/haptics.ts";
 export * from "../../web/history.ts";
 export * from "../../web/icons.tsx";
+export { type LongPress, type LongPressHandlers, useLongPress } from "../../web/long-press.ts";
 export * from "../../web/Markdown.tsx";
 export * from "../../web/ModelPicker.tsx";
+export * from "../../web/menu-components.ts";
 export * from "../../web/navigation.ts";
 export * from "../../web/navigation-components.ts";
 export * from "../../web/new-session.tsx";
@@ -47,6 +48,7 @@ export * from "../../web/SessionStats.tsx";
 export * from "../../web/SettingsNav.tsx";
 export * from "../../web/SidePanel.tsx";
 export * from "../../web/Switch.tsx";
+export * from "../../web/shared-context.ts";
 export * from "../../web/sidebar.ts";
 export * from "../../web/ThemeButton.tsx";
 export { setTheme, type ThemePreference } from "../../web/theme.ts";

@@ -142,7 +142,7 @@ export async function refreshStoredOAuthCredential(
 					throw new ModelsError("oauth", `OAuth refresh failed for ${providerId}`, { cause: error });
 				}
 			},
-			{ signal: lockWait.signal },
+			{ signal: lockWait.signal, propagateSharedOAuthRefresh: true },
 		);
 	} catch (error) {
 		if (error instanceof ModelsError) throw error;

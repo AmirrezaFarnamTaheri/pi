@@ -4,6 +4,7 @@ import { formatAuthSelectorProviderType } from "./components/oauth-selector.ts";
 export type LoginProviderCompletionOption = {
 	id: string;
 	name: string;
+	accountLabel?: string;
 	authTypes: AuthSelectorProvider["authType"][];
 	subscription?: boolean;
 };
@@ -26,6 +27,7 @@ export function getLoginProviderCompletionOptions(
 		byId.set(provider.id, {
 			id: provider.id,
 			name: provider.name,
+			...(provider.accountLabel ? { accountLabel: provider.accountLabel } : {}),
 			authTypes: [provider.authType],
 			subscription: provider.subscription,
 		});
@@ -37,12 +39,13 @@ export function getLoginProviderSearchText(provider: LoginProviderCompletionOpti
 	const authTypes = provider.authTypes
 		.map((authType) => `${authType} ${formatAuthSelectorProviderType(authType, provider.subscription)}`)
 		.join(" ");
-	return `${provider.id} ${provider.name} ${authTypes}`;
+	return `${provider.id} ${provider.name} ${provider.accountLabel ?? ""} ${authTypes}`;
 }
 
 export function formatLoginProviderCompletionDescription(provider: LoginProviderCompletionOption): string {
 	const authTypes = provider.authTypes
 		.map((authType) => formatAuthSelectorProviderType(authType, provider.subscription))
 		.join("/");
-	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
+	const name = provider.accountLabel ? `${provider.name} · ${provider.accountLabel}` : provider.name;
+	return name === provider.id ? authTypes : `${name} · ${authTypes}`;
 }

@@ -36,30 +36,37 @@ P2_FAKE=1 npm start          # http://127.0.0.1:8788, data in ~/.pi/p2
 | `PI_RADIUS_GATEWAY` | production Radius | gateway selected by `npm run radius:login` |
 | `P2_TERMINAL_DAEMON` | unset | optional local pi-env daemon binary; otherwise use packages/env release/development builds |
 
-- **Web UI:** `buildWebBundle` (`src/hosts/bundles.ts`) bundles `src/hosts/web/main.tsx` with the selected plugins'
-  web facets. Content-named JS, CSS, assets and source maps are served from memory under `/__p2_web/`; `GET
-  /__p2_web` returns the no-store `{ version, script, style }` manifest, and `src/hosts/web.ts` renders the page.
-  Builds are deterministic across checkout locations and capped at 8 MiB excluding source maps. Startup builds in
-  the background; failures produce an owner notice and page loads return 500 until a build succeeds. Plugin reload
-  builds the web and TUI candidates before committing the backend, so a failed build preserves the old code and
-  bundles. A custom esbuild loader records the exact app-source bytes it supplies for dev
-  change tracking. Pages poll every 5 seconds, hidden ones too (browsers slow their timers down), and reload on any
-  manifest-version change; foregrounding checks immediately. A page's link names its bundle (`/chord?web=<version>`):
-  the server refuses one naming another version at once (close code 4001, `src/runtime/stale-page.ts`), the page
-  reloads (a second such reload within 15 s waits, so a kept older page from the service worker cannot loop), and the
-  owner gets a notice (source `stale-pages`) naming who it was: the owner's access or device, or the guest, the
-  browser and its address. Links naming no version are not asked: the TUI, Cloud Brain's pages and pages from before
-  2026-11-12. Those older pages reload once shown; until then their links re-hold types removed since (e.g.
-  `p2.artifact-list`), which wait on the session worker and are reported there as `unbound_long` at each start: refusing
-  them at once, and naming who asked in that report, needs Chord (a host's retired type names; `UnboundLong` with the
-  request's principal and link). At most two previous generations remain available for up to 60 seconds. This polling is temporary
-  until loader model D provides scoped, per-facet `ClientBundle` pushes (`docs/plugin-loading.md` 5.3 and 12.2 step
-  4). The TUI launcher separately polls `/__p2_tui`. There is no Vite, source-module server or `index.html`.
-- **Bundles for Radius Cloud Brain:** after CI passes on main, `.github/workflows/p2-cloud-bundle.yml` builds this
-  web bundle with `scripts/cloud-bundle.ts` and uploads it to the R2 bucket `pi-ui` under the commit's full SHA, which
-  Radius serves under `/pi/ui/`. The script patches the built script's Chord socket URL (dropping its `?web=`: a Cloud
-  Brain page names no p2 bundle), version poll and `/__p2_web/` asset prefix, and fails when one is missing: changing those in `src/hosts/web/main.tsx` or `WEB_BUNDLE_PATH` means
-  updating it.
+- **Web UI** (Chord's web surface, slice 11; `src/hosts/server.ts`, `src/hosts/web.ts`): `webSurface` with
+  `routes: false` builds the pages' base bundle from `src/hosts/web/entry.ts` (`main.tsx`: Chord's `startPage` with
+  p2's API modules, core facet, React root, connection state and error reports; `themes: false`, p2 styles itself)
+  right after the listen, resolving workspace packages through p2's tsconfig `paths` as the server's source resolver
+  does (`src/hosts/web/base.ts`, Chord's `tsconfig`): their sources, never a `dist/` (pi-ai's `./utils/*` exports
+  only `dist/`, which the phone never builds; `web-sources.test.ts` fails on any `dist/` input); the
+  plugins' web facets are Chord plugin builds of kind `web` (host packages `src/hosts/web/packages.ts`: the API's
+  kind-neutral and web modules, React, react-dom, pi-schema), served as scripts that register themselves, the current
+  set as one combined file. `web.ts` serves them with p2's access rules: the page (p2's template with `pageScripts`,
+  `data-web-version` the base hash), `/_chord/web/…` files (named by content, `immutable`; guests too: it is the
+  app's code), and `/_chord/web/base` (public, `no-store`). A failed base build is an owner notice and pages answer
+  503. A plugin reload rolls web facets out with the server's and workers' (the surface's step last): an open page
+  fetches the changed scripts and applies them in place (`host.reload` in the page; each plugin's stylesheet swapped
+  with its code), so the transcript's scroll and the other panes stay; only base code (the entry, `src/web`,
+  `src/runtime`, the API, Chord, React) needs a restart, and pages reload onto the new base: when its link drops a
+  page asks `/_chord/web/base` alongside the reconnect (never before it: one check at a time, a drop while one runs
+  asks nothing more), and another base stops the reconnecting and reloads the page. No polling. A page's link names its base
+  (`/chord?web=<base>`); every other client names itself (`?client=tui`, `cloud`, `script` for scripts and tests;
+  `src/runtime/stale-page.ts`). The server refuses a link naming another base, or neither a base nor a known client (a
+  page from before 2026-11-12, which would re-hold types removed since), at once (close code 4001; the page reloads)
+  and the owner gets a notice (source `stale-pages`) naming who it was: the owner's access or device, or the guest,
+  the browser and its address. A TUI launcher from before the marker is refused too (it retries until updated). The last four plugin sets' files stay served. Web facets must not share module state with
+  another plugin's files (each plugin's script holds its own copy of a file it imports from another plugin):
+  `plugin-practices.md`. The TUI launcher still polls `/__p2_tui` (p2's own TUI bundle). There is no Vite,
+  source-module server or `index.html`.
+- **Radius Cloud Brain** (`scripts/cloud-bundle.ts`, `.github/workflows/p2-cloud-bundle.yml` after CI passes on main;
+  the R2 bucket `pi-ui` under the commit's full SHA, served by Radius under `/pi/ui/`): a static page built with
+  Chord's builders as a p2 page is (`buildBase`, the plugins' web scripts registered with `registeredSource`,
+  `pageBootstrap`), written as one script (the bootstrap, the plugins, the base bundle) and one stylesheet, assets
+  under `/pi/ui/<sha>/assets/`. `main.tsx` sees Radius's `data-pi-bootstrap` on `#root`: it connects to its Chord URL
+  (adding `client=cloud`; the brain forwards the relayed path with its query) and starts static (`startPage({ follow: false })`: no updates, never outdated). Test: `ui-cloud-bundle.test.ts`.
 - `npm run dev` also watches plugins and supervises runtime restarts; see **Dev mode** below. Under `npm start`,
   code changes (web included) take effect only after a restart.
 - **Data report** (`scripts/data-report.ts`, read-only, beside a live server): per session its title, location,
@@ -123,8 +130,8 @@ Use a temporary `P2_DATA_DIR` and a different `PORT` for experiments.
   `GET /__p2_dev`. All triggers publish a shared owner notice, such as **Reloaded chat, sessions** or
   **Reload refused: …**. **Show logs** opens the Logs plugin when loaded; otherwise the message stands alone.
 - **Plugin reloads:** an explicit reload builds exactly the named (or dirty) plugins (Chord's `plugins.build`), then
-  rolls them out to the server and every running worker (`plugins.rollout([server step, workers step])`) and rebuilds
-  the TUI and web bundles. A plugin whose build fails keeps its old code (an added one stays out) and the reload is
+  rolls them out to the server, every running worker and the pages (`plugins.rollout([server step, workers step, web
+  surface step])`) and rebuilds the TUI bundle. A plugin whose build fails keeps its old code (an added one stays out) and the reload is
   refused; a plugin that is not loaded cannot be reloaded. Compatible changes keep objects, streams and references
   (Chord swaps them in place); added plugins' objects activate; a removed plugin's objects end (their holders see
   them end). Dirty marks come from Chord's plugin watcher
@@ -257,7 +264,7 @@ pi's defaults (rebindable in pi's `keybindings.json` or p2 prefs; `/hotkeys` lis
 | --- | --- |
 | Ctrl+R (chat), `/sessions`, `/resume`, `/new` | Session picker / create a session with a working directory |
 | Ctrl+L, `/model` | Model picker, then thinking level (with no session, sets the default; owner) |
-| Enter / Alt+Enter | Send (steer if busy) / queue a follow-up |
+| Enter / Alt+Enter | Send (steer if busy) / queue a follow-up; idle: send in a new branch (`docs/tree.md`) |
 | Escape / Alt+Up | Stop / restore the last queued input to the editor |
 | Ctrl+C / Ctrl+D | Clear the editor (twice: exit) / exit when the editor is empty (`/quit`) |
 | Ctrl+T / Ctrl+O | Show thinking / expand tool output |
@@ -451,12 +458,13 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   ones (`serveServerRegistries`, `serveWorkerRegistries`, `tuiCoreFacet`, `webCoreFacet`), a plugin serves its own
   (`serveKeyed`). One contribution per registry per object or facet.
 - **Plugins:** see **Plugin layout** and **Plugin reloads**; the server loads its facets with `createPlugins`, workers
-  get theirs from the workers component, the TUI and web bundles load theirs with `host.load`.
+  get theirs from the workers component, pages from the web surface (`startPage`), the TUI bundle loads its own with
+  `host.load`.
 - **Protocol versions:** a page or TUI reloads when the server speaks a newer link protocol (`newerPeerProtocol`).
 - **Contract versions:** pages and TUIs keep the contracts they were built with until they reload, so a deploy that
   bumps a contract a client holds must keep serving the old version: write the history with `evolve` (the released
   version as the base, verbatim, so old bundles' fingerprints match) and give the provider an `accepts` table mapping
-  current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1, `Envs` v1/v2;
+  current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1/v2, `Envs` v1/v2;
   `test/p2/contract-versions.test.ts` binds the released declarations). Without it, old clients wait unbound
   (`contract_mismatch`) until they reload.
 
@@ -662,6 +670,38 @@ detached snapshots survive a server restart. The terminal log preload runs befor
 syntax/startup errors are retained too. Focused tests: `logs.test.ts`, `ui-logs.test.ts` and status cases in
 `test-host.test.ts`; the browser regression exercises the original `Unknown p2 plugin: settings` failure, sticky
 startup fencing, the list marker, owner notice, worker-filtered Show logs and recovery through Retry.
+
+**Telemetry** (Chord §29; off unless settings.json's `telemetry` is `true`, read once at the server's start; no
+sampling: Chord offers none; recording everything cost the phone 1.8M spans, 1 GB and a third of a core in 15 h, so it
+is opt-in since 2026-11-13). Off, the server opens no store and its ingest objects refuse everyone (a page loaded while it
+was on fails `forbidden` at once and stops sending, never waits unbound), `WorkerInit.telemetry` is
+false (the worker's host has no recorder and sends nothing), no page is marked, every host uses Chord's NOOP adapter,
+and `Traces` answers `unavailable` "telemetry is off (settings.json telemetry)" (the pane and the tools show it;
+`telemetry-off.test.ts`). On: the server records to `<data>/telemetry.sqlite`
+(`openTelemetry`, `src/runtime/host-dirs.ts`; Chord's SQLite store, 7 days, a queue of 10,000 spans, a flush every
+second; its own private file, never in a backup), its only writer. Each session worker records in memory (its host's
+spans and metrics, and Durable's `pi.durable.*` and pi-ai's `pi.ai.*`: the Harness gets the same adapter) and sends
+to the server's `WorkerTelemetry` every second and when it closes (`src/hosts/worker.ts`), stamped `chord.host:
+session|<id>`. Owners' pages record too (`#root` `data-p2-telemetry`, set by `web.ts` for owners; `startPage({
+telemetry: true })`) and send to `PageTelemetry` every 3 s and when hidden; the server admits owners only
+(`telemetryIngestFacet({ admit })`: a guest could open page after page, each with its own budget). Carriers join a
+page's call, the server's relay and the worker's method into one trace; React's holds are roots of the page's own
+traces. What a span records about its principal is `principalAttributes` (`src/runtime/principals.ts`):
+`p2.principal` (`owner:<access>`, `guest`, `worker`, `server`, `host`) and a guest's id or a worker's session,
+never a name or an email. Read with `node --import ./src/source.ts scripts/traces.ts [--name] [--attr k=v]
+[--errors] [--since <minutes>] [--limit]` (read-only, safe while the server runs), or in the page and by the agent
+(`plugins/telemetry`): `Traces` (server) reads the store (`ServerParts.telemetry`) with bounds (50 traces a page,
+2000 spans a trace, 1000 metric rows, 8 attribute filters); variant `owner` for owners, `agent` for a session's worker,
+refused at every call while that session is shared (any link, guest or person: viewers read what the agent finds) or
+locked; anyone else `forbidden`. The Traces view kind (a pane: search by the first span's name, attributes, errors and
+a window; traces newest first, more by cursor; one trace as a span tree on its timeline with attributes, events and
+links that open their trace; list or trace on narrow panes, side by side from 620px), also a Settings section (a trace
+a layer of the sheet) and the command "Show traces" (owners). The agent's code-mode tools, namespace `telemetry`
+(`telemetry_find_traces`, `telemetry_get_trace`: `renderTrace` text and the spans, `telemetry_find_metrics`;
+`locked: "never"`; deferred: the code-mode section names the namespace only, `describeNamespace("telemetry")` gives
+the declarations, so they take no place from the tools the agent uses all the time). Test: `telemetry-traces.test.ts`. Cost: Chord's (§30): a span per
+call, hold, method, relay and activation; nothing is measured or walked for it. The TUI records nothing. Test:
+`telemetry.test.ts`.
 
 ## Decisions
 
@@ -1102,7 +1142,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `src/web/elanor.css` loads the fonts (Mallos Serif, Commit Mono), the pi brand's tokens and the components' styles,
   before `style.css`. Cascade layers: `p2-reset` (p2's element resets in `style.css`), then `elanor` (all of
   Elanor's styles), then p2's unlayered rules. The tokens follow `<html data-color-scheme>`, set with `data-theme`
-  (`theme.ts`, and the page's inline script). Fonts are files of the web bundle (`.woff2`, `font/woff2`).
+  (`theme.ts`, and the page's inline script). Fonts are files of the base bundle's assets (`.woff2`, `font/woff2`).
 - **Markdown in Elanor's components** (`src/web/ElanorMarkdown.tsx`): `Markdown.tsx` renders through a component map
   (`MarkdownComponents`, `MarkdownComponentsContext`; `{}` renders plain elements), Elanor's by default: `Prose` with
   its flow spacing, `Text`, `Heading`, `List`, `Link`, `Table`, `CodeSnippet` with Copy, a read-only `Checkbox` for
@@ -1111,7 +1151,8 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   code font; the streaming dot and a marker's spacing are there too.
 - **Service worker** (`public/sw.js`, served at `/sw.js` with `no-cache`): the app starts without the network once it
   was opened. App pages come from the network first and fall back to the last app page kept (on failure, or after 3
-  seconds); the web bundle's content-named files come from the cache first (the newest two bundle versions are kept);
+  seconds); the web surface's content-named files (`/_chord/web/…`, not `/_chord/web/base`) come from the cache first (the newest
+  two base versions are kept);
   everything else goes to the network untouched. Pi Mobile had none because it would have kept stale code across Vite
   HMR and restarts; p2 serves no source modules (dev mode included), so every kept file is content-named and the page
   never wins over the network. Signing out deletes its caches.
@@ -1365,7 +1406,13 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `SettingsSections` (`src/runtime/web-core.ts`) once, keyed by its sheet layer's name, with `label`, `title`,
   `order` (the list sorts by it, then by key), `Sheet` (renders its sheet while the route opens it; the app's layout
   keeps every one mounted, `SettingsSectionSheets` in `src/web/SettingsNav.tsx`) and optionally `Shown` (Voice: only
-  with a speech service). The section is that sheet's layer right above `settings`. While the window is open, every `Sheet` renders as a page in
+  with a speech service). The section is that sheet's layer right above `settings`. The owner's page holds the small
+  owner-only objects of the sections from its start, in components mounted all along, and hands the sections that
+  reference (a new `useObject` would be a new hold, a round trip): `Settings` and `ServerNameSettings` (the gear,
+  `HeldSettings`), `ProviderLogin` (the Providers slot), `Devices` (the Devices slot), `Discord` (`DiscordSheets`,
+  `held.ts`). Not held ahead: `Envs` and `Ports` (derived from the session catalog: re-sent as sessions change),
+  `Mcp` (the servers' tool lists), Logs (lines), Traces (calls only). Measured with a 150 ms round trip: General
+  470 ms → 20 ms, Discord 160 → 8 ms, Devices 326 → 160 ms (its token is a call). While the window is open, every `Sheet` renders as a page in
   its pane (`SettingsPane`, `src/web/settings-embed.ts`): its title and Back, no scrim or × of its own (the window's
   close everything), `sheet-body` kept for the plugin's styles. The same sheets opened elsewhere (Sign in to a
   provider, a session's logs or Discord link) stay sheets of their own.
@@ -1489,6 +1536,28 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   restoring it when archived; the session's working spinner or unread dot on its corner); the sessions plugin's `DrawerRowsContext` (`plugins/sessions/contract.web.tsx`) gives it the
   rows, `SessionDot` and `listApart`, which leaves its session out of the rollups. The TUI lists it as an ordinary session. Tests:
   `familiar.test.ts`, `ui-familiar.test.ts`, the conversations actions in `conversations.test.ts`.
+- **Scope prompt** (`plugins/scope-prompt`, experiment; owner only, web only): an overlay (`overlay:` slots, the
+  `SlotList` at the end of `AppLayout`) that leaves the page as it is until pointing mode is on (`mode.ts`): a double tap
+  of the bare primary modifier (Cmd on macOS, Ctrl elsewhere: each press released within 300 ms, the second within
+  450 ms of the first, no other key, click or focus loss between, so Cmd+V sent by a dictation tool never counts), the
+  binding `p2.scope-prompt.toggle` (Cmd+.), the command menu's "Prompt anywhere", or its button (`Toggle.tsx`: in the
+  sidebar's header before the collapse button, the `sidebar-header:` slots; in the top bars of the chat and the list
+  pages while the sidebar is not shown docked, the `topbar-start:` slots), which also switches it off. Holding the modifier does nothing,
+  so Cmd+click still opens links in new tabs. While on, a pill says so, frames take no pointer events (they count as
+  their pane), the thing under the mouse is outlined with its chain of labels, and a click (touch too) is taken before
+  the page sees it and opens a small composer there, whose steps widen the scope (a touch: its tap outlines what it is
+  on, a second tap on that opens the composer; a drag scrolls as always); Escape, Stop, leaving the window or
+  the pick end the mode. `scopes.ts` reads the chain from attributes the page already renders: `.drawer`,
+  `.sidebar-section` and `.sidebar-group` `[data-key]`, `[data-session]` (session rows), `[data-view-pane]` with
+  `data-view-kind/-item/-title` (Workbench), `[data-path]` (a file of the changes view), `.diff-line`, `[data-entry]`
+  (transcript entries). Where it goes (`message.ts`; the composer's "To" switches): a target in the open session's
+  page (its chat, a view) goes to the open conversation as the person's message, as the composer sends it: the page
+  stages the `<scope>` block on the session (`ScopeStage`, worker facet, by `requestId`, dropped after a minute) and
+  the views' send router carries it with that message (`MessageContexts`, which now get the routed input), so the
+  transcript shows the text with the note "with scope Chat › Message". Anything else (the sidebar) goes to the
+  Familiar: opened as its logo does, the text queued on its main conversation followed by the block with the page's
+  session, conversation and title or list, which its prompt section explains. Not yet: frames' insides (an html
+  artifact is its pane). Test: `ui-scope-prompt.test.ts`.
 - **Subagents** (`plugins/subagents`): owns its protocol-independent Durable extension (persistent
   anchor conversations and exactly-once background reporter tasks, model/thinking/tool validation). The worker
   facet (an object of lifetime "host") contributes it to `Extensions` and catches up child metadata after relevant commits, retrying
