@@ -313,13 +313,18 @@ test("unchanged turns keep their items; in a changed one, only what shows differ
 });
 
 test("equivalent rebuilt snapshots preserve existing user and answer row identities", () => {
-	const firstUser: Item = {
-		...user("rebuild-user-1", "First"),
+	const firstUser: Extract<Item, { type: "user" }> = {
+		type: "user",
+		key: "rebuild-user-1",
+		text: "First",
+		entryId: 1,
+		images: [],
+		files: [],
 		author: { kind: "owner", id: "owner", name: "Owner" },
 	};
 	const firstAnswer = response("rebuild-answer-1", 2, [{ type: "text", text: "Done." }]);
 	const before = chatItems([firstUser, firstAnswer], false);
-	const rebuiltUser: Item = {
+	const rebuiltUser: Extract<Item, { type: "user" }> = {
 		...firstUser,
 		author: { kind: "owner", id: "owner", name: "Owner" },
 		images: [],
