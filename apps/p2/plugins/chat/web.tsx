@@ -1258,9 +1258,34 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 	// Idle, the other way to send is a new branch: the owner, in the main conversation, once it has entries. While a
 	// run is busy, Send steers it and the other way queues a follow-up.
 	const branchable = canBranch && known && newestEntry > 0;
+	// Updating the end of a conversation must not force every old message to
+	// re-render. Only an answer whose branch button changes needs a notification.
+	const branchEnd = useRef(newestEntry);
+	const notifiedEnd = useRef(newestEntry);
+	const branchEndListeners = useRef(new Set<() => void>()).current;
+	branchEnd.current = newestEntry;
+	useLayoutEffect(() => {
+		if (notifiedEnd.current === newestEntry) return;
+		notifiedEnd.current = newestEntry;
+		for (const listener of branchEndListeners) listener();
+	}, [newestEntry, branchEndListeners]);
 	const branching = useMemo(
-		() => (canBranch ? { from: branchFrom, end: newestEntry } : undefined),
-		[canBranch, branchFrom, newestEntry],
+		() =>
+			canBranch
+				? {
+						from: branchFrom,
+						get end() {
+							return branchEnd.current;
+						},
+						subscribeEnd(listener: () => void) {
+							branchEndListeners.add(listener);
+							return () => {
+								branchEndListeners.delete(listener);
+							};
+						},
+					}
+				: undefined,
+		[canBranch, branchFrom, branchEndListeners],
 	);
 	const sends: { send: SendChoice; alternate?: SendChoice } = busy
 		? {
