@@ -94,6 +94,15 @@ describe("account management menu", () => {
 		expect(view).toContain("Work");
 	});
 
+	it("starts rename with the current nickname, ready to edit", async () => {
+		const ui = harness();
+		const edit = vi.spyOn(ui.mode, "showExtensionInput");
+		ui.mode.showAccountManager();
+		ui.getSelector().handleInput("r");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(edit).toHaveBeenCalledWith("Rename Main", undefined, { initialValue: "Main" });
+	});
+
 	it("renames the highlighted login directly with r", async () => {
 		const ui = harness();
 		ui.mode.showAccountManager();
