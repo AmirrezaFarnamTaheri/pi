@@ -250,12 +250,16 @@ describe("account management menu", () => {
 	});
 
 	it("disconnects the original login without deleting unrelated accounts", async () => {
-		const ui = harness();
+		const ui = harness("anthropic", undefined, [
+			{ provider: "anthropic", id: "claude-sonnet" },
+			{ provider: "account-anthropic-1", id: "claude-sonnet" },
+		]);
 		ui.mode.showAccountManager();
 		ui.choose(0); // Main
 		ui.choose(4); // Disconnect account
 		ui.choose(1); // Confirm once
 		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.actions).toEqual(["switch account-anthropic-1", "logout anthropic"]);
 		expect(ui.logout).toHaveBeenCalledWith("anthropic");
 		expect(ui.removeAccountAlias).not.toHaveBeenCalled();
 	});
