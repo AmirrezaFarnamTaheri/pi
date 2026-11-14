@@ -12,10 +12,16 @@ import { binaryCodec, type Fixture, poll, startFixture } from "./helpers.ts";
  * Stands in for the server on `port`: serves a plain page and answers every Chord link's hello with a hello of the
  * page's protocol plus `offset` (Chord's binary codec), then closes it.
  */
-function fakeServer(port: number, offset: () => number): Promise<{ server: Server; links: () => number }> {
+function fakeServer(port: number, offset: () => number, base: string): Promise<{ server: Server; links: () => number }> {
 	let links = 0;
 	const sockets = new WebSocketServer({ noServer: true });
-	const server = createServer((_request, response) => {
+	const server = createServer((request, response) => {
+		// The client checks the base bundle at each reconnect; a new protocol also means a new base.
+		if (request.url === "/_chord/web/base") {
+			response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+			response.end(JSON.stringify(offset() > 0 ? `${base}-new` : base));
+			return;
+		}
 		response.writeHead(200, { "content-type": "text/html" });
 		response.end("<!doctype html><title>fake</title>");
 	});
@@ -51,12 +57,14 @@ describe("web page and link protocol versions", { skip: !browserTests }, () => {
 		await browser.signIn(fixture.owner);
 		await browser.open(`http://127.0.0.1:${port}/`);
 		await browser.wait(`document.querySelector('.app, .hero') !== null`);
+		const base = await browser.evaluate<string>("document.documentElement.dataset.webVersion");
+		assert.ok(base, "the original page declares its base bundle");
 		await browser.evaluate(`window.__mark = 1`);
 
 		await fixture.close();
 		fixture = undefined;
 		let offset = -1;
-		const started = await fakeServer(port, () => offset);
+		const started = await fakeServer(port, () => offset, base);
 		fake = started.server;
 
 		// An older server: several links refused, the page stays (no reload loop).
