@@ -11,9 +11,22 @@ describe("account management menu", () => {
 		setKeybindings(new KeybindingsManager());
 	});
 
-	function harness(activeProvider = "anthropic", defaultProvider?: string) {
+	function harness(
+		activeProvider = "anthropic",
+		defaultProvider?: string,
+		available = [{ provider: "anthropic", id: "claude-sonnet" }],
+	) {
 		const actions: string[] = [];
-		const renameAccount = vi.fn((_id: string, name: string) => name.trim());
+		const names = new Map([["anthropic", "Main"], ["account-anthropic-1", "Work"]]);
+		const renameAccount = vi.fn((id: string, name: string) => {
+			names.set(id, name.trim());
+			return name.trim();
+		});
+		const addAccountAlias = vi.fn((sourceProviderId: string, name?: string) => {
+			const account = { id: "account-anthropic-2", sourceProviderId, label: name?.trim() ?? "Unnamed" };
+			actions.push(`add ${account.id}`);
+			return account;
+		});
 		const removeAccountAlias = vi.fn(async (id: string) => {
 			actions.push(`delete ${id}`);
 		});
@@ -25,13 +38,18 @@ describe("account management menu", () => {
 		});
 		const alias = { id: "account-anthropic-1", label: "Work", sourceProviderId: "anthropic" };
 		const runtime = {
-			getProviders: () => [{ id: "anthropic", name: "Anthropic" }],
+			getProviders: () => [
+				{ id: "anthropic", name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
+				{ id: "account-anthropic-1", name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
+			],
 			getAccountProfiles: () => [alias],
 			getProviderAuthStatus: () => ({ configured: true }),
 			hasConfiguredAuth: () => true,
+			isUsingOAuth: () => true,
+			addAccountAlias,
 			getProvider: () => ({ name: "Anthropic" }),
-			getAccountLabel: (id: string) => (id === "anthropic" ? "Main" : "Work"),
-			getAvailableSnapshot: () => [{ provider: "anthropic", id: "claude-sonnet" }],
+			getAccountLabel: (id: string) => names.get(id) ?? "Unnamed",
+			getAvailableSnapshot: () => available,
 			renameAccount,
 			removeAccountAlias,
 			logout,
@@ -66,6 +84,10 @@ describe("account management menu", () => {
 		};
 		mode.showExtensionInput = async () => "  Client projects  ";
 		mode.showStatus = () => {};
+		const logins: string[] = [];
+		(mode as unknown as { showLoginDialog: (id: string) => Promise<void> }).showLoginDialog = async (id) => {
+			logins.push(id);
+		};
 		mode.showError = (message) => {
 			throw new Error(message);
 		};
@@ -81,7 +103,7 @@ describe("account management menu", () => {
 			for (let i = 0; i < index; i++) selector.handleInput("j");
 			selector.handleInput("\n");
 		};
-		return { mode, actions, renameAccount, removeAccountAlias, logout, setModel, getSelector, choose };
+		return { mode, actions, renameAccount, addAccountAlias, logins, removeAccountAlias, logout, setModel, getSelector, choose };
 	}
 
 	it("/login home shows management actions without a separate accounts screen", () => {
@@ -91,6 +113,50 @@ describe("account management menu", () => {
 		expect(view).toContain("Login");
 		expect(view).toContain("Main");
 		expect(view).toContain("Work");
+		expect(view).toContain("Existing accounts");
+		expect(view).toContain("Account actions");
+	});
+
+	it("keeps the provider brand distinct from an account label in sign-in choices", () => {
+		const ui = harness();
+		const mode = ui.mode as unknown as {
+			getLoginProviderOptions: () => { id: string; name: string; accountLabel?: string }[];
+		};
+		ui.renameAccount("anthropic", "Client projects");
+		const options = mode.getLoginProviderOptions();
+		expect(options.find((option) => option.id === "anthropic")).toMatchObject({
+			name: "Anthropic",
+			accountLabel: "Client projects",
+		});
+		expect(options.find((option) => option.id === "account-anthropic-1")).toMatchObject({
+			name: "Anthropic",
+			accountLabel: "Work",
+		});
+	});
+
+	it("Add account creates a named identity without signing in to a provider", async () => {
+		const ui = harness();
+		const mode = ui.mode as unknown as {
+			startAdditionalAccountLogin: (option: { id: string; name: string; authType: "oauth" }) => Promise<void>;
+			showAccountActions: (profile: { id: string; label: string }) => void;
+		};
+		const actions = vi.spyOn(mode, "showAccountActions");
+		await mode.startAdditionalAccountLogin({ id: "anthropic", name: "Anthropic", authType: "oauth" });
+		expect(ui.addAccountAlias).toHaveBeenCalledWith("anthropic", "  Client projects  ");
+		expect(ui.logins).toEqual([]);
+		expect(actions).toHaveBeenCalledWith(expect.objectContaining({ label: "Client projects" }));
+	});
+
+	it("does not delete an active account when there is no replacement model", async () => {
+		const ui = harness("account-anthropic-1", undefined, []);
+		ui.mode.showError = (message) => ui.actions.push(`error ${message}`);
+		ui.mode.showAccountManager();
+		ui.choose(1);
+		ui.choose(4);
+		ui.choose(1);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.removeAccountAlias).not.toHaveBeenCalled();
+		expect(ui.actions.some((action) => action.includes("error"))).toBe(true);
 	});
 
 	it("starts rename with the current nickname, ready to edit", async () => {
