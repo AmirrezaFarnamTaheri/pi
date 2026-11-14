@@ -18,6 +18,7 @@ import {
 	CommandSearches,
 	Commands,
 	closeLayers,
+	getNavigation,
 	MoreIcon,
 	NEW_SESSION,
 	navigate,
@@ -48,9 +49,9 @@ import { Projects, placeOn } from "../projects/contract.ts";
 import { SidebarRollups } from "../rollups/contract.ts";
 import { Search, SessionReads } from "../search/contract.ts";
 import { SessionStatus } from "../status/contract.ts";
-import { Subagents } from "../subagents/contract.ts";
+import { type Child, Subagents } from "../subagents/contract.ts";
 import { SessionTree } from "../tree/contract.ts";
-import { BranchSheet } from "./BranchSheet.tsx";
+import { BRANCH_SHEET, BranchSheet, branchOf } from "./BranchSheet.tsx";
 import { SESSION_COMMANDS, SESSION_PAGES, SESSION_SEARCH } from "./commands.tsx";
 import { type Operation, type Session, Sessions, SidebarSettings, type SidebarWindow } from "./contract.ts";
 import { type DrawerRows, DrawerRowsContext } from "./contract.web.tsx";
@@ -76,6 +77,12 @@ import { type CodeSource, RollupSheet } from "./sidebar/RollupSheet.tsx";
 import { folderName } from "./sidebar/Row.tsx";
 import { SidebarView, useNow } from "./sidebar/Sidebar.tsx";
 
+/** Closes the top layer only (a sheet), keeping those below it (a phone's drawer). */
+const closeTopLayer = () => void getNavigation().close((route) => ({ ...route, layers: route.layers.slice(0, -1) }));
+
+/** A session without subagents (one value, so its rows keep their identity across renders). */
+const NO_SUBAGENTS: readonly Child[] = [];
+
 const subscribeVisibility = (listener: () => void) => {
 	document.addEventListener("visibilitychange", listener);
 	return () => document.removeEventListener("visibilitychange", listener);
@@ -87,6 +94,8 @@ const usePageVisible = () => useSyncExternalStore(subscribeVisibility, () => doc
 const brand = <Slot name="drawer-brand" fallback={<PiLogo compact />} />;
 /** Icon buttons at the footer's end, before the theme switch (`sidebar-actions:<name>`, e.g. the Settings gear). */
 const actions = <SlotList prefix="sidebar-actions" />;
+/** Icon buttons in the header, before the collapse button (`sidebar-header:<name>`, e.g. the scope prompt's). */
+const headerActions = <SlotList prefix="sidebar-header" />;
 
 /** The sidebar's New session: the new-session screen, without the project or model chosen before. */
 const newSession = () => startNewSession();
@@ -194,7 +203,7 @@ function useSidebarData() {
 						error: statuses?.[session.id]?.error,
 						unread: (answers?.[session.id] ?? 0) > (reads?.[session.id] ?? 0),
 					},
-					subagents: children?.[session.id] ?? [],
+					subagents: children?.[session.id] ?? NO_SUBAGENTS,
 					operation: operationOf(operations, session.id, dismiss),
 				};
 			}),
@@ -414,13 +423,16 @@ function Sidebar() {
 		},
 		[withTree, edit, focusWhenOpen],
 	);
-	const [renaming, setRenaming] = useState<{ session: string; conversation: number }>();
-	const onRenameBranch = useCallback(
-		(session: string, conversation: number) => setRenaming({ session, conversation }),
-		[],
-	);
+	// A branch's rename sheet: a layer the branch row's "Rename branch…" opens (commands.tsx).
+	const branchSheet = useSheet(BRANCH_SHEET);
+	const renaming = branchOf(branchSheet?.locator);
 	const renamed = renaming && list?.find((each) => each.id === renaming.session);
 	const branch = renamed?.branches.find((each) => each.conversation === renaming?.conversation);
+	// A layer naming no branch of the loaded sessions (an old address, a branch of a deleted session) goes away.
+	const staleBranchSheet = branchSheet !== undefined && list !== undefined && branch === undefined;
+	useEffect(() => {
+		if (staleBranchSheet) closeLayers();
+	}, [staleBranchSheet]);
 	const renameBranch = (session: Session, conversation: number, label: string | null) =>
 		edit(
 			{
@@ -552,7 +564,6 @@ function Sidebar() {
 				connected={connected}
 				onOpen={onOpen}
 				onBranch={catalog ? onBranch : undefined}
-				onRenameBranch={catalog ? onRenameBranch : undefined}
 				onRestore={onRestore}
 				onNew={newSession}
 				onNewIn={ownerNewIn}
@@ -561,6 +572,7 @@ function Sidebar() {
 				onCollapse={owner ? onCollapse : undefined}
 				onPage={openPage}
 				onCollapseSidebar={toggleSidebar}
+				headerActions={headerActions}
 				footerActions={actions}
 			/>
 			{optionsOf && (
@@ -573,13 +585,14 @@ function Sidebar() {
 					onClose={closeLayers}
 				/>
 			)}
-			{renamed && branch && (
+			{catalog && renamed && branch && (
 				<BranchSheet
 					title={renamed.title}
 					conversation={branch.conversation}
 					label={branch.label}
 					onSave={(label) => renameBranch(renamed, branch.conversation, label)}
-					onClose={() => setRenaming(undefined)}
+					// Only the sheet closes: a phone's drawer it was opened over stays open.
+					onClose={closeTopLayer}
 				/>
 			)}
 			{sessionSheet && catalog && viewed && route.conversation === viewed.main && (
