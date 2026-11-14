@@ -28,12 +28,13 @@ export const ReplyTo = createContext<((target: { entryId: number; name: string }
  * Absent unless the owner views the main conversation.
  */
 export const BranchFrom = createContext<
-	{
-		readonly from: (entryId: number) => void;
-		readonly end: number | undefined;
-		/** Notify only answers whose branch action changes when the session's end moves. */
-		readonly subscribeEnd?: (listener: () => void) => () => void;
-	} | undefined
+	| {
+			readonly from: (entryId: number) => void;
+			readonly end: number | undefined;
+			/** Notify only answers whose branch action changes when the session's end moves. */
+			readonly subscribeEnd?: (listener: () => void) => () => void;
+	  }
+	| undefined
 >(undefined);
 /** Loads older history until an entry is retained; false when the conversation has no such entry. */
 export const RevealEntry = createContext<((entryId: number) => Promise<boolean>) | undefined>(undefined);
