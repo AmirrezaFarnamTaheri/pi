@@ -6127,7 +6127,8 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				{
-					description: "Labels identify accounts; provider brands are fixed. ● active · ✓ connected · ○ unsigned · → manage · r rename · x remove",
+					description:
+						"Labels identify accounts; provider brands are fixed. ● active · ✓ connected · ○ unsigned · → manage · r rename · x remove",
 					sectionLabels:
 						items.length > 0
 							? { 0: "Existing accounts", [items.length]: "Account actions" }
@@ -6499,8 +6500,8 @@ export class InteractiveMode {
 					: authType === "api_key"
 						? "No API key providers available."
 						: addAccount
-						? "No providers support a separate account."
-						: "No login providers available.";
+							? "No providers support a separate account."
+							: "No login providers available.";
 			this.showStatus(message);
 			return;
 		}

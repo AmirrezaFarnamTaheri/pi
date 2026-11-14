@@ -12,9 +12,7 @@ describe("login provider completion helpers", () => {
 		]);
 		expect(choices[0]?.name).toBe("Anthropic");
 		expect(getLoginProviderSearchText(choices[0]!)).toContain("Client projects");
-		expect(formatLoginProviderCompletionDescription(choices[0]!)).toContain(
-			"Anthropic · Client projects",
-		);
+		expect(formatLoginProviderCompletionDescription(choices[0]!)).toContain("Anthropic · Client projects");
 	});
 
 	it("deduplicates auth methods and preserves alphabetical provider ordering", () => {

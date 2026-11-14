@@ -103,8 +103,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.mode = mode;
 		this.allProviders = providers;
 		this.filteredProviders = providers;
-		this.showAuthTypeLabels =
-			mode !== "add" && new Set(providers.map((provider) => provider.authType)).size > 1;
+		this.showAuthTypeLabels = mode !== "add" && new Set(providers.map((provider) => provider.authType)).size > 1;
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 
@@ -185,7 +184,8 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 			? fuzzyFilter(
 					this.allProviders,
 					query,
-					(provider) => `${provider.name} ${provider.accountLabel ?? ""} ${provider.id} ${provider.authType} ${provider.method?.name ?? ""}`,
+					(provider) =>
+						`${provider.name} ${provider.accountLabel ?? ""} ${provider.id} ${provider.authType} ${provider.method?.name ?? ""}`,
 				)
 			: this.allProviders;
 		this.selectedIndex = Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredProviders.length - 1)));
@@ -219,9 +219,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 			const isSelected = i === this.selectedIndex;
 
 			const statusIndicator = this.mode === "add" ? "" : formatAuthSelectorProviderStatus(provider);
-			const accountSuffix = provider.accountLabel
-				? theme.fg("muted", ` · ${provider.accountLabel}`)
-				: "";
+			const accountSuffix = provider.accountLabel ? theme.fg("muted", ` · ${provider.accountLabel}`) : "";
 			// U+2726 is single-width in every terminal, unlike star emoji or ambiguous-width symbols such as U+2605.
 			const partnerMarker = isPreferredProvider(provider.id) ? theme.fg("muted", " ✦") : "";
 			const authTypeLabel = this.showAuthTypeLabels

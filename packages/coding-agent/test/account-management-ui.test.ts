@@ -106,7 +106,18 @@ describe("account management menu", () => {
 			for (let i = 0; i < index; i++) selector.handleInput("j");
 			selector.handleInput("\n");
 		};
-		return { mode, actions, renameAccount, addAccountAlias, logins, removeAccountAlias, logout, setModel, getSelector, choose };
+		return {
+			mode,
+			actions,
+			renameAccount,
+			addAccountAlias,
+			logins,
+			removeAccountAlias,
+			logout,
+			setModel,
+			getSelector,
+			choose,
+		};
 	}
 
 	it("/login home shows management actions without a separate accounts screen", () => {

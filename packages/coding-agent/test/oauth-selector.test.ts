@@ -81,11 +81,21 @@ describe("OAuthSelectorComponent", () => {
 			authType: "oauth" as const,
 			status: { type: "oauth" as const, source: "OAuth" },
 		};
-		const login = new OAuthSelectorComponent("login", [provider], () => {}, () => {});
+		const login = new OAuthSelectorComponent(
+			"login",
+			[provider],
+			() => {},
+			() => {},
+		);
 		const loginLines = stripAnsi(login.render(120).join("\n"));
 		expect(loginLines).toContain("Anthropic · Client projects");
 		expect(loginLines).toContain("configured");
-		const add = new OAuthSelectorComponent("add", [{ ...provider, accountLabel: undefined }], () => {}, () => {});
+		const add = new OAuthSelectorComponent(
+			"add",
+			[{ ...provider, accountLabel: undefined }],
+			() => {},
+			() => {},
+		);
 		const addLines = stripAnsi(add.render(120).join("\n"));
 		expect(addLines).toContain("Anthropic");
 		expect(addLines).not.toContain("Client projects");
