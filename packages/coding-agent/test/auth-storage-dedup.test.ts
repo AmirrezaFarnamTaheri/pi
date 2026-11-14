@@ -94,8 +94,12 @@ test("identical OAuth sign-ins are stored once and token refresh updates every s
 				},
 			},
 			getModels: () => [],
-			stream: () => { throw new Error("not needed"); },
-			streamSimple: () => { throw new Error("not needed"); },
+			stream: () => {
+				throw new Error("not needed");
+			},
+			streamSimple: () => {
+				throw new Error("not needed");
+			},
 		};
 		models.setProvider(provider);
 	}
@@ -117,7 +121,10 @@ test("re-login to one OAuth account detaches its shared secret without changing 
 	await storage.modify("one", async () => initial);
 	await storage.modify("two", async () => initial);
 	await storage.modify("two", async () => ({
-		type: "oauth", access: "new-access", refresh: "new-refresh", expires: 654321,
+		type: "oauth",
+		access: "new-access",
+		refresh: "new-refresh",
+		expires: 654321,
 	}));
 	expect(await storage.read("one")).toEqual(initial);
 	expect(await storage.read("two")).toMatchObject({ refresh: "new-refresh" });

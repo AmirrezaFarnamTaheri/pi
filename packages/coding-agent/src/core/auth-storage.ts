@@ -3,7 +3,15 @@
  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
  */
 
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import {
+	parseCredentialArchive,
+	sameStoredCredential,
+	serializeCredentialArchive,
+	type AuthOperationOptions,
+	type Credential,
+	type CredentialInfo,
+	type CredentialStore,
+} from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -224,36 +232,9 @@ export class ReadOnlyAuthStorage implements CredentialStore {
 			throw new Error(`Failed to read auth.json: ${error instanceof Error ? error.message : String(error)}`);
 		}
 
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-			throw new Error("Invalid auth.json: expected an object");
-		}
-		for (const [providerId, credential] of Object.entries(parsed)) {
-			if (typeof credential !== "object" || credential === null || Array.isArray(credential)) {
-				throw new Error(`Invalid auth.json credential for provider "${providerId}"`);
-			}
-			const value = credential as Record<string, unknown>;
-			if (value.type === "api_key") {
-				const validKey = value.key === undefined || typeof value.key === "string";
-				const validEnv =
-					value.env === undefined ||
-					(typeof value.env === "object" &&
-						value.env !== null &&
-						!Array.isArray(value.env) &&
-						Object.values(value.env).every((entry) => typeof entry === "string"));
-				if (validKey && validEnv) continue;
-			} else if (
-				value.type === "oauth" &&
-				typeof value.access === "string" &&
-				typeof value.refresh === "string" &&
-				typeof value.expires === "number" &&
-				Number.isFinite(value.expires)
-			) {
-				continue;
-			}
-			throw new Error(`Invalid auth.json credential for provider "${providerId}"`);
-		}
+		const credentials = parseCredentialArchive(parsed);
 
-		this.data = parsed as AuthStorageData;
+		this.data = credentials;
 		return this.data;
 	}
 
@@ -365,7 +346,7 @@ export class AuthStorage implements CredentialStore {
 		if (!content) {
 			return {};
 		}
-		return JSON.parse(stripBom(content)) as AuthStorageData;
+		return parseCredentialArchive(JSON.parse(stripBom(content)));
 	}
 
 	private updateReadState(data: AuthStorageData, revision?: string): void {
@@ -457,16 +438,26 @@ export class AuthStorage implements CredentialStore {
 		let revision: string | undefined;
 		const result = await this.storage.withLockAsync(async (content) => {
 			const currentData = this.parseStorageData(content);
-			const next = await fn(currentData[provider]);
+			const previous = Object.hasOwn(currentData, provider) ? currentData[provider] : undefined;
+			const next = await fn(previous === undefined ? undefined : structuredClone(previous));
 			if (next === undefined) {
 				latestData = currentData;
 				revision = this.authPath ? getFileRevision(this.authPath) : undefined;
-				return { result: currentData[provider] };
+				return { result: previous };
 			}
 
 			const merged: AuthStorageData = { ...currentData, [provider]: next };
+			if (options?.propagateSharedOAuthRefresh && previous?.type === "oauth" && next.type === "oauth") {
+				// Refresh tokens may be single-use. Every account still holding the same
+				// credential must see the new token; a normal login is copy-on-write.
+				for (const [id, credential] of Object.entries(currentData)) {
+					if (id !== provider && credential.type === "oauth" && sameStoredCredential(credential, previous)) {
+						merged[id] = structuredClone(next);
+					}
+				}
+			}
 			latestData = merged;
-			return { result: next, next: JSON.stringify(merged, null, 2) };
+			return { result: next, next: serializeCredentialArchive(merged) };
 		}, options);
 		this.updateReadState(latestData, revision);
 		return result;
@@ -478,7 +469,7 @@ export class AuthStorage implements CredentialStore {
 			const currentData = this.parseStorageData(content);
 			delete currentData[provider];
 			latestData = currentData;
-			return { result: undefined, next: JSON.stringify(currentData, null, 2) };
+			return { result: undefined, next: serializeCredentialArchive(currentData) };
 		}, options);
 		this.updateReadState(latestData);
 	}
@@ -500,7 +491,7 @@ export function readStoredCredential(
 	authPath: string = join(getAgentDir(), "auth.json"),
 ): Credential | undefined {
 	try {
-		const data = JSON.parse(stripBom(readFileSync(normalizePath(authPath), "utf-8"))) as AuthStorageData;
+		const data = parseCredentialArchive(JSON.parse(stripBom(readFileSync(normalizePath(authPath), "utf-8"))));
 		return data[providerId];
 	} catch {
 		return undefined;
