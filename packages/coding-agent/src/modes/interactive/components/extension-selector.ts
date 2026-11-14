@@ -14,6 +14,8 @@ export interface ExtensionSelectorOptions {
 	timeout?: number;
 	onToggleToolsExpanded?: () => void;
 	description?: string;
+	/** Optional contextual shortcuts for the currently highlighted row. */
+	onShortcut?: (keyData: string, selectedOption: string | undefined) => boolean;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -26,6 +28,7 @@ export class ExtensionSelectorComponent extends Container {
 	private baseTitle: string;
 	private countdown: CountdownTimer | undefined;
 	private onToggleToolsExpanded: (() => void) | undefined;
+	private onShortcut: ExtensionSelectorOptions["onShortcut"];
 
 	constructor(
 		title: string,
@@ -40,6 +43,7 @@ export class ExtensionSelectorComponent extends Container {
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
+		this.onShortcut = opts?.onShortcut;
 		this.baseTitle = title;
 
 		this.addChild(new DynamicBorder());
@@ -117,6 +121,8 @@ export class ExtensionSelectorComponent extends Container {
 		} else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
 			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
 			this.updateList();
+		} else if (this.onShortcut?.(keyData, this.options[this.selectedIndex])) {
+			// The owner handled this selection without changing its menu.
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
 			const selected = this.options[this.selectedIndex];
 			if (selected) this.onSelectCallback(selected);
