@@ -1,6 +1,7 @@
 // The sessions plugin's part of the command menu: New session, Switch session…, and on a session
 // target Rename session…, Change working directory… (also on the new-session screen), Archive session and Restore
-// session; New session in folder… and Open folder…; their pages, and the sessions the root's query matches by title.
+// session; on a `/tree` branch row's target Rename branch…; New session in folder… and Open folder…; their pages, and
+// the sessions the root's query matches by title.
 import { BACKGROUND_CONTEXT, withHeld } from "@p2/app/v1";
 import {
 	ArchiveIcon,
@@ -34,7 +35,8 @@ import {
 } from "@p2/app/v1/web";
 import { type ReactNode, useMemo, useState } from "react";
 import { DIRECTORY_PICKER } from "../envs/contract.web.tsx";
-import { commandSession, NotArchived, useCommandSession, useSessions } from "./command-session.tsx";
+import { branchSheetLayer } from "./BranchSheet.tsx";
+import { commandSession, NotArchived, useCommandSession, useOpenFromMenu, useSessions } from "./command-session.tsx";
 import { type Session, Sessions } from "./contract.ts";
 import { FOLDERS, type NewTarget } from "./sidebar/model.ts";
 import { usePageData } from "./sidebar/page-data.ts";
@@ -66,6 +68,16 @@ export const SESSION_COMMANDS: Readonly<Record<string, Command>> = {
 		target: ["session"],
 		owner: true,
 		action: { kind: "page", page: "rename-session" },
+	},
+	"sessions.rename-branch": {
+		title: "Rename branch…",
+		group: "Branch",
+		order: 10,
+		icon: PencilIcon,
+		keywords: ["label", "name"],
+		target: ["branch"],
+		owner: true,
+		action: { kind: "run", run: renameBranch },
 	},
 	"sessions.change-directory": {
 		title: "Change working directory…",
@@ -147,6 +159,11 @@ function changeDirectory(ctx: CommandContext): void {
 	else openLayerIn(id, id === ctx.route.session ? ctx.route.conversation : knownMain(id), DIRECTORY_PICKER);
 }
 
+/** Opens the target branch's rename sheet (the sidebar's `BranchSheet`) over the current route, a phone's drawer too. */
+function renameBranch(ctx: CommandContext): void {
+	if (ctx.target?.type === "branch") openLayer(branchSheetLayer(ctx.target.id));
+}
+
 /** Archives the command's session; the open one gives way to the new-session screen first, as in the Session sheet. */
 async function archive(ctx: CommandContext): Promise<void> {
 	const id = commandSession(ctx.target, ctx.route);
@@ -215,21 +232,14 @@ function SessionResults() {
  * is); it opens at its main conversation.
  */
 function SessionRow({ session, now }: { session: Session; now: number }) {
-	const { close } = useCommandMenu();
-	const { focusWhenOpen } = useComposerState();
-	const open = useRoute().session === session.id;
+	const open = useOpenFromMenu();
+	const shown = useRoute().session === session.id;
 	return (
 		<CommandMenu.Row
 			title={session.title}
 			suffix={`${folderName(session.env ?? null, session.cwd, 1)} · ${ago(session.updatedAt, now)}`}
-			checked={open}
-			onSelect={async () => {
-				await close();
-				// After the close, which gives the focus back to where the menu opened from: the composer takes it from there.
-				const target = { session: session.id, conversation: session.main };
-				focusWhenOpen(target);
-				navigate(target);
-			}}
+			checked={shown}
+			onSelect={() => open({ session: session.id, conversation: session.main })}
 		/>
 	);
 }

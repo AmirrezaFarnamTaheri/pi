@@ -189,6 +189,14 @@ export const KEYBINDINGS = {
 		defaultKeys: "left",
 	},
 	// Fullscreen scrolling already handles these actions; expose keyboard defaults.
+	"tui.altScreen.pageUp": {
+		...TUI_KEYBINDINGS["tui.altScreen.pageUp"],
+		defaultKeys: ["pageUp", "shift+left"],
+	},
+	"tui.altScreen.pageDown": {
+		...TUI_KEYBINDINGS["tui.altScreen.pageDown"],
+		defaultKeys: ["pageDown", "shift+right"],
+	},
 	"tui.altScreen.lineUp": {
 		...TUI_KEYBINDINGS["tui.altScreen.lineUp"],
 		defaultKeys: "shift+up",

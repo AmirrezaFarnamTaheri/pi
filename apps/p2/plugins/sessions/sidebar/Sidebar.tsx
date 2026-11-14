@@ -224,7 +224,6 @@ export const SidebarView = memo(function SidebarView({
 	connected,
 	onOpen,
 	onBranch,
-	onRenameBranch,
 	onRestore,
 	onNew,
 	onNewIn,
@@ -233,6 +232,7 @@ export const SidebarView = memo(function SidebarView({
 	onCollapse,
 	onPage,
 	onCollapseSidebar,
+	headerActions,
 	footerActions,
 }: {
 	/** Every session the reader may see, archived ones included (the guest's list). */
@@ -254,8 +254,6 @@ export const SidebarView = memo(function SidebarView({
 	onOpen: (id: string, conversationId?: number) => void;
 	/** Switches a session to one of its `/tree` branches (the owner's). */
 	onBranch?: (id: string, conversationId: number) => void;
-	/** Asks for a new label of one of a session's `/tree` branches (the owner's). */
-	onRenameBranch?: (id: string, conversationId: number) => void;
 	onRestore: (id: string, conversationId?: number) => void;
 	onNew: () => void;
 	/** Starts a new session in a group; absent: groups have no "+". */
@@ -269,6 +267,8 @@ export const SidebarView = memo(function SidebarView({
 	/** Opens a rollup's or a group's list in the main area. */
 	onPage: (key: string) => void;
 	onCollapseSidebar: () => void;
+	/** Icon buttons in the owner's header, before the collapse button (e.g. the scope prompt's). */
+	headerActions?: ReactNode;
 	/** Icon buttons at the footer's end, before the theme switch (the owner's), e.g. the Settings gear. */
 	footerActions?: ReactNode;
 }) {
@@ -285,7 +285,6 @@ export const SidebarView = memo(function SidebarView({
 		now,
 		onOpen,
 		onBranch,
-		onRenameBranch,
 		onRestore,
 	};
 	const headings: HeadingActions = { page, connected, onPage, onCollapse, onOptions, onNewIn, glyphs };
@@ -339,6 +338,7 @@ export const SidebarView = memo(function SidebarView({
 		"Sessions",
 		<div className="drawer-header-row">
 			<div className="brand">{brand}</div>
+			{headerActions}
 			<Sidebar.Trigger className="collapse-sidebar" aria-label="Collapse sidebar" />
 		</div>,
 		<SideNavigation.Root className="sidebar-nav" aria-label="Rollups">

@@ -180,9 +180,13 @@ describe("transcript stability", { skip: !browserTests }, () => {
 			await sleep(800);
 			await browser.evaluate(FRAMES);
 			const arrived = await browser.evaluate<ProbeReport>(REPORT);
+			// The previously newest answer gains a "Branch from here" action once
+			// another turn arrives. It is changed; all the other old rows are not.
+			const previousLastAnswer = before.findLast((key) => key.startsWith("text:response-"));
+			const unchanged = before.filter((key) => key !== previousLastAnswer);
 			console.log(
 				"turn arrived:",
-				JSON.stringify({ ...disturbed(arrived, before), commits: arrived.commits, renders: arrived.renders }),
+				JSON.stringify({ ...disturbed(arrived, unchanged), commits: arrived.commits, renders: arrived.renders }),
 			);
 
 			// A long answer streams: measured from its first words to its end.
@@ -206,7 +210,7 @@ describe("transcript stability", { skip: !browserTests }, () => {
 				}),
 			);
 
-			assert.deepEqual(disturbed(arrived, before), { rendered: [], churned: [], replaced: [] }, "a new turn");
+			assert.deepEqual(disturbed(arrived, unchanged), { rendered: [], churned: [], replaced: [] }, "a new turn");
 			assert.deepEqual(
 				disturbed(streamed, others),
 				{ rendered: [], churned: [], replaced: [] },

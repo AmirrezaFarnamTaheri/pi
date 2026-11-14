@@ -102,8 +102,8 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 
 | Keybinding id | Default | Description |
 |---|---|---|
-| `tui.altScreen.pageUp` | `pageUp` | Scroll the transcript up by one page |
-| `tui.altScreen.pageDown` | `pageDown` | Scroll the transcript down by one page |
+| `tui.altScreen.pageUp` | `pageUp`, `shift+left` | Scroll the transcript up by one page |
+| `tui.altScreen.pageDown` | `pageDown`, `shift+right` | Scroll the transcript down by one page |
 | `tui.altScreen.halfPageUp` | None | Scroll the transcript up by half a page |
 | `tui.altScreen.halfPageDown` | None | Scroll the transcript down by half a page |
 | `tui.altScreen.lineUp` | `shift+up` | Scroll the transcript up by one line |
@@ -124,7 +124,7 @@ While a local shell command (for example a long test suite) is running, press `C
 
 For independent commands whose result is not needed for the next decision, the agent can use the local Bash/PowerShell tool's `background: true` option. If a test's result or exit code determines the next action, run it in the foreground and await completion, regardless of duration. Before using a background result or reporting a test passed, verify completion and the final exit code in the job's `state.json`; starting the command is not success.
 
-`Shift+Up` and `Shift+Down` scroll the fullscreen transcript one line at a time without changing the editor cursor. If your terminal intercepts these shortcuts for selection, configure it to forward the keys to Pi. Page Up/Down and the mouse wheel remain available.
+`Shift+Up` / `Shift+Down` scroll the fullscreen transcript one line at a time. `Shift+Left` / `Shift+Right` scroll a full page for faster navigation. They do not move the editor cursor. If your terminal intercepts these shortcuts for selection, configure it to forward the keys to Pi. Page Up/Down and the mouse wheel remain available.
 
 ## Application
 

@@ -22,7 +22,8 @@ test("independent API account refuses to authenticate using only source ambient 
 			throw new Error("unused");
 		},
 	};
-	const alias = createStoredAccountAlias(source, "account-ambient-source-1", "Separate login");
+	const alias = createStoredAccountAlias(source, "account-ambient-source-1");
+	assert.equal(alias.name, source.name, "an account alias keeps the real provider brand");
 	const apiKey = alias.auth.apiKey!;
 	const signal = new AbortController().signal;
 	const ctx = { env: async () => "source-ambient-key", fileExists: async () => true } as never;

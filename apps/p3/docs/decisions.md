@@ -145,3 +145,62 @@ and its working rules are in `handoff.md`.
   principal" and drops rooms and the view library. As built in p2: html artifacts keep the custom views' page API
   (`window.p2view`, state per artifact); a reader who may not change the session's views opens an item in the
   artifacts side panel on their own device; a session's clone and fork copy its artifacts.
+- **Instance resources, not an instance user (owner, 2026-11-13: "an instance user seems stupid. instance resources
+  make more sense"; refines "Resource model direction"):** a resource's owner is `{ kind: "user", user }` or
+  `{ kind: "instance" }`. Resources plugins create when installed (tools, prompt sections) and company resources (a
+  shared login, a team server) are instance resources; the policy plugin decides who may create or bring them (default:
+  the single user may do everything). No pretend user appears in lists, presence or audit.
+- **(Withdrawn later on 2026-11-13: "settings are garbage"; replaced by "Apps are plugins; users and guests are the confined people" below; org-managed Pis to be redone on apps.)** **Org-managed Pis through managed settings (owner, 2026-11-13: "I'm in favor of the Opus model ... it just needs to
+  be flexible"; supersedes the policy plugin of "Resource model direction" and the company resources of "Instance
+  resources"):** one Pi per person; everything an org wants is a setting. Plugins declare their configuration with
+  `defineSetting` (a name, a schema, an initial value, merge `value` or `entries`) in their contract file; the base keeps
+  the member's values and every write goes through `Settings.set` (the page, the agent's tools, other plugins). The
+  org's values form one managed layer that gives any setting a value with lock `default` (a starting point; org
+  entries sit beside the member's, read-only) or `locked` (only the org's value counts; the member's values are kept
+  and ignored); `set` refuses a locked setting or an org entry with the error code `managed` ("Managed by Acme").
+  Provisioning and deny lists are the same data; there are no operations, levels, rule tables or policy functions.
+  A machine is enrolled by a root-owned file at a fixed path (`/etc/p3/enrollment.json`: org, server, org key,
+  allowed plugin sources; no secrets); an enrolled Pi stays locked (gate `pending`: no sessions, only the app root
+  loads, settings at their initial values) until its first sync with the org server (Radius) delivered a profile
+  signed with the org key and bound to the member and the Pi, the required plugins installed at pinned refs and
+  hashes, and the profile was written as the cache; later starts open from the cache and follow updates live
+  (settings first, plugin additions once installed). Gate states `unmanaged`, `pending`, `ready`, `stale` (optional
+  `maxOffline`), `revoked`. "No agent-written plugins" means only approved builds load (`p3.plugins.own`). In-process
+  checks are guardrails against the member's agent and well-behaved plugins; sharing, peers and org models are
+  enforced at Radius from the same profile. Kit change: `startServer` takes plugin roots and an `admit` function.
+  Needed in the base now, before any org: the settings mechanism as the only configuration (no plugin JSON files),
+  the `managed` error, installs and Apply only through the base, the sharing and peer audience settings, and a gate
+  that is always `unmanaged`. Company resources (a shared login, a team server) are org-managed entries of the setting
+  that holds them; no policy plugin decides who may create or bring anything. Design: `org-managed/book.md`.
+- **Apps are plugins; users and guests are the confined people (owner, 2026-11-13: "an app is code, which creates
+  layouts/views/objects it needs, and can reuse existing shit"; "the point of apps is that I the owner can construct
+  it such that members (users) can only access what I give the app and its sessions"; "no defensive shit" for privacy
+  against the owner; supersedes "Org-managed Pis through managed settings" of the same day):** one Pi, one owner, who installs every plugin; apps (the robot for his son, family, a football
+  club, coding as the built-in app) are plugins and trusted: they call each other and any plugin freely. Only people
+  are confined, by their principal: `owner`, `user { app, id }` (a member of one app's own user pool: invited by the
+  owner, signs up on the app's page, configured by the owner per app), `guest { id, sessions: read | write, revision }`
+  (p2's guest, from the same invite and sign-in path). Every object serves only the principals it knows (deny by
+  default); users reach the rest through their app's objects (a remote object for users, the app's local store acting
+  as the host behind it). One session check for every session view and object: the owner always; a user if the
+  session's app says so (`Apps` registry: id, title, layout, `access`); a guest from its principal. What an app's
+  sessions get is its worker facet's harness filters. For users the check depends on data, so it never runs in a
+  factory: it runs in the session worker's route `authorize`, in methods and derives at use (workers ask the server's
+  `SessionAccess`), and in HTTP handlers. Each app's own access rules are its own objects (her journal
+  keyed by her id). Privacy against the owner is only an app's UI courtesy (he owns the machine and the code; no base
+  machinery). Design and gaps (kit: per-app user pools and invites, revocation, current principals; harness:
+  `scope.app`, fixed folder): `apps/book.md`.
+- **People, apps and locks (owner, 2026-11-13, evening; supersedes the per-app user pools of "Apps are plugins; users
+  and guests are the confined people", and with it `self.choose`; replaces the settings layer of "Org-managed Pis"):**
+  everyone besides the owner is a **person** `{ kind: "person", id, name, roles: app → role, sessions: id → read |
+  write, revision }`, rights in the principal as p2's guests ("maybe guest is sufficient"); a change bumps the
+  revision and revokes. Identity is pluggable (providers with server, web and terminal parts); by default Radius
+  (verified email; Google/GitHub at Radius) and this device; more devices by pairing. A session belongs to exactly
+  one app; any app may show any session; the owner always passes. Lockdown is **locks**: a plugin declares a switch or
+  a limit (`defineSwitch`, `defineLimit`: schema, open, closed, narrow), registers it with the server (`Locks`), and
+  enforces it where it hands things out; layers company (the org profile: initial copy on disk, then Radius) > Pi >
+  app (the app's code defaults, then the owner's app sheet) > session, only narrowing; one sheet per scope for
+  technical owners, with the agent's help (`locks` tools). Plugins outside Pi's own root get a plugin switch per app
+  (`otherPlugins: "on" | "off"` in the app, the owner chooses the apps on install); base plugins declare locks. Radius
+  learns the locks from member Pis' reports and by loading selected plugins' server facets in a sandbox. Design, kit
+  changes, open questions: `people/book.md` (second edition). The owner: "this still seems overly complex".
+

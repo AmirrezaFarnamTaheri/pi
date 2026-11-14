@@ -380,22 +380,37 @@ function sameEntry(entry: WheelEntry, same: WheelEntry): boolean {
 	return same.kind === entry.kind && same.id === entry.id && same.text === entry.text && same.live === entry.live;
 }
 
-const sameValue = (one: unknown, other: unknown): boolean =>
-	one === other ||
-	(Array.isArray(one) &&
-		Array.isArray(other) &&
-		one.length === other.length &&
-		one.every((value, index) => {
-			const that: unknown = other[index];
-			if (value === that) return true;
-			if (!value || !that || typeof value !== "object" || typeof that !== "object") return false;
-			// An entry on a wheel (detail 1 and 2).
-			if ("kind" in value && "kind" in that) return sameEntry(value as WheelEntry, that as WheelEntry);
-			// A step: the same call in the same state.
-			if ("tool" in value && "tool" in that) return sameStep(value as Step, that as Step);
-			if ("id" in value && "id" in that) return sameTool(value as ToolView, that as ToolView);
-			return false;
-		}));
+function sameValue(one: unknown, other: unknown): boolean {
+	if (one === other) return true;
+	if (!one || !other || typeof one !== "object" || typeof other !== "object") return false;
+	if (Array.isArray(one) && Array.isArray(other))
+		return (
+			one.length === other.length &&
+			one.every((value, index) => {
+				const that: unknown = other[index];
+				if (value === that) return true;
+				if (value && that && typeof value === "object" && typeof that === "object") {
+					// Activity wheels and tool steps have their own identity-aware comparison.
+					if ("kind" in value && "kind" in that) return sameEntry(value as WheelEntry, that as WheelEntry);
+					if ("tool" in value && "tool" in that) return sameStep(value as Step, that as Step);
+					if ("id" in value && "id" in that) return sameTool(value as ToolView, that as ToolView);
+				}
+				return sameValue(value, that);
+			})
+		);
+	if (Array.isArray(one) || Array.isArray(other)) return false;
+	// A server snapshot can reconstruct unchanged entry and message objects.
+	// Keep an existing row only if all their JSON-like data still matches.
+	if (Object.getPrototypeOf(one) !== Object.prototype || Object.getPrototypeOf(other) !== Object.prototype)
+		return false;
+	const first = one as Record<string, unknown>;
+	const second = other as Record<string, unknown>;
+	const keys = Object.keys(first);
+	return (
+		keys.length === Object.keys(second).length &&
+		keys.every((key) => Object.hasOwn(second, key) && sameValue(first[key], second[key]))
+	);
+}
 
 /** Whether an item rebuilt shows the same as before: then the earlier object stays, and its row does not render. */
 function sameItem(one: ChatItem, other: ChatItem): boolean {
@@ -405,6 +420,16 @@ function sameItem(one: ChatItem, other: ChatItem): boolean {
 		keys.length === Object.keys(other).length &&
 		keys.every((key) => sameValue(one[key], other[key as keyof typeof other]))
 	);
+}
+
+/** Retain a row's previous item object when a server snapshot rebuilt unchanged data. */
+function keepItem(item: ChatItem): ChatItem {
+	const before = recent.get(item.key);
+	const kept = before && sameItem(before, item) ? before : item;
+	recent.delete(item.key);
+	recent.set(item.key, kept);
+	if (recent.size > RECENT) recent.delete(recent.keys().next().value ?? "");
+	return kept;
 }
 
 /**
@@ -459,17 +484,7 @@ export function chatItems(
 		else {
 			// A member changed (a streaming delta, a result): the run's items are made again, and those that show the same
 			// as before stay the same objects. Found by key: a streaming response is a new object at every delta.
-			const made = runItems(run, live, after, tools, detail).map((item) => {
-				const before = recent.get(item.key);
-				const kept = before && sameItem(before, item) ? before : item;
-				recent.delete(item.key);
-				recent.set(item.key, kept);
-				return kept;
-			});
-			for (const key of recent.keys()) {
-				if (recent.size <= RECENT) break;
-				recent.delete(key);
-			}
+			const made = runItems(run, live, after, tools, detail).map(keepItem);
 			runs.set(run[0]!, { members: run, working: live, tools, detail, items: made });
 			result.push(...made);
 		}
@@ -481,7 +496,7 @@ export function chatItems(
 			continue;
 		}
 		flush(false);
-		result.push(item);
+		result.push(keepItem(item));
 		after = item.key;
 	}
 	flush(true);

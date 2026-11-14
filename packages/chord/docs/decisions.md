@@ -793,7 +793,7 @@ validation and copies the v2 kernel added around Delta.
   order, `tx.update` per row, chunks of N rows per commit; table version `migrating` → `ready`; a crash resumes the
   scan). Indexes are local and created after `ready` (**superseded in part** by "Index definitions are recorded": the
   index changes after `ready` are recorded).
-- **S18, group commit (owner, 2026-11-04):** the commits queued behind a running commit step form one group, which the
+- **S18, group commit (owner, 2026-11-04; folded into design §10, 2026-11-13):** the commits queued behind a running commit step form one group, which the
   next turn of the commit queue admits at its entry and writes in one backend transaction: each commit keeps its own
   step, seq and outbox commit, the metadata is written once, and after `COMMIT` memory follows commit by commit, each
   adopted when memory stands at it, in queue order, before the next turn (S1 as for lone steps). Fewer transactions are
@@ -2331,7 +2331,8 @@ validation and copies the v2 kernel added around Delta.
 - **Slice 11, P6: the connection loop (owner, 2026-11-01: "agree"):** p2's `keepConnected`: after a drop, reconnect
   with a growing pause (250 ms to 5 s); try at once when the tab becomes visible, the browser comes back online or the
   network changes; replace a socket open but silent; stop when the server reports an outdated protocol (the page
-  reloads) or the app's `canRetry` says no (a guest's share ended). References keep their last values and wait while
+  reloads) or the app's `canRetry` says no (a guest's share ended; asked beside the next attempt, never before it:
+  2026-11-13, the owner's PWA showed "Offline" for seconds on every return while a page's base check went first). References keep their last values and wait while
   down, so the UI shows a banner from the connection state. A network reconnect, not a crash restart.
 - **Slice 11, P7: React bindings (owner, 2026-11-01: "we definitely want something like that"; p2's `useObject`,
   `useReadable`, `useRegistry` in `runtime/web.tsx`):** an optional subpath (`chord/react`): `HostProvider`,
@@ -2349,6 +2350,29 @@ validation and copies the v2 kernel added around Delta.
   `watch` and `registry`, releasing everything on dispose, calling one `changed` callback the app wires to its redraw
   (one line with pi-tui; any library works). p2's retry with backoff for gone references is not carried over (v2
   references wait and rebind by themselves). No pi-tui dependency.
+- **Admitting pages' telemetry (owner, 2026-11-12: "`telemetryIngestFacet({ admit(principal) })` (refused:
+  forbidden)"; p2 wiring telemetry; refines "Telemetry from browser pages"):** the ingest facet takes `admit(principal)`,
+  required: `PageTelemetry` serves a principal it admits, and a refused principal's hold fails `forbidden` (no contract
+  change, nothing written). Why: the budget of 1,200 spans per minute is per page (incarnation), and one principal may
+  open up to 1,000 pages' worth of links, so a guest could fill the store's queue for its whole retention; an app admits
+  whom it trusts (p2: owners only). The kit admits every page (its links are signed in). Its entry points are public for
+  an app with its own hosts: `@earendil-works/chord/telemetry-ingest` (the recorder, the batches and objects, the facet,
+  the senders).
+- **Surfaces for an app with its own HTTP stack and styling (owner, 2026-11-12: "Chord 1: yes", "Chord 2: yes", "Cloud:
+  (b)"; p2's move onto the web surface):** (1) `webSurface(server, { ..., routes: false })` contributes no `Http`
+  routes; the surface gives `file(path)`, `pageAssets()` and `base()`, and the app serves them through its own HTTP
+  stack with its own access rules and page template (`pageScripts`). (2) `startPage({ themes: false })` loads no
+  `Themes` provider and writes no theme on `:root`: an app with its own stylesheet keeps its variables. (3)
+  `startPage({ follow: false })` (and `startClient`'s `follow`): a static page that loads its combined plugins and
+  never follows the scripts object nor asks the server's base, for a page built offline and served elsewhere, whose
+  server publishes scripts it cannot load; built with `buildBase` and `pageBootstrap` (exported for it), its plugin
+  scripts registered by `registeredSource`. (4) (owner, 2026-11-12: "make the surface's base and plugin builds resolve
+  exactly like the server process does (source, no dist needed)") `webSurface`'s and `tuiSurface`'s `tsconfig` (and
+  `buildBase`'s `BaseResolution`): the base resolves through that tsconfig.json's `paths`, for a server whose loader
+  resolves workspace packages through them (p2's source resolver). Conditions alone missed a package whose `exports`
+  name only `dist/` (pi-ai's `./utils/*`): a checkout that never builds `dist/` (p2 on a phone) failed its base. Without
+  `tsconfig` every tsconfig.json stays ignored. Plugin builds need nothing: they bundle a plugin's own `dependencies`
+  only, the app's packages being host packages.
 - **`chord.plugins` is a package's manifest of plugins, as pi's (owner, 2026-11-01: "yes"; slice 12 review, Opus H1;
   refines "The plugin model ... imports and builds" (Imports) and `slice-12.md` §2, §5):** a package (npm, git, local)
   declares the plugins it provides in its `package.json`, `"chord": { "plugins": ["./notes", "./search"] }` (globs and
@@ -2358,7 +2382,7 @@ validation and copies the v2 kernel added around Delta.
   or `github:bob/plugins#<commit>`, installed by plain npm), imported by path into it (`@bob/plugins/notes/contract.ts`)
   or through its `exports`. Removed: the dependency form of `chord.plugins` (`"name": "github:...#ref:subfolder"`) and
   its own clone-and-link installer (it could delete outside `node_modules`).
-- **Looks and themes (owner, 2026-11-02: "i suppose", then "do all the things"; proposal `docs/theming/`):**
+- **Looks and themes (owner, 2026-11-02: "i suppose", then "do all the things"; proposal `docs/theming/`; folded into design §23, 2026-11-13):**
   shared components come from the app's per-kind API modules (one instance in the base bundle); looks are design
   tokens, CSS custom properties on `:root` on the web, which the app's components and plugins' CSS read; plugins scope
   their CSS with CSS modules (`*.module.css`); the terminal gets the app's components and a theme lookup by role. A
@@ -2391,7 +2415,7 @@ validation and copies the v2 kernel added around Delta.
   call; model, tools and location may differ; the tool's description names the cost (prompt cache only with the same
   model). pi's `/tree` (in-session branches) is wanted for p3: proposed as forks inside the session's store (edit an
   earlier message to fork, a branch list to switch; a full navigator and branch summaries later).
-- **Sync applies batches with the host stopped (owner, 2026-11-02: "sure"; sync example `60-session-sync`):**
+- **Sync applies batches with the host stopped (owner, 2026-11-02: "sure"; sync example `60-session-sync`; folded into design §10, 2026-11-13):**
   `applyBatch` refuses while a host holds claims on the store; the sync layer stops the session's worker, applies,
   restarts it. Usually nothing runs: Radius receiving uploads runs no host for a session it does not drive, and taking
   a session back pulls before its worker starts. A live view of a replica (watching a session continue elsewhere) is a
@@ -2494,7 +2518,7 @@ validation and copies the v2 kernel added around Delta.
   acts as the method's caller (decision of slice 4a, unchanged): a server object acting as itself towards a worker
   takes the reference with `self.get` in its own object or a server root; documented with p2's `Search.rebuildIndex`
   example in the guide and the porting notes.
-- **Tutorial gaps (owner, 2026-11-03: "4. export", "3. ok", "1. b"; the tutorial's findings):** (4) Chord's root
+- **Tutorial gaps (owner, 2026-11-03: "4. export", "3. ok", "1. b"; the tutorial's findings; (4) folded into design §5, 2026-11-13):** (4) Chord's root
   exports `invalid` and `forbidden`; an app's API re-exports them, so a plugin throws a decided `ChordError`. (3) An app's
   API is a real package (`"name": "@acme/app"`, `"exports": { "./v1": ..., "./v1/web": ... }`), so Node,
   TypeScript and plugin builds resolve it alike and tests import plugins' contract files; the tutorial and
@@ -2542,7 +2566,8 @@ validation and copies the v2 kernel added around Delta.
   instance exists"; a per-binding view is possible later, the blip is cosmetic). Carry-over: calls surviving a
   `loading` unbind (slices.md, "Later: reload").
 - **Telemetry from browser pages (owner, 2026-11-04: "I just need this implemented"; "it couldn't really fuck the
-  server up"; tutorial gap):** a page records spans in memory (the click and the calls it makes, carriers on its calls
+  server up"; tutorial gap; (**superseded in part** by "Admitting pages' telemetry": an app admits pages by principal
+  through a hook, not "anonymous pages")):** a page records spans in memory (the click and the calls it makes, carriers on its calls
   as any client) and sends finished spans in batches every few seconds and when hidden, over its existing Chord link,
   to a telemetry object on the server (`ingest(batch)`): sign-in, principals, part limits and flow control apply as for
   any call; an app may admit anonymous pages. The server treats them as untrusted, best effort: batch size and rate
@@ -2689,7 +2714,9 @@ validation and copies the v2 kernel added around Delta.
   base code, which only a restart changes, small).
 - **A reloaded UI part shows its loading state (owner, 2026-11-06: "not worth it imo. a short loading state is
   absolutely fine. this just adds more bugs and footguns"; p3 step 0a, rejected proposal `apps/p3/docs/step-0a/`
-  version 2, reviews `/tmp/p3-step0a-astra.md`, `/tmp/p3-step0a-sol.md`):** after a web or terminal plugin's reload
+  version 2, reviews `/tmp/p3-step0a-astra.md`, `/tmp/p3-step0a-sol.md`; **refined in part** by "References share one
+  wire hold": a remounted reference joining an already live remote object of its host is live at once, otherwise it
+  sees that object's loading or failure or holds anew; borrowed references and leases stay rejected):** after a web or terminal plugin's reload
   its components remount and make new references, which show `loading` (no values) for one round trip until bound;
   the rest of the page, and every reference of a server or worker reload, stay live (design §21). Rejected: a
   per-host table sharing references between UI components (`useHold`, `useRegistry`, `TuiScope`), released when no
@@ -2724,7 +2751,9 @@ validation and copies the v2 kernel added around Delta.
   and origin, following the relay's own queued calls' lifecycle, rejected `unavailable` before a new `bound`'s `ack`
   passes upstream), which closed slice 4a's carry-over "one N on every host".
 - **Events: fire-and-forget members (owner, 2026-11-11; spec `events/spec.md`, third draft after two rounds of reviews by
-  Astra and Sol; the Pong netcode discussion):** a contract member is state, a method, or an **event**: a JSON value an
+  Astra and Sol; the Pong netcode discussion; **refined in part** by "References share one wire hold": over a link the
+  provider's eligibility is per wire hold, and a reference joining a shared hold gets what arrives at its host after it
+  bound, also an event in transit when it joined):** a contract member is state, a method, or an **event**: a JSON value an
   object emits, delivered once to each reference bound to the object before the emit and still bound when it is sent,
   never folded, never kept, never sent to a later holder, dropped for a holder that cannot keep up. State folds and keeps
   the newest value, right for what a joiner needs and wrong for motion (a paddle sample is worthless a moment later and
@@ -3156,7 +3185,8 @@ validation and copies the v2 kernel added around Delta.
   again with the same id on `retry`, and an old `state` or `gone` still in flight then looked like the new hold's
   (reproduced by three reviewers). The relay still checks everything arriving from downstream. A reference failed
   `too_large/part` leaves its path (a reconnect does not hold it again) until `ref.retry()`; this lives only in the
-  consumer's memory.
+  consumer's memory. (**Refined in part** by "References share one wire hold": the failure reaches every reference
+  sharing the hold; a `retry` moves only the retrying reference to a new private hold.)
 - **Slice 4b fix round (owner, 2026-10-24):** the builder's five choices accepted and folded into design.md: call
   arguments sent up a parent link are never compressed (a host cannot tell whether its parent sees it as a child or a
   route); `revoke` goes on route links before revoked child links close (worker objects end `forbidden/revoked`, not
@@ -3473,6 +3503,36 @@ From `research/chord-on-durable-objects.md`, adopted for the Chord v2 kernel bec
   child conversations in a core per-conversation policy document (`readOnly`, `followsSessionCwd`) in the creating
   commit; chat and relocation read it directly; `ReadOnlyConversations` and `SessionCwdFollowers` go away. (This was
   plugin design, not a missing mechanism: today the rule is lost when subagents is not loaded.)
+- **References share one wire hold (owner, 2026-11-09 and 2026-11-12; spec `shared-holds/design.md`, sixth draft after
+  reviews by GPT-6 Astra and GPT-6.1 Sol, with the last review's amendments):** a host keeps one remote object per
+  sharing key: type, version, fingerprint, params' identity key, the address its placement computed (`hostAddress` is
+  not in the fingerprint), and the caller (its principal's own JSON as the wire carries it, insertion order, cached
+  per principal object; its incarnation), joined with Chord's escaped key join. A reference whose key the host holds
+  binds to that object with no message (live at once if it is live); each keeps its own binding (release, state,
+  watches, subscriptions, parked calls, calls); the last release sends `release` (no linger, D8). Not shared:
+  `self.get` references (Q5), relayed holds (R1), a reference after the last release, a private retry after
+  `too_large/part`, a broken object (it leaves the table for good), a suspended route address, and (decided by the
+  build, conservatively) a key whose object is failed `waiting` over a link: a new hold is a new request there. A join
+  to an object failed `waiting` on an unlinked route path is a new request for the route (`Path.requested`). Seen
+  members: "seen" is a value the reference received while live; joining a non-live object nothing is seen, joining a
+  live one the failed or missing members are not; until a value arrives after the join such a member shows no last
+  value. Releasing one of several references cancels its own calls: queued ones unsent, sent ones aborted newest
+  first. Accepted differences (design §7, §19, §22, events spec §2): (1) provider presence and `host.activity` count
+  holds, not components; (2) a joiner skips the provider's and relays' admission and the first snapshot; (3) events in
+  transit reach a joiner; (4) a non-final release aborts its calls at the provider with `aborted`, the caller still gets
+  `released`; (5) part limits apply to received parts only; (6) shared values are identical objects; (7) a joiner is
+  live at once; (8) a retry of a refused shared hold restarts it for every reference; (9) within one commit, watch
+  callbacks of several references sharing a replica run in subscription order, not hold order (and so may calls those
+  listeners make). No wire, codec or protocol change. Rejected (design §31): keeping a hold past its last release,
+  borrowed references and leases.
+- **Sign-ins, not sessions (owner, 2026-11-13):** the app kit's sign-in sessions clashed with agent sessions in p2 and p3.
+  The concept is a **sign-in**: one browser or device signed in as a user (its cookie or token, its expiry, its
+  revocation). Renamed: `Sessions` to `SignIns` (contract `chord.app.sign-ins`, its stored document
+  `chord.app.sign-ins` with the field `signIns`, the core facet `chord.app.sign-ins`), `SessionInfo` to `SignInInfo`,
+  `SessionKind` to `SignInKind`, `SESSION_COOKIE` to `SIGN_IN_COOKIE` (the cookie `chord-sign-in`), the start option
+  `limits.ephemeralSessions` to `limits.ephemeralSignIns`, the files `sign-ins.ts` and `ephemeral-sign-ins.ts`, example
+  `54-app-sign-ins`. No migration: nothing deployed uses the kit's sign-ins (p2 has its own); a kit app's existing
+  sign-ins and cookies are not read under the new names (everyone signs in again).
 
 ## Still valid from `target-design.md`
 

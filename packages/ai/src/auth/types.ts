@@ -45,6 +45,8 @@ export interface CredentialInfo {
 /** Optional cancellation for public auth and credential operations. */
 export interface AuthOperationOptions {
 	signal?: AbortSignal;
+	/** Only for a completed OAuth refresh: rotate all accounts holding the exact same previous credential. */
+	propagateSharedOAuthRefresh?: boolean;
 }
 
 /**
