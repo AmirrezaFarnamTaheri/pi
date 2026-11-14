@@ -84,7 +84,6 @@ describe("account management menu", () => {
 		return { mode, actions, renameAccount, removeAccountAlias, logout, setModel, getSelector, choose };
 	}
 
-
 	it("/login home shows management actions without a separate accounts screen", () => {
 		const ui = harness();
 		ui.mode.showAccountManager();
