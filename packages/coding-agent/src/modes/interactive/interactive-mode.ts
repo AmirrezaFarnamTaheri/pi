@@ -6724,7 +6724,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private async enableAccountRotation(sourceProviderId: string, persist = false): Promise<void> {
+	private async enableAccountRotation(sourceProviderId: string, persist = true): Promise<void> {
 		const runtime = this.session.modelRuntime;
 		const pref = runtime.getAccountRotationPreferences(sourceProviderId);
 		const members = pref.memberIds.filter((id) => runtime.hasConfiguredAuth(id));
@@ -6733,14 +6733,27 @@ export class InteractiveMode {
 			this.showProviderAccounts(sourceProviderId);
 			return;
 		}
+		const modelCounts = new Map<string, number>();
+		for (const id of members) {
+			for (const model of runtime.getModels(id)) {
+				modelCounts.set(model.id, (modelCounts.get(model.id) ?? 0) + 1);
+			}
+		}
+		if (![...modelCounts.values()].some((count) => count >= 2)) {
+			this.showStatus("Selected accounts need at least one model in common to rotate.");
+			return;
+		}
 		const virtual = runtime.getModel("account-profiles", sourceProviderId);
 		if (!virtual) {
 			this.showError("No rotation model is available for these accounts.");
 			return;
 		}
 		try {
+			await this.session.setModel(virtual, { persist });
 			runtime.setAccountRotationPreferences(sourceProviderId, { ...pref, enabled: true });
-			await this.activateAccountRotation(sourceProviderId, virtual, persist);
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(`Rotation enabled for ${sourceProviderId}; tool continuations remain on their originating account.`);
 			this.showProviderAccounts(sourceProviderId);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
@@ -6770,23 +6783,6 @@ export class InteractiveMode {
 		runtime.setAccountRotationPreferences(groupId, { ...pref, enabled: false });
 		this.showStatus(`Rotation disabled for ${groupId}; selected accounts and algorithm preserved.`);
 		this.showProviderAccounts(groupId);
-	}
-
-	private async activateAccountRotation(
-		sourceProviderId: string,
-		virtual: Model<any>,
-		persist: boolean,
-	): Promise<void> {
-		try {
-			await this.session.setModel(virtual, { persist });
-			this.footer.invalidate();
-			this.updateEditorBorderColor();
-			this.showStatus(
-				`Rotation enabled for ${sourceProviderId}${persist ? " (saved as default)" : " (this session)"}. Tool continuations stay on the same account.`,
-			);
-		} catch (error) {
-			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
-		}
 	}
 
 
