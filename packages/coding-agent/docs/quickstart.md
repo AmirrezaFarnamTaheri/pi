@@ -69,7 +69,7 @@ Inside a provider, **Enter** on an account opens its actions: sign in, choose a 
 
 For multiple connected accounts, use **Space** to check the identities you want included in rotation, **A** to select all, **M** to select Round Robin, Sticky, Random or Hybrid, and **T** to turn rotation on or off. Rotation is optional and only supports models shared by eligible accounts. **Important:** included accounts may receive your session context; keep confidential client or organization sessions on one authorized identity.
 
-See [Account management and rotation](../../docs/multi-account-login.md) for full keyboard shortcuts, deletion and isolation behavior. See [Choose a model and provider](models.md) for supported providers, environment-variable authentication, local models, and custom endpoints.
+See [Account management and rotation](../../../docs/multi-account-login.md) for full keyboard shortcuts, deletion and isolation behavior. See [Choose a model and provider](models.md) for supported providers, environment-variable authentication, local models, and custom endpoints.
 
 ## 4. Give Pi a task
 
