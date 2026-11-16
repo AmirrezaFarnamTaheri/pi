@@ -91,10 +91,6 @@ describe("provider-first account manager", () => {
 		mode.updateEditorBorderColor = () => {};
 		mode.footer = { invalidate() {} };
 		mode.ui = { requestRender() {} };
-		mode.settingsManager = {
-			getDefaultProvider: () => undefined, getDefaultModel: () => "claude-sonnet",
-			setDefaultModelAndProvider() {},
-		};
 		const selector = () => {
 			if (!selected) throw new Error("No account selector");
 			return selected;
