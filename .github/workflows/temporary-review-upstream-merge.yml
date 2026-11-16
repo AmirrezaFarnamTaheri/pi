@@ -1,0 +1,127 @@
+name: Propose latest upstream with reviewed conflict resolution
+
+on:
+  push:
+    branches: [sync/request-latest-upstream-20261116]
+
+permissions:
+  contents: read
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Prepare review-only upstream merge
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main sync/upstream-main
+          git fetch --no-tags https://github.com/earendil-works/pi.git refs/heads/main:refs/remotes/upstream/main
+          git switch -C sync/upstream-main origin/sync/upstream-main
+          git merge --no-edit origin/main
+
+          if ! git merge --no-commit --no-ff refs/remotes/upstream/main; then
+            actual="$(git diff --name-only --diff-filter=U | LC_ALL=C sort)"
+            expected="$(printf '%s\n' 'apps/p2/test/p2/ui-tree.test.ts' 'package-lock.json' 'packages/chord/src/store/live-query.ts' 'packages/chord/test/remote/consumer.test.ts' | LC_ALL=C sort)"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unexpected conflicts; refusing to resolve automatically"
+              printf '%s\n' "$actual"
+              exit 1
+            fi
+            # The upstream Chord and P2 files implement new APIs, so retain their
+            # source and tests together rather than mixing incompatible generations.
+            git checkout --theirs -- apps/p2/test/p2/ui-tree.test.ts \
+              packages/chord/src/store/live-query.ts \
+              packages/chord/test/remote/consumer.test.ts package-lock.json
+            git add -- apps/p2/test/p2/ui-tree.test.ts \
+              packages/chord/src/store/live-query.ts \
+              packages/chord/test/remote/consumer.test.ts package-lock.json
+          fi
+
+          # Preserve the fork's own workspace-only GitLab provider example in the
+          # new upstream lock, without executing merged project code.
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const upstream = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          const fork = JSON.parse(execFileSync('git', ['show', 'origin/main:package-lock.json'], { encoding: 'utf8' }));
+          upstream.packages[''].workspaces = fork.packages[''].workspaces;
+          const key = 'packages/coding-agent/examples/extensions/custom-provider-gitlab-duo';
+          const link = 'node_modules/pi-extension-custom-provider-gitlab-duo';
+          if (fork.packages[key]) upstream.packages[key] = fork.packages[key];
+          if (fork.packages[link]) upstream.packages[link] = fork.packages[link];
+          writeFileSync('package-lock.json', JSON.stringify(upstream, null, 2) + '\n');
+          NODE
+          git add package-lock.json
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "::error::Unresolved conflicts remain"; exit 1
+          fi
+          git commit -m "chore(sync): merge latest upstream, retaining compatible P2/Chord sources and fork workspace"
+          git push origin HEAD:refs/heads/sync/upstream-main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: propose
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.propose.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fd-find ripgrep
+          sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+      - name: Build and verify full suite without write credentials
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+          npm run test:scripts
+          npm run test --workspace packages/coding-agent
+          npm run test --workspace packages/durable
+          args=()
+          for dir in packages/*/; do
+            case "$dir" in packages/coding-agent/ | packages/durable/) continue ;; esac
+            args+=(--workspace "${dir%/}")
+          done
+          npm run test --if-present "${args[@]}"
+          npm run test:mcp-conformance
+          ( cd apps/p2 && node --import ./src/source.ts --test test/p2/virtual-list.test.ts )
+  open-review:
+    needs: [propose, verify]
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Open draft sync PR, preserving feature PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(gh pr list --head sync/upstream-main --base main --state open --json number --jq length)" -eq 0 ]; then
+            gh pr create --draft --base main --head sync/upstream-main \
+              --title "chore(sync): review latest upstream main with fork-preserving conflict resolutions" \
+              --body "Latest upstream main merged into review-only branch. Chord and P2 conflicts were resolved as upstream APIs, and the fork GitLab example workspace was preserved in package-lock.json. Build and full suite passed in a read-only job. Review this large merge and the account-manager PR separately. No automatic merge to main."
+          fi
