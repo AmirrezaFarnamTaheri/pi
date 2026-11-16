@@ -96,6 +96,7 @@ describe("interactive account rotation activation", () => {
 			updateEditorBorderColor: () => void;
 			footer: { invalidate: () => void };
 			enableAccountRotation: (sourceProviderId: string, persist: boolean) => Promise<void>;
+			showProviderAccounts: (id: string) => void;
 		};
 		mode.runtimeHost = {
 			session: {
@@ -103,12 +104,16 @@ describe("interactive account rotation activation", () => {
 					getAccountProfiles: () => [{ id: "account-anthropic-2", sourceProviderId: "anthropic" }],
 					hasConfiguredAuth: () => true,
 					getModel: () => virtual,
+					getModels: () => [{ id: "claude-sonnet" }],
+					getAccountRotationPreferences: () => ({ enabled: false, strategy: "round-robin", memberIds: ["anthropic", "account-anthropic-2"] }),
+					setAccountRotationPreferences: () => {},
 				},
 				setModel: async (model: typeof virtual, options: unknown) => {
 					chosen.push({ model, options });
 				},
 			},
 		};
+		mode.showProviderAccounts = () => {};
 		mode.showSelector = (factory) => {
 			const result = factory(() => {
 				cancelled++;
