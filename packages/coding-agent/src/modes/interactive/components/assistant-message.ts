@@ -23,6 +23,8 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 interface MarkdownSlot {
 	kind: "text" | "thinking";
 	markdown: Markdown;
+	/** Last source text rendered by the slot, used to avoid redoing stable blocks on each streamed update. */
+	text: string;
 }
 
 /**
@@ -115,6 +117,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		const streamingChanged = this.isStreaming !== isStreaming;
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
 
@@ -124,9 +127,17 @@ export class AssistantMessageComponent extends Container {
 		this.markdownSlots = [];
 		const markdownBlock = (kind: MarkdownSlot["kind"], text: string, create: () => Markdown): Markdown => {
 			const slot = previousSlots[this.markdownSlots.length];
-			const markdown = slot?.kind === kind ? slot.markdown : create();
-			markdown.setText(text);
-			this.markdownSlots.push({ kind, markdown });
+			const reused = slot?.kind === kind;
+			const markdown = reused ? slot.markdown : create();
+			// A completed block has the same output across streaming updates. Keep
+			// its cached wrap/transform result until source or stream state changes.
+			// Theme changes still force invalidation through invalidate().
+			// Extension transformers can depend on external mutable state, even
+			// if the source text is identical. Preserve their historical call semantics.
+			if (reused && (slot.text !== text || streamingChanged || this.markdownTransformers.length > 0)) {
+				markdown.setText(text);
+			}
+			this.markdownSlots.push({ kind, markdown, text });
 			return markdown;
 		};
 

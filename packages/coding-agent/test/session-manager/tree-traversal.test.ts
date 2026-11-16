@@ -193,8 +193,11 @@ describe("SessionManager append and tree traversal", () => {
 			const rows = backing.fileEntries.slice();
 			for (let index = 0; index < 140_000; index++) {
 				rows.push({
-					type: "custom", customType: "branch", id: `child-${index}`,
-					parentId: root, timestamp: "2025-01-01T00:00:00Z",
+					type: "custom",
+					customType: "branch",
+					id: `child-${index}`,
+					parentId: root,
+					timestamp: "2025-01-01T00:00:00Z",
 				});
 			}
 			backing.fileEntries = rows;
@@ -203,7 +206,6 @@ describe("SessionManager append and tree traversal", () => {
 			expect(tree[0]!.children).toHaveLength(140_000);
 		});
 	});
-
 
 	describe("tree correctness and timestamp sorting", () => {
 		it("rejects cycles in a disconnected component even when another root is valid", () => {
@@ -226,7 +228,10 @@ describe("SessionManager append and tree traversal", () => {
 				const timestamp = new Date(Date.UTC(2025, 0, 1, 0, 0, 160 - i)).toISOString();
 				const item = { type: "custom", customType: "wide", id: "child-" + i, parentId: root };
 				Object.defineProperty(item, "timestamp", {
-					get: () => { timestampReads++; return timestamp; },
+					get: () => {
+						timestampReads++;
+						return timestamp;
+					},
 					enumerable: true,
 				});
 				rows.push(item);

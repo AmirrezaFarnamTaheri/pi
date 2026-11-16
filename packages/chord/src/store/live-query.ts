@@ -92,6 +92,16 @@ export class LiveQueries {
 	on(table: string): ReadonlySet<LiveQuery> | undefined {
 		return this.#byTable.get(table);
 	}
+
+	/** The live queries over tables with a `host(...)` column of host kind `kind`: what a host data change re-runs. */
+	onHostKind(kind: string): LiveQuery[] {
+		const found: LiveQuery[] = [];
+		for (const queries of this.#byTable.values()) {
+			for (const query of queries)
+				if (query.handle.definition.hostColumn?.host.kind.kind === kind) found.push(query);
+		}
+		return found;
+	}
 }
 
 /**
@@ -215,18 +225,18 @@ export class LiveQuery extends Source {
 		this.#state = { kind: "rows", value: rows.value };
 	}
 
-	/** A run inside the commit step `step`, after its writes: the rows, or the failure; it never throws. */
-	async rerun(
-		step: Step,
-		context: Context,
-		reads?: Map<string, Promise<StoredRow[]>>,
-	): Promise<QueryRun> {
+	/**
+	 * A run inside the commit step `step`, after its writes (its object's commit, or a host data change of its table):
+	 * the rows, or the failure; it never throws.
+	 */
+	async rerun(step: Step, context: Context, reads?: Map<string, Promise<StoredRow[]>>): Promise<QueryRun> {
 		try {
 			this.#count(context);
 			const { sql, params } = this.#statement;
-			const key = JSON.stringify([sql, params.map((value) =>
-				typeof value === "bigint" ? ["bigint", value.toString()] : ["value", value],
-			)]);
+			const key = JSON.stringify([
+				sql,
+				params.map((value) => (typeof value === "bigint" ? ["bigint", value.toString()] : ["value", value])),
+			]);
 			let stored = reads?.get(key);
 			if (!stored) {
 				stored = step.all<StoredRow>(sql, ...params);

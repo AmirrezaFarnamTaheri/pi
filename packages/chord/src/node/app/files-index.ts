@@ -423,7 +423,8 @@ export class FilesIndex {
 			for await (const target of this.#marks.rows(
 				query(MarkRows).where((m) => and(eq(m.space, space), inArray(m.path, chunk))),
 				context,
-			)) targets.set(target.path, target.last);
+			))
+				targets.set(target.path, target.last);
 		}
 		return sources.map((mark) => {
 			const path = renamed(mark.path);
@@ -560,7 +561,10 @@ export class FilesIndex {
 		const blobs = new Map<string, RowOf<typeof blobColumns>>();
 		for (let offset = 0; offset < ids.length; offset += 400) {
 			const chunk = ids.slice(offset, offset + 400);
-			for await (const blob of this.#blobs.rows(query(BlobRows).where((b) => inArray(b.id, chunk)), context)) {
+			for await (const blob of this.#blobs.rows(
+				query(BlobRows).where((b) => inArray(b.id, chunk)),
+				context,
+			)) {
 				blobs.set(blob.id, blob);
 			}
 		}

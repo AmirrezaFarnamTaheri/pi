@@ -17,6 +17,7 @@ import {
 	type ToolStateChanges,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
+import { configuredParallelToolLimit, executeBoundedInOrder } from "./ordered-tool-pool.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import { ToolUpdateTracker } from "./tool-update-tracker.ts";
 import type {
@@ -58,7 +59,7 @@ export function agentLoop(
 		context,
 		config,
 		async (event) => {
-			await stream.pushWithBackpressure(event, 128, signal);
+			await stream.pushWithBackpressure(event, 128, signal?.aborted ? undefined : signal);
 		},
 		signal,
 		streamFn,
@@ -98,7 +99,7 @@ export function agentLoopContinue(
 		context,
 		config,
 		async (event) => {
-			await stream.pushWithBackpressure(event, 128, signal);
+			await stream.pushWithBackpressure(event, 128, signal?.aborted ? undefined : signal);
 		},
 		signal,
 		streamFn,
@@ -573,13 +574,12 @@ async function executeToolCallsMixed(
 			continue;
 		}
 		await flushParallel();
-		if (signal?.aborted) break;
+		// Aborted calls still receive matching tool results; preparation will skip execution.
 		const batch = await executeToolCallsSequential(context, assistantMessage, [call], config, signal, emit);
 		batches.push(batch);
 		messages.push(...batch.messages);
-		if (signal?.aborted) break;
 	}
-	if (!signal?.aborted) await flushParallel();
+	await flushParallel();
 	return {
 		messages,
 		terminate: batches.length > 0 && batches.every((batch) => batch.terminate),
@@ -631,10 +631,6 @@ async function executeToolCallsSequential(
 		await emitToolResultMessage(toolResultMessage, emit);
 		finalizedCalls.push(finalized);
 		messages.push(toolResultMessage);
-
-		if (signal?.aborted) {
-			break;
-		}
 	}
 
 	return {
@@ -642,9 +638,6 @@ async function executeToolCallsSequential(
 		terminate: shouldTerminateToolBatch(finalizedCalls),
 	};
 }
-
-/** A bounded worker pool prevents large model-generated batches from exhausting resources. */
-const MAX_PARALLEL_TOOL_EXECUTIONS = 8;
 
 /** Prepare calls in order, run the allowed ones concurrently, and emit results in call order. */
 async function executeToolCallsParallel(
@@ -655,6 +648,8 @@ async function executeToolCallsParallel(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
+	// Reject unsafe configuration before firing start events or permission hooks.
+	const concurrency = configuredParallelToolLimit(config.maxParallelToolExecutions);
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
@@ -674,9 +669,6 @@ async function executeToolCallsParallel(
 			} satisfies FinalizedToolCallOutcome;
 			await emitToolExecutionEnd(finalized, emit);
 			finalizedCalls.push(finalized);
-			if (signal?.aborted) {
-				break;
-			}
 			continue;
 		}
 
@@ -702,23 +694,11 @@ async function executeToolCallsParallel(
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
 		});
-		if (signal?.aborted) {
-			break;
-		}
 	}
 
 	// Preparation remains ordered (especially permission hooks), but execution
 	// only runs a bounded number of independent tools at once.
-	const orderedFinalizedCalls = new Array<FinalizedToolCallOutcome>(finalizedCalls.length);
-	let nextCall = 0;
-	const runNext = async (): Promise<void> => {
-		while (nextCall < finalizedCalls.length) {
-			const index = nextCall++;
-			const entry = finalizedCalls[index]!;
-			orderedFinalizedCalls[index] = typeof entry === "function" ? await entry() : entry;
-		}
-	};
-	await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_TOOL_EXECUTIONS, finalizedCalls.length) }, runNext));
+	const orderedFinalizedCalls = await executeBoundedInOrder<FinalizedToolCallOutcome>(finalizedCalls, concurrency);
 	const messages: ToolResultMessage[] = [];
 	for (const finalized of orderedFinalizedCalls) {
 		const toolResultMessage = createToolResultMessage(finalized);
@@ -786,6 +766,14 @@ async function prepareToolCall(
 	signal: AbortSignal | undefined,
 	tools: readonly AgentTool<any>[] = currentContext.tools ?? [],
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
+	// Record an aborted outcome without running validation or permission hooks.
+	if (signal?.aborted) {
+		return {
+			kind: "immediate",
+			result: createErrorToolResult("Operation aborted"),
+			isError: true,
+		};
+	}
 	const tool = tools.find((t) => t.name === toolCall.name);
 	if (!tool) {
 		return {

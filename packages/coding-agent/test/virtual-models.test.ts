@@ -66,7 +66,9 @@ describe("model refresh bursts", () => {
 				provider: "explicit-refresh",
 				id: "alias",
 				name: "Alias",
-				route: () => { throw new Error("unused"); },
+				route: () => {
+					throw new Error("unused");
+				},
 			});
 			await runtime.refresh({ allowNetwork: false });
 			await new Promise<void>((resolve) => queueMicrotask(resolve));
@@ -91,7 +93,9 @@ describe("model refresh bursts", () => {
 					provider: "batch-virtual",
 					id: `alias-${i}`,
 					name: `Alias ${i}`,
-					route: () => { throw new Error("unused"); },
+					route: () => {
+						throw new Error("unused");
+					},
 				});
 			}
 			expect(runtime.getModel("batch-virtual", "alias-23")).toBeDefined();
@@ -123,15 +127,33 @@ describe("getBranchSelection", () => {
 	// #10198: the selection must not cost one catalog lookup per assistant message.
 	it("lets a virtual model opt into safe credential-failure retry without changing physical retry policy", async () => {
 		const { runtime, virtual } = await createRuntime();
-		expect(runtime.shouldRetryVirtualFailure(virtual, { ...fauxAssistantMessage(""), stopReason: "error" })).toBe(false);
+		expect(runtime.shouldRetryVirtualFailure(virtual, { ...fauxAssistantMessage(""), stopReason: "error" })).toBe(
+			false,
+		);
 		runtime.registerVirtualModel({
-			provider: "router", id: "auto", name: "Safe credentials", route: () => ({
-				model: runtime.getModel("faux", "small")!, thinkingLevel: "off",
+			provider: "router",
+			id: "auto",
+			name: "Safe credentials",
+			route: () => ({
+				model: runtime.getModel("faux", "small")!,
+				thinkingLevel: "off",
 			}),
 			shouldRetry: (message) => message.stopReason === "error" && message.errorMessage === "401",
 		});
-		expect(runtime.shouldRetryVirtualFailure(virtual, { ...fauxAssistantMessage(""), stopReason: "error", errorMessage: "401" })).toBe(true);
-		expect(runtime.shouldRetryVirtualFailure(runtime.getModel("faux", "small")!, { ...fauxAssistantMessage(""), stopReason: "error", errorMessage: "401" })).toBe(false);
+		expect(
+			runtime.shouldRetryVirtualFailure(virtual, {
+				...fauxAssistantMessage(""),
+				stopReason: "error",
+				errorMessage: "401",
+			}),
+		).toBe(true);
+		expect(
+			runtime.shouldRetryVirtualFailure(runtime.getModel("faux", "small")!, {
+				...fauxAssistantMessage(""),
+				stopReason: "error",
+				errorMessage: "401",
+			}),
+		).toBe(false);
 	});
 
 	it("looks up only the last model_change", async () => {

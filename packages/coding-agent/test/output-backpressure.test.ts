@@ -64,14 +64,24 @@ describe.skipIf(process.platform === "win32")("local shell output backpressure i
 	it("does not finish before a queued second asynchronous output write drains", async () => {
 		let releaseFirst!: () => void;
 		let releaseSecond!: () => void;
-		const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-		const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const secondGate = new Promise<void>((resolve) => {
+			releaseSecond = resolve;
+		});
 		let calls = 0;
 		let finished = false;
-		const command = "node -e \"process.stdout.write('a'.repeat(1024));setTimeout(()=>process.stdout.write('b'.repeat(1024)),40)\"";
-		const run = createLocalBashOperations().exec(command, tmpdir(), {
-			onData: () => (++calls === 1 ? firstGate : secondGate),
-		}).then((result) => { finished = true; return result; });
+		const command =
+			"node -e \"process.stdout.write('a'.repeat(1024));setTimeout(()=>process.stdout.write('b'.repeat(1024)),40)\"";
+		const run = createLocalBashOperations()
+			.exec(command, tmpdir(), {
+				onData: () => (++calls === 1 ? firstGate : secondGate),
+			})
+			.then((result) => {
+				finished = true;
+				return result;
+			});
 		try {
 			await new Promise<void>((resolve) => setTimeout(resolve, 300));
 			expect(calls).toBe(1);

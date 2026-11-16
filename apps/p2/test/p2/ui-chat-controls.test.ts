@@ -22,6 +22,7 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			).create({ cwd: fixture.workspace, title: "Control parity" }, BACKGROUND_CONTEXT)
 		).id;
 		browser = await Browser.start();
+		await browser.signIn(fixture.owner);
 	});
 	after(async () => {
 		await browser?.close();
@@ -35,12 +36,13 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			await browser.evaluate<string[]>(
 				`[...document.querySelectorAll('.topbar>button')].map(e=>e.getAttribute('aria-label'))`,
 			),
-			["Sessions", "Terminal", "Workspace files and changes", "Session options"],
+			["Sessions", "Prompt anywhere", "Annotate", "Terminal", "Workspace files and changes", "Session options"],
 		);
 		await browser.click('button[aria-label="Model and thinking"]');
 		await browser.wait(`document.querySelector('[role=dialog][aria-label=Model]')`);
 		await browser.click("[role=dialog] button[aria-label=Close]");
 		const second = await Browser.start();
+		await second.signIn(fixture.owner);
 		try {
 			await second.open(`http://127.0.0.1:${fixture.server.port}/s/${id}`);
 			await browser.wait(`document.querySelector('.session-stats .client-count')?.textContent.trim()==='2'`);
@@ -56,6 +58,19 @@ describe("chat control parity", { skip: !browserTests }, () => {
 		await browser.wait(
 			`document.querySelector('.messages .assistant')?.textContent.includes('Echo: hello controls') && document.querySelector('.cost-link')`,
 		);
+		// The sent message and the answer show their time, with the full moment as the tooltip; the message has Copy. The
+		// answer ends the conversation: no Branch (the composer sends in a new branch instead).
+		const times = await browser.evaluate<{ actions: string[]; sent: number; title: boolean }[]>(
+			`[...document.querySelectorAll('.messages .user, .messages .assistant')].filter((e) => e.querySelector('.message-actions')).map((e) => { const time = e.querySelector('.message-actions .message-time'); return { actions: [...e.querySelector('.message-actions').children].map((child) => child.classList.contains('message-time') ? 'time' : child.getAttribute('aria-label')), sent: Date.now() - Date.parse(time.dateTime), title: Boolean(time.title) }; })`,
+		);
+		assert.deepEqual(
+			times.map(({ actions, title }) => ({ actions: actions.filter((action) => action !== "Reply"), title })),
+			[
+				{ actions: ["time", "Edit", "Copy"], title: true },
+				{ actions: ["Copy", "time"], title: true },
+			],
+		);
+		assert.ok(times.every(({ sent }) => sent >= 0 && sent < 60_000));
 		await browser.click(".cost-link");
 		await browser.wait(`document.querySelector('.cost-table tbody tr')`);
 		await browser.click("[role=dialog] button[aria-label=Close]");
@@ -69,7 +84,7 @@ describe("chat control parity", { skip: !browserTests }, () => {
 		await browser.wait(`document.querySelector('.attachment-name')?.textContent==='kept.txt'`);
 		await browser.click(".new-session");
 		await browser.wait(
-			`location.pathname==='/' && document.querySelector('.new-session-view .composer textarea') && document.querySelector('.attachment-name')`,
+			`location.pathname==='/new' && document.querySelector('.new-session-view .composer textarea') && document.querySelector('.attachment-name')`,
 		);
 		assert.equal(
 			await browser.evaluate<string>(`document.querySelector('.composer textarea').value`),
@@ -161,7 +176,14 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			readdirSync(join(fixture.dataDir, "uploads", pasted))
 				.map((file) => file.slice(37))
 				.sort();
-		await poll(() => existsSync(join(fixture.dataDir, "uploads", pasted)) && uploaded().length === 2);
-		assert.deepEqual(uploaded(), ["image.png", "pasted-image.png"]);
+		const expected = ["image.png", "pasted-image.png"];
+		// Materialization writes <name>.<pid>.partial before the atomic rename. Two
+		// directory entries do not mean both uploaded files have finished arriving.
+		await poll(
+			() =>
+				existsSync(join(fixture.dataDir, "uploads", pasted)) &&
+				JSON.stringify(uploaded()) === JSON.stringify(expected),
+		);
+		assert.deepEqual(uploaded(), expected);
 	});
 });

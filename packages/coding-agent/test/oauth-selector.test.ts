@@ -1,9 +1,9 @@
-import { setKeybindings } from "@earendil-works/pi-tui";
+import { setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import { OAuthSelectorComponent } from "../src/modes/interactive/components/oauth-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("OAuthSelectorComponent", () => {
@@ -47,6 +47,8 @@ describe("OAuthSelectorComponent", () => {
 					getProviders: () => providers,
 					getProviderAuthStatus: () => ({ configured: false }),
 					isUsingOAuth: () => false,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
 				},
 			},
 		};
@@ -69,6 +71,35 @@ describe("OAuthSelectorComponent", () => {
 		expect(getLoginProviderOptions.call(fakeThis, "oauth")).toMatchObject([
 			{ id: "anthropic", name: "Anthropic", authType: "oauth" },
 		]);
+	});
+
+	it("keeps provider branding and account nicknames visually separate in login and add", () => {
+		const provider = {
+			id: "anthropic",
+			name: "Anthropic",
+			accountLabel: "Client projects",
+			authType: "oauth" as const,
+			status: { type: "oauth" as const, source: "OAuth" },
+		};
+		const login = new OAuthSelectorComponent(
+			"login",
+			[provider],
+			() => {},
+			() => {},
+		);
+		const loginLines = stripAnsi(login.render(120).join("\n"));
+		expect(loginLines).toContain("Anthropic · Client projects");
+		expect(loginLines).toContain("configured");
+		const add = new OAuthSelectorComponent(
+			"add",
+			[{ ...provider, accountLabel: undefined }],
+			() => {},
+			() => {},
+		);
+		const addLines = stripAnsi(add.render(120).join("\n"));
+		expect(addLines).toContain("Anthropic");
+		expect(addLines).not.toContain("Client projects");
+		expect(addLines).not.toContain("configured");
 	});
 
 	it("renders an option without compiled auth status as not configured", () => {
@@ -143,5 +174,106 @@ describe("OAuthSelectorComponent", () => {
 		);
 
 		expect(stripAnsi(selector.render(120).join("\n"))).toContain("✓ command in models.json");
+	});
+
+	it("lists preferred partners first, then the rest alphabetically", () => {
+		const getLoginProviderOptions = (
+			InteractiveMode as unknown as {
+				prototype: {
+					getLoginProviderOptions(this: object): Array<{ id: string; authType: string }>;
+				};
+			}
+		).prototype.getLoginProviderOptions;
+		const apiKey = { apiKey: { name: "API key" } };
+		const providers = [
+			{ id: "anthropic", name: "Anthropic", auth: apiKey },
+			{
+				id: "openrouter",
+				name: "OpenRouter",
+				auth: { oauth: { name: "OpenRouter", login: async () => ({}) }, ...apiKey },
+			},
+			{ id: "zai", name: "Z.AI", auth: apiKey },
+			{ id: "radius", name: "Radius", auth: { oauth: { name: "Radius", login: async () => ({}) } } },
+			{ id: "google", name: "Google", auth: apiKey },
+		];
+		const fakeThis = {
+			session: {
+				modelRuntime: {
+					getProviders: () => providers,
+					getProviderAuthStatus: () => ({ configured: false }),
+					isUsingOAuth: () => false,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
+				},
+			},
+		};
+
+		expect(getLoginProviderOptions.call(fakeThis).map(({ id, authType }) => `${id}:${authType}`)).toEqual([
+			"radius:oauth",
+			"openrouter:oauth",
+			"openrouter:api_key",
+			"anthropic:api_key",
+			"google:api_key",
+			"zai:api_key",
+		]);
+	});
+
+	it("shows the brand style of a preferred partner only on its selected row", () => {
+		const tui = { requestRender: () => {} } as unknown as TUI;
+		const providers = [
+			{ id: "radius", name: "Radius", authType: "oauth" as const },
+			{ id: "openrouter", name: "OpenRouter", authType: "api_key" as const },
+		];
+		const selector = new OAuthSelectorComponent(
+			"login",
+			providers,
+			() => {},
+			() => {},
+			undefined,
+			tui,
+		);
+		try {
+			const output = selector.render(120).join("\n");
+			expect(output).not.toContain(theme.fg("accent", "Radius"));
+			expect(output).toContain(theme.fg("text", "OpenRouter"));
+			expect(stripAnsi(output)).toContain("→ Radius");
+
+			selector.handleInput("\x1b[B");
+			const moved = selector.render(120).join("\n");
+			expect(moved).toContain(theme.fg("text", "Radius"));
+			expect(moved).not.toContain(theme.fg("accent", "OpenRouter"));
+			expect(stripAnsi(moved)).toContain("→ OpenRouter");
+		} finally {
+			selector.dispose();
+		}
+	});
+
+	it("keeps the accent style without a TUI to animate in", () => {
+		const selector = new OAuthSelectorComponent(
+			"login",
+			[{ id: "openrouter", name: "OpenRouter", authType: "api_key" }],
+			() => {},
+			() => {},
+		);
+
+		expect(selector.render(120).join("\n")).toContain(theme.fg("accent", "OpenRouter"));
+	});
+
+	it("marks preferred partners with a star", () => {
+		const selector = new OAuthSelectorComponent(
+			"login",
+			[
+				{ id: "radius", name: "Radius", authType: "oauth" },
+				{ id: "openrouter", name: "OpenRouter", authType: "api_key" },
+				{ id: "anthropic", name: "Anthropic", authType: "api_key" },
+			],
+			() => {},
+			() => {},
+		);
+
+		const output = stripAnsi(selector.render(120).join("\n"));
+		expect(output).toContain("→ Radius ✦ [subscription]");
+		expect(output).toContain("  OpenRouter ✦ [API key]");
+		expect(output).toContain("  Anthropic [API key]");
 	});
 });

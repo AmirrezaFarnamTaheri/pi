@@ -30,7 +30,7 @@ import {
 import { DOWNLOADS, displayName, durableContext, FILE_CHUNK, Files, findDownload, UPLOADS } from "@p2/app/v1/node";
 import { Extensions, harnessOf, isTopLevel, mainConversation } from "@p2/app/v1/worker";
 import { Conversation } from "../chat/contract.ts";
-import { Attachments, FilesMirror } from "../files/contract.ts";
+import { Attachments } from "../files/contract.ts";
 import { offeredBy } from "../send-file/contract.ts";
 import { mirrorLock } from "../sessions/lock-worker.ts";
 import { Subagents } from "../subagents/contract.worker.ts";
@@ -64,14 +64,15 @@ export const DiscordLinkDoc = defineDoc<{
 });
 
 /**
- * What an agent answering Discord must know, in two sentences: stable for a link (it changes only with the channel or
+ * What an agent answering Discord must know, in a few sentences: stable for a link (it changes only with the channel or
  * thread), so the prompt's cached prefix stays.
  */
 export function discordPrompt(where: string): string {
 	return [
 		`Your input comes from ${where}; your final answer of each turn is posted there as the reply, with the files you`,
 		"offer with send_file during the turn attached. Nothing else is posted (not intermediate text, thinking or tool",
-		"output), so make the final answer complete on its own.",
+		"output), so make the final answer complete on its own. Each line names its author with their mention, as in",
+		"`Ann (<@1234>): text`; write `<@1234>` to mention them.",
 	].join(" ");
 }
 
@@ -100,7 +101,6 @@ export default defineFacet((host) => {
 		const harness = harnessOf(self);
 		const files = self.get(Files, {});
 		const attachments = self.get(Attachments, {});
-		const mirror = self.get(FilesMirror, {});
 		return {
 			variant: "server",
 			members: {
@@ -119,8 +119,6 @@ export default defineFacet((host) => {
 						const id = await download(files, file, ctx);
 						if (id) ids.push({ id, name: file.name });
 					}
-					// The Files sheet lists them as it lists the composer's uploads.
-					if (ids.length) await mirror.push(UPLOADS, ctx);
 					const resolved = ids.length
 						? await attachments.resolve({ ids: ids.map((entry) => entry.id), conversation: target }, ctx)
 						: [];
@@ -136,7 +134,8 @@ export default defineFacet((host) => {
 						{
 							text,
 							requestId,
-							whenBusy: "followUp",
+							// A batch while a turn runs joins it: its answer replies to the newest mention.
+							whenBusy: "steer",
 							author: who,
 							...(resolved.length ? { files: resolved } : {}),
 							entry: { kind: DISCORD_BATCH, data },
@@ -146,11 +145,28 @@ export default defineFacet((host) => {
 					return { conversation: target, submissionId };
 				},
 				unlinked: async (ctx) => {
-					await harness().durable.commit(async (tx) => {
-						const doc = await tx.doc(DiscordLinkDoc);
-						doc.link = null;
-						doc.threads = {};
-					}, durableContext(ctx));
+					const durable = harness().durable;
+					const context = durableContext(ctx);
+					const doc = await durable.snapshot(DiscordLinkDoc, context);
+					const main = await mainConversation(durable, context);
+					const conversations = new Set<number>([
+						main,
+						...Object.keys(doc?.threads ?? {})
+							.map(Number)
+							.filter((id) => Number.isSafeInteger(id) && id >= 0),
+					]);
+					// Discord delivery RPCs finish before this call, but followUp submissions
+					// may still be queued or executing. Stop/await them while the session
+					// lock is installed; only then may the server lift that lock.
+					for (const conversation of conversations) {
+						const chat = await ctx.get(Conversation, { conversation });
+						await chat.stop(ctx);
+					}
+					await durable.commit(async (tx) => {
+						const value = await tx.doc(DiscordLinkDoc);
+						value.link = null;
+						value.threads = {};
+					}, context);
 					return null;
 				},
 				turn: async ({ submissionId }, ctx) => {
@@ -184,7 +200,7 @@ export default defineFacet((host) => {
 						.trim();
 					const sent = await offered(files, record.conversationId, start, message?.timestamp ?? Date.now(), ctx);
 					return text || sent.length
-						? { state: "answered" as const, text, files: sent }
+						? { state: "answered" as const, text, files: sent, answer: record.answer }
 						: {
 								state: "unanswered" as const,
 								reason:

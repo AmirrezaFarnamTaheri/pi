@@ -168,10 +168,13 @@ export default defineFacet((host) => {
 - **The wheel** (the activity row): one row per run of consecutive calls. While the agent works it faces the newest
   call in the present tense (`running`, else `describe`'s label); when the run ends it rolls to a summary built from
   each tool's `summary` phrase, counted ("Counted words in 2 texts"; a failed call is red on the wheel, and the
-  sheet's list says how it failed).
-- **The step list** (a tap on the wheel opens the run's sheet): one row per call with the tool's name, its
-  `argument`, and its state (✓ and its time; ✗ and the `failure` word; ● running).
-- **The detail** (a step opens it): the sheet's title is `describe`'s label; the body is the tool's `Detail`.
+  activity list says how it failed). While active, its latest thought shows below it, also while it streams, in at
+  most three lines; that space only grows, and the note or answer after the wheel takes its place (`ThoughtSlot.tsx`).
+- **The step list** (a tap on the wheel opens that block's right-hand panel, or a sheet on phones): one row per
+  call with the tool's name, its `argument`, and its state (✓ and its time; ✗ and the `failure` word; ● running).
+  The panel has no tab or conversation-wide list: select another block in the transcript to switch it.
+- **The detail** (a step expands it inline): the body is the tool's `Detail`. Several steps can remain expanded;
+  expanding one does not navigate away from the list or add a history entry. Back closes the panel.
 - **Results**: what `hasResult` places, drawn by `Result`, after the turn's answer or in place.
 - **A script's calls**: when another tool calls this one (a code mode script), its entry in the caller's timeline
   uses `describe`, its detail `CallInput` and `CallDetail`.
@@ -189,7 +192,7 @@ Every field is optional (`src/web/activity/model.ts`); each one left out falls b
 | `summary` | how many of this tool's calls a run had | the phrase, singular and plural ("ran a command", "ran 3 commands") | always: it is the wheel's summary | "used `name`", "used `name` N times"; tools sharing one function count together (write and edit: "edited 2 files") |
 | `hasResult` | the `ToolView` | `"after"`, `"inline"` or `false` | the call made something for the person (a file, a link, an artifact) | nothing shown besides the call |
 | `Result` | `{ tool, inline }` | a component | with `hasResult` | — |
-| `Detail` | `{ step, onGroup }` | a component | the generic detail does not say enough (a diff, a terminal, a link) | Input: the arguments as JSON; Output: the output (and images) |
+| `Detail` | `{ step }` | a component | the generic detail does not say enough (a diff, a terminal, a link) | Input: the arguments as JSON; Output: the output (and images) |
 | `nestedCalls` | the `ToolView` | the calls this call made (`NestedCall[]`) | the tool runs other tools and keeps their final list in its `details` (code mode) | `tool.calls`: Durable's live nested slots, then the last list seen |
 | `repeated` | a count of identical calls in a row, how many failed | the entry's description ("20 runs, 1 failed") | a tool with nested calls | the repeated tool's own summary ("Ran 20 commands · 1 failed") |
 | `CallInput` | `{ call: NestedCall }` | a component | other tools call this one and its input reads better than JSON (a command line) | the arguments as JSON |
@@ -207,17 +210,18 @@ A `Detail` is built from the detail parts (`src/web/activity/Detail.tsx`): `Inpu
 sections), `DetailSection`, `CommandBlock`, `OutputBlock`, `CodeBlock`, `DiffBlock`, `LinesBlock`, `FilePath`,
 `DetailImages`, `DetailProse`, `DetailNote`, `DetailLink`, `Interrupted` (a call a restart cut short), and
 `NestedCalls` (a call's own calls as a timeline: the newest eight, the rest behind "Show all N tool calls";
-`onGroup` opens one). A detail shows everything at once and follows a running call live.
+each call expands its own detail inline). A detail shows everything at once and follows a running call live.
 
 #### Results: after the answer or in place
 
 `hasResult(tool)` says whether a call made something for the person, and where `Result` shows it:
 
 - `"after"`: after the turn's answer, with the turn's other results (`plugins/send-file`: the sent file's card;
-  `plugins/ports`: the opened port's links; `plugins/artifacts`: a version's card).
+  `plugins/ports`: the opened port's links).
 - `"inline"`: in place, right after the call's wheel; the run of calls splits around it, so the calls after it get a
-  wheel of their own (`plugins/artifacts` for an artifact made with `inline: true`: its card and the artifact
-  itself).
+  wheel of their own (`plugins/artifacts` for `artifact_show`: the artifact's pane). A code-mode script's nested
+  calls place their results the same way, read from their name, arguments and status (a nested call has no
+  `details`).
 
 Decide from the finished call (`tool.status === "done"` and the `details` it needs): a running call has no result
 yet, and the run splits only once the result is there.
@@ -229,7 +233,7 @@ follows it:
   after it, go on the next wheel, which is the row that waited there while the agent worked.
 - **4** (no wheels, each call its own row): right after its call's row.
 - **1** (one wheel per turn, only the answer and its results in the transcript): with the results after the answer,
-  still drawn in full (an inline artifact shows itself there); the turn's wheel is not split.
+  still drawn in full (a shown artifact shows itself there); the turn's wheel is not split.
 
 #### Calls of other tools
 
@@ -292,7 +296,7 @@ until expanded, from the tool's first string argument unless it knows the tool; 
 
 A result has two parts: `output`, the text the model reads, and `details`, JSON the model never sees. Put into
 `details` what the UI needs and should not parse out of text: counts, a diff (`edit`), a file's identity
-(`send_file`), an artifact's version (`artifact`), the list of a script's calls (`codemode`). Both UIs get it as
+(`send_file`), the artifact a call acted on (`artifact_*`), the list of a script's calls (`codemode`). Both UIs get it as
 `tool.details` (web) and `result.details` (TUI); read it defensively (`detailsOf`, `record`), it is whatever the tool
 wrote, also in old transcripts. A running call has no `details` yet (`tool.status` is `pending` or `running`); a
 failed one usually has none. Arguments come as the model wrote them (`tool.args`), validated against `parameters`
@@ -303,13 +307,13 @@ before `execute` ran.
 Briefly; each is a keyed registry a facet contributes to (`docs/plugin-hooks.md` lists them all):
 
 - **Web slots** (`Slots`, `src/runtime/web-core.ts`): components by slot name, e.g. `composer:<name>` (chips beside
-  the composer, a `SlotList` by prefix), `sidebar-foot:<name>`, `session-actions`, `session-options`,
+  the composer, a `SlotList` by prefix), `sidebar-actions:<name>`, `session-actions`, `session-options`,
   `envs-actions:<name>`, `chat-attribution`, `chat-content`, `chat-bottom` (the terminal below the chat).
 - **Composer expanders** (`ComposerExpanders`, `src/runtime/composer.ts`): rewrite the composer's text before it is
   sent (the prompt plugin expands `/template` and `/skill:`).
 - **Sheets**: a component in a slot opens a route layer with `openLayer({ kind: "sheet", name, locator })` and
   renders `Sheet` while `useSheet(name)` is its own (`.pi/skills/p2-ui.md`, Back navigation).
-- **Viewers**: `OpenViewer` with a `ViewerItem` (an artifact, a file) from a `Result` or `Detail`.
+- **Viewers**: `OpenViewer` with a `ViewerItem` (a sent file) from a `Result` or `Detail`.
 - **Transcript entries** (`TranscriptEntries`, the chat plugin's contract): what a plugin adds to the display of its
   entry kind's messages (the message it answers, a note), in the chat and the TUI.
 - **TUI**: `TuiCommands` (slash commands), `TuiSlots` (status lines, footer parts), `TuiEntryRenderers`,
@@ -327,7 +331,7 @@ Briefly; each is a keyed registry a facet contributes to (`docs/plugin-hooks.md`
   contribution to `PLUGIN_TOOLS` in `test/fixtures/transcript.ts` so the other fixtures show it too.
 - **End to end** (browser, real server): `startFixture({ web: true })` with the fake provider; add a prompt to
   `plugins/models/fake.ts` that makes the faux model call your tool (`SCRIPTED`, or a pattern like
-  `artifact <json>`), send it through the `Chat` contract and wait for the result, then open the session in the
+  `codemode <script>` for code-mode tools), send it through the `Chat` contract and wait for the result, then open the session in the
   browser (`test/p2/ui-inline-artifacts.test.ts`).
 - **The TUI** (Node 26): draw a transcript with `transcriptComponent(transcript, false, expanded, { renderers })`
   from `src/tui/messages.ts` and match the stripped lines; add your renderers to `PLUGIN_TUI_RENDERERS` in

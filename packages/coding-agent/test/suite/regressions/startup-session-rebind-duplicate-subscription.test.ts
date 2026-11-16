@@ -76,4 +76,24 @@ describe("overlapping startup and replacement session rebinds", () => {
 		expect(subscribeToAgent).toHaveBeenCalledTimes(1);
 		expect(updateTerminalTitle).toHaveBeenCalledTimes(1);
 	});
+	it("enables command detachment on an actual replacement session before subscribing", async () => {
+		const enable = vi.fn();
+		const events: string[] = [];
+		const context: RebindContext = {
+			session: { manualBackgroundController: { enable } },
+			applyRuntimeSettings: () => events.push("apply"),
+			programStatus: { reset: () => {} },
+			renderCurrentSessionState: () => {},
+			bindCurrentSessionExtensions: async () => {
+				events.push("bind");
+			},
+			subscribeToAgent: () => events.push("subscribe"),
+			updateAvailableProviderCount: async () => {},
+			updateEditorBorderColor: () => {},
+			updateTerminalTitle: () => {},
+		};
+		await interactiveModePrototype.rebindCurrentSession.call(context);
+		expect(enable).toHaveBeenCalledTimes(1);
+		expect(events).toEqual(["apply", "bind", "subscribe"]);
+	});
 });

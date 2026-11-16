@@ -20,11 +20,12 @@ const SCRIPTED: Record<string, () => ReturnType<typeof fauxToolCall>> = {
 	bash: () => fauxToolCall("bash", { command: "pwd" }),
 	"send-file": () => fauxToolCall("send_file", { path: "created.txt" }),
 	artifact: () =>
-		fauxToolCall("artifact", {
-			name: "demo",
-			title: "Demo artifact",
-			type: "html",
-			content: "<!doctype html><title>Demo</title><h1>Artifact demo</h1>",
+		fauxToolCall("codemode", {
+			code: [
+				'const { id } = await tools.artifact_write({ id: "demo", kind: "html", title: "Demo artifact", content: "<!doctype html><title>Demo</title><h1>Artifact demo</h1>" });',
+				"await tools.artifact_show({ id });",
+				"return id;",
+			].join("\n"),
 		}),
 	subagent: () =>
 		fauxToolCall("subagent", {
@@ -40,7 +41,7 @@ const SCRIPTED: Record<string, () => ReturnType<typeof fauxToolCall>> = {
 			name: "helper",
 			model: "faux/faux-1",
 			thinkingLevel: "high",
-			tools: ["bash", "artifact"],
+			tools: ["bash", "read"],
 		}),
 	"subagent-second": () =>
 		fauxToolCall("subagent", { action: "spawn", name: "second", message: "hello second", tools: ["read"] }),
@@ -61,12 +62,14 @@ const SCRIPTED: Record<string, () => ReturnType<typeof fauxToolCall>> = {
 			].join("\n"),
 		}),
 	// Code mode across a worker restart: the slow middle call is interrupted, the script catches it and continues.
+	// Chord stops workers after a 5 s grace period: a 5 s sleep races shutdown and can write "two" before SIGKILL.
+	// A longer sleep makes both the killed-worker and graceful-restart recovery tests deterministic.
 	"codemode-restart": () =>
 		fauxToolCall("codemode", {
 			code: [
 				'const one = (await tools.bash({ command: "echo one >> codemode.log; printf one" })).output;',
 				"let two;",
-				'try { two = (await tools.bash({ command: "sleep 5; echo two >> codemode.log; printf two" })).output; }',
+				'try { two = (await tools.bash({ command: "sleep 30; echo two >> codemode.log; printf two" })).output; }',
 				'catch (error) { two = "two failed: " + error.message; }',
 				'const three = (await tools.bash({ command: "echo three >> codemode.log; printf three" })).output;',
 				'return [one, two, three].join(" | ");',
@@ -204,12 +207,11 @@ export function createFakeModels(options: CreateModelsOptions = {}) {
 						const steps = [
 							() => fauxToolCall("read", { path: "fixture.txt" }),
 							() =>
-								fauxToolCall("artifact", {
-									name: "steps",
-									title: "Steps",
-									type: "markdown",
-									content: "# Between the calls\n\nShown where it was made.",
-									inline: true,
+								fauxToolCall("codemode", {
+									code: [
+										'await tools.artifact_write({ id: "steps", kind: "md", title: "Steps", content: "# Between the calls\\n\\nShown where it was made." });',
+										'await tools.artifact_show({ id: "steps" });',
+									].join("\n"),
 								}),
 							() => fauxToolCall("read", { path: "fixture.txt" }),
 						];
@@ -235,7 +237,7 @@ export function createFakeModels(options: CreateModelsOptions = {}) {
 												? fauxToolCall("subagent", JSON.parse(text.slice("subagent ".length)))
 												: text.startsWith("team ")
 													? fauxToolCall("team", JSON.parse(text.slice("team ".length)))
-													: /^(artifact|history_(search|read|handoff)|location_(envs|dirs|move)|tool_search|terminal|mcp__\w+) /.test(
+													: /^(view_\w+|artifact_\w+|bash|read|write|edit|reload_plugins|history_(search|read|handoff)|location_(envs|dirs|move)|tool_search|terminal|sidebar_rollups|mcp__\w+) /.test(
 																text,
 															)
 														? fauxToolCall(

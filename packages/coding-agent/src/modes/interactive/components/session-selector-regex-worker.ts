@@ -5,54 +5,83 @@ import type { SortMode } from "./session-selector-search.ts";
 // Evaluated in a disposable Node worker: a pathological pattern can hang this
 // worker, but never the terminal input/rendering thread. No external file path
 // is required, including when the coding-agent is bundled into one executable.
-const REGEX_WORKER_CODE = `
+const REGEX_WORKER_CODE = String.raw`
 "use strict";
 const { parentPort } = require("node:worker_threads");
 const { createReadStream } = require("node:fs");
-const { createInterface } = require("node:readline");
 
-/**
- * Parse session content inside the worker for large transcripts. The main
- * thread sends only a file path, avoiding synchronous structured-clone work
- * on multi-megabyte strings during interactive search.
- */
-async function loadSearchText(path) {
-  const texts = [];
-  const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
-  for await (const line of lines) {
+// JavaScript regex has unbounded lookaround, anchors, and backtracking.
+// Arbitrary patterns cannot be matched correctly with rolling windows.
+// Assemble one transcript up to a hard cap in a disposable worker; report
+// oversized or unreadable histories instead of returning false positives.
+const MAX_LINE_CHARS = 512 * 1024;
+const MAX_TEXT_CHARS = 16 * 1024 * 1024;
+
+async function matchHistoryFile(path, regex, maxTextChars) {
+  const chunks = [];
+  let length = 0;
+  let line = "";
+  const addText = (text) => {
+    const extra = text.length + (chunks.length ? 1 : 0);
+    if (length + extra > maxTextChars) throw new Error("session text exceeds regex memory cap");
+    if (chunks.length) length += 1;
+    chunks.push(text);
+    length += text.length;
+  };
+  const processLine = (raw) => {
     let entry;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (entry?.type !== "message") continue;
+    try { entry = JSON.parse(raw); } catch { return; }
+    if (entry?.type !== "message") return;
     const message = entry.message;
-    if (!message || (message.role !== "user" && message.role !== "assistant")) continue;
+    if (!message || (message.role !== "user" && message.role !== "assistant")) return;
     const content = message.content;
-    const text = typeof content === "string"
-      ? content
+    const text = typeof content === "string" ? content
       : Array.isArray(content)
-        ? content.filter((block) => block?.type === "text").map((block) => block.text).join(" ")
+        ? content.filter((part) => part?.type === "text").map((part) => part.text).join(" ")
         : "";
-    if (text) texts.push(text);
+    if (text) addText(text);
+  };
+  for await (const chunk of createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 })) {
+    let from = 0;
+    for (;;) {
+      const at = chunk.indexOf("\n", from);
+      const fragment = at < 0 ? chunk.slice(from) : chunk.slice(from, at);
+      if (line.length + fragment.length > MAX_LINE_CHARS)
+        throw new Error("session history line too large for regex search");
+      line += fragment;
+      if (at < 0) break;
+      processLine(line);
+      line = "";
+      from = at + 1;
+    }
   }
-  return texts.join(" ");
+  if (line) processLine(line);
+  return regex.test(chunks.join(" "));
 }
 
-parentPort.on("message", async ({ pattern, sessions }) => {
+parentPort.on("message", async ({ pattern, sessions, maxTextChars }) => {
   try {
     const regex = new RegExp(pattern, "i");
     const scores = [];
+    const incomplete = [];
     for (const { name, id, text, path, cwd } of sessions) {
-      if (name && regex.test(name)) {
-        scores.push(0);
+      if (name && regex.test(name)) { scores.push(0); continue; }
+      if (regex.test(id) || regex.test(cwd)) { scores.push(1); continue; }
+      if (text !== undefined && text.length > Math.min(MAX_TEXT_CHARS, maxTextChars ?? MAX_TEXT_CHARS)) {
+        incomplete.push(id);
+        scores.push(-1);
         continue;
       }
-      if (regex.test(id) || regex.test(cwd)) {
-        scores.push(1);
-        continue;
+      try {
+        scores.push(text === undefined
+          ? (await matchHistoryFile(path, regex, Math.min(MAX_TEXT_CHARS, maxTextChars ?? MAX_TEXT_CHARS)) ? 1 : -1)
+          : (regex.test(text) ? 1 : -1));
+      } catch {
+        incomplete.push(id);
+        scores.push(-1);
       }
-      const searchable = text === undefined ? await loadSearchText(path) : text;
-      scores.push(regex.test(searchable) ? 1 : -1);
     }
-    parentPort.postMessage({ scores });
+    parentPort.postMessage({ scores, incomplete });
   } catch (error) {
     parentPort.postMessage({ error: error instanceof Error ? error.message : String(error) });
   }
@@ -63,21 +92,35 @@ const SEARCH_BUDGET_MS = 500;
 const BATCH_SIZE = 16;
 const MAX_PATTERN_LENGTH = 2048;
 const INLINE_TEXT_LIMIT = 64 * 1024;
-type SearchResponse = { scores?: number[]; error?: string };
+const MAX_REGEX_TEXT_CHARS = 16 * 1024 * 1024;
+type SearchResponse = { scores?: number[]; incomplete?: string[]; error?: string };
 
 /**
  * Search full session texts off the UI thread. Serial batches bound the size
- * of each structured-clone transfer. Large session texts are loaded inside the
- * worker, and an idle batch deadline terminates non-progressing regex work.
+ * of each structured-clone transfer. Arbitrary regex needs a complete string to
+ * preserve JavaScript semantics, so the disposable worker reads one session at a time
+ * with explicit file/line and total-text memory caps; oversize entries are reported
+ * without hiding matches in other sessions.
  */
 export async function filterSessionsByRegexInWorker(
 	sessions: readonly SessionInfo[],
 	pattern: string,
 	sortMode: SortMode,
 	signal?: AbortSignal,
+	onIncomplete?: (sessionIds: string[]) => void,
+	options?: { maxSessionTextChars?: number },
 ): Promise<SessionInfo[]> {
 	if (!pattern || pattern.length > MAX_PATTERN_LENGTH) throw new Error("Invalid regex search length");
 	if (signal?.aborted) throw new Error("Regex search cancelled");
+	if (
+		options?.maxSessionTextChars !== undefined &&
+		(!Number.isSafeInteger(options.maxSessionTextChars) ||
+			options.maxSessionTextChars <= 0 ||
+			options.maxSessionTextChars > MAX_REGEX_TEXT_CHARS)
+	) {
+		throw new Error("Invalid regex session text cap");
+	}
+
 	if (sessions.length === 0) return [];
 
 	const worker = new Worker(REGEX_WORKER_CODE, { eval: true });
@@ -102,18 +145,22 @@ export async function filterSessionsByRegexInWorker(
 	resetIdleTimeout();
 
 	const matched: { session: SessionInfo; score: number }[] = [];
+	const incomplete: string[] = [];
 	try {
 		for (let start = 0; start < sessions.length; start += BATCH_SIZE) {
 			if (signal?.aborted) throw new Error("Regex search cancelled");
 			const batch = sessions.slice(start, start + BATCH_SIZE);
 			const scores = await new Promise<number[]>((resolve, rejectRequest) => {
-				const onMessage = ({ scores, error }: SearchResponse) => {
+				const onMessage = ({ scores, error, incomplete: missing }: SearchResponse) => {
 					resetIdleTimeout();
 					worker.off("message", onMessage);
 					rejectActive = undefined;
 					if (error) rejectRequest(new Error(error));
 					else if (!scores) rejectRequest(new Error("Regex worker returned no results"));
-					else resolve(scores);
+					else {
+						if (missing?.length) incomplete.push(...missing);
+						resolve(scores);
+					}
 				};
 				rejectActive = (error: Error) => {
 					worker.off("message", onMessage);
@@ -123,6 +170,7 @@ export async function filterSessionsByRegexInWorker(
 				try {
 					worker.postMessage({
 						pattern,
+						maxTextChars: options?.maxSessionTextChars ?? MAX_REGEX_TEXT_CHARS,
 						sessions: batch.map((session) => ({
 							name: session.name,
 							id: session.id,
@@ -145,8 +193,12 @@ export async function filterSessionsByRegexInWorker(
 			}
 		}
 		if (sortMode !== "recent") {
-			matched.sort((left, right) => left.score - right.score || right.session.modified.getTime() - left.session.modified.getTime());
+			matched.sort(
+				(left, right) =>
+					left.score - right.score || right.session.modified.getTime() - left.session.modified.getTime(),
+			);
 		}
+		if (incomplete.length) onIncomplete?.(incomplete);
 		return matched.map(({ session }) => session);
 	} finally {
 		if (timeout !== undefined) clearTimeout(timeout);

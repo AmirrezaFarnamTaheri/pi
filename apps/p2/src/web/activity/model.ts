@@ -1,6 +1,6 @@
 // A turn's activity: what the agent did between a person's message and its answer. Derived from the transcript's
 // items: `chatItems` keeps each response's thinking and text in the transcript, in their order, and turns each run of
-// consecutive tool calls into an activity item (a wheel in the chat, its steps in a sheet). A turn's last text is its
+// consecutive tool calls into an activity item (a wheel in the chat, expandable steps in the right-hand panel). A turn's last text is its
 // answer, followed by the results meant for the person (artifacts, sent files, opened ports). A result its tool shows
 // in place (an inline artifact) comes right after its call instead, splitting the run of calls around it. How much of
 // that shows in the transcript, and how much goes on the wheels, is settings.json's `detail` (`Detail`).
@@ -25,6 +25,11 @@ export const DEFAULT_DETAIL: Detail = 2;
 export type Words = { kind: "thought" | "text"; id: string; text: string; live: boolean };
 /** What a wheel rolls through, in order: its tool calls, and at detail 1 and 2 thinking (and texts) among them. */
 export type WheelEntry = { kind: "call"; step: Step } | Words;
+
+/** The thought a working wheel shows below it: its newest, also while it streams; none once the wheel is done. */
+export function wheelThought(entries: readonly WheelEntry[], working: boolean): Words | undefined {
+	return working ? entries.findLast((entry): entry is Words => entry.kind === "thought") : undefined;
+}
 
 /** The items the chat shows: the transcript's people, markers and failures, and each turn's parts in order. */
 export type ChatItem =
@@ -150,8 +155,8 @@ function partsOf(run: readonly Item[], live: boolean, after: string, tools: Tool
 	const call = (key: string, tool: ToolView, from?: Response) => {
 		const step = stepOf(tool, tools);
 		calls(key, from).steps.push(step);
-		if (placement(step.tool, tools) === "inline")
-			parts.push({ type: "results", key: `results:${tool.id}`, tools: [step.tool] });
+		const inline = withResults(step.tool).filter((each) => placement(each, tools) === "inline");
+		if (inline.length) parts.push({ type: "results", key: `results:${tool.id}`, tools: inline });
 	};
 	for (const item of run) {
 		if (item.type === "tool") {
@@ -260,7 +265,12 @@ function runItems(
 	// Working on a response that shows nothing yet (the first, or the next after a result in place): the activity row,
 	// waiting.
 	if (working && !answer && (!final || final.type === "results"))
-		items.push({ type: "activity", key: `activity:${final ? final.key : after}`, steps: [], working: true });
+		items.push({
+			type: "activity",
+			key: `activity:${final ? final.key : after}`,
+			steps: [],
+			working: true,
+		});
 	if (response && (answer || notice))
 		items.push({
 			type: "answer",
@@ -273,10 +283,12 @@ function runItems(
 		});
 	const results = parts.flatMap((part) =>
 		part.type === "calls"
-			? part.steps.flatMap((step) => {
-					const where = placement(step.tool, tools);
-					return where === "after" || (where === "inline" && detail === 1) ? [step.tool] : [];
-				})
+			? part.steps.flatMap((step) =>
+					withResults(step.tool).filter((each) => {
+						const where = placement(each, tools);
+						return where === "after" || (where === "inline" && detail === 1);
+					}),
+				)
 			: [],
 	);
 	if (results.length) items.push({ type: "results", key: `results:${first.key}`, tools: results });
@@ -368,22 +380,37 @@ function sameEntry(entry: WheelEntry, same: WheelEntry): boolean {
 	return same.kind === entry.kind && same.id === entry.id && same.text === entry.text && same.live === entry.live;
 }
 
-const sameValue = (one: unknown, other: unknown): boolean =>
-	one === other ||
-	(Array.isArray(one) &&
-		Array.isArray(other) &&
-		one.length === other.length &&
-		one.every((value, index) => {
-			const that: unknown = other[index];
-			if (value === that) return true;
-			if (!value || !that || typeof value !== "object" || typeof that !== "object") return false;
-			// An entry on a wheel (detail 1 and 2).
-			if ("kind" in value && "kind" in that) return sameEntry(value as WheelEntry, that as WheelEntry);
-			// A step: the same call in the same state.
-			if ("tool" in value && "tool" in that) return sameStep(value as Step, that as Step);
-			if ("id" in value && "id" in that) return sameTool(value as ToolView, that as ToolView);
-			return false;
-		}));
+function sameValue(one: unknown, other: unknown): boolean {
+	if (one === other) return true;
+	if (!one || !other || typeof one !== "object" || typeof other !== "object") return false;
+	if (Array.isArray(one) && Array.isArray(other))
+		return (
+			one.length === other.length &&
+			one.every((value, index) => {
+				const that: unknown = other[index];
+				if (value === that) return true;
+				if (value && that && typeof value === "object" && typeof that === "object") {
+					// Activity wheels and tool steps have their own identity-aware comparison.
+					if ("kind" in value && "kind" in that) return sameEntry(value as WheelEntry, that as WheelEntry);
+					if ("tool" in value && "tool" in that) return sameStep(value as Step, that as Step);
+					if ("id" in value && "id" in that) return sameTool(value as ToolView, that as ToolView);
+				}
+				return sameValue(value, that);
+			})
+		);
+	if (Array.isArray(one) || Array.isArray(other)) return false;
+	// A server snapshot can reconstruct unchanged entry and message objects.
+	// Keep an existing row only if all their JSON-like data still matches.
+	if (Object.getPrototypeOf(one) !== Object.prototype || Object.getPrototypeOf(other) !== Object.prototype)
+		return false;
+	const first = one as Record<string, unknown>;
+	const second = other as Record<string, unknown>;
+	const keys = Object.keys(first);
+	return (
+		keys.length === Object.keys(second).length &&
+		keys.every((key) => Object.hasOwn(second, key) && sameValue(first[key], second[key]))
+	);
+}
 
 /** Whether an item rebuilt shows the same as before: then the earlier object stays, and its row does not render. */
 function sameItem(one: ChatItem, other: ChatItem): boolean {
@@ -393,6 +420,16 @@ function sameItem(one: ChatItem, other: ChatItem): boolean {
 		keys.length === Object.keys(other).length &&
 		keys.every((key) => sameValue(one[key], other[key as keyof typeof other]))
 	);
+}
+
+/** Retain a row's previous item object when a server snapshot rebuilt unchanged data. */
+function keepItem(item: ChatItem): ChatItem {
+	const before = recent.get(item.key);
+	const kept = before && sameItem(before, item) ? before : item;
+	recent.delete(item.key);
+	recent.set(item.key, kept);
+	if (recent.size > RECENT) recent.delete(recent.keys().next().value ?? "");
+	return kept;
 }
 
 /**
@@ -447,17 +484,7 @@ export function chatItems(
 		else {
 			// A member changed (a streaming delta, a result): the run's items are made again, and those that show the same
 			// as before stay the same objects. Found by key: a streaming response is a new object at every delta.
-			const made = runItems(run, live, after, tools, detail).map((item) => {
-				const before = recent.get(item.key);
-				const kept = before && sameItem(before, item) ? before : item;
-				recent.delete(item.key);
-				recent.set(item.key, kept);
-				return kept;
-			});
-			for (const key of recent.keys()) {
-				if (recent.size <= RECENT) break;
-				recent.delete(key);
-			}
+			const made = runItems(run, live, after, tools, detail).map(keepItem);
 			runs.set(run[0]!, { members: run, working: live, tools, detail, items: made });
 			result.push(...made);
 		}
@@ -469,7 +496,7 @@ export function chatItems(
 			continue;
 		}
 		flush(false);
-		result.push(item);
+		result.push(keepItem(item));
 		after = item.key;
 	}
 	flush(true);
@@ -541,6 +568,11 @@ export type ToolActivity = {
 	describe?: (step: Step) => Described;
 	/** Its words while it runs ("Running npm test"); without it, `describe`'s. */
 	running?: (step: Step) => Label;
+	/**
+	 * One or two words for a call while it runs, where there is room for no more and its arguments are not known (a
+	 * subagent's row in the sidebar: "Reading"); without it, the tool's name.
+	 */
+	brief?: string;
 	/** Its main argument for its row in the sheet (`cwd`: the session's working directory, for relative paths). */
 	argument?: (tool: ToolView, cwd: string | undefined) => string;
 	/** How a failed call's row says it failed ("exit 1"); without it, "failed". */
@@ -556,8 +588,8 @@ export type ToolActivity = {
 	 * inline: the run of calls splits around it). `false` or absent: nothing.
 	 */
 	hasResult?: (tool: ToolView) => ResultPlacement | false;
-	/** The call's detail in the sheet; `onGroup` opens one of its own calls (`tool.calls`, grouped by `groupCalls`). */
-	Detail?: ComponentType<{ step: Step; onGroup: (index: number) => void }>;
+	/** The call's inline detail; `NestedCalls` expands the calls it made in place. */
+	Detail?: ComponentType<{ step: Step }>;
 	/**
 	 * The calls this call made to other tools (a script's), when its tool keeps their final list in its result's
 	 * `details`: read from there once settled. `tool.calls` holds the ones Durable shows (live, or the last seen); return
@@ -619,6 +651,33 @@ export function live(step: Step, tools: ToolActivityTable): Label {
 export function argumentOf(tool: ToolView, tools: ToolActivityTable, cwd: string | undefined): string {
 	const own = tools.get(tool.name)?.argument;
 	return own ? own(tool, cwd) : shortArgument(tool);
+}
+
+/** Nested calls as calls of their own, by call: the same nested call keeps its object. */
+const nestedViews = new WeakMap<NestedCall, ToolView>();
+
+/**
+ * A call and the calls it made (a script's), each a call whose result may show for the person: a nested call's tool
+ * places its result as a top-level call's would (`hasResult`), from its arguments and status (it has no result).
+ */
+function withResults(tool: ToolView): ToolView[] {
+	const nested = (tool.calls ?? []).flatMap((call) => {
+		if (typeof call.args === "string") return [];
+		let view = nestedViews.get(call);
+		if (!view) {
+			view = {
+				id: call.id,
+				name: call.name,
+				args: call.args,
+				status: call.status,
+				output: call.output ?? "",
+				images: [],
+			};
+			nestedViews.set(call, view);
+		}
+		return [view];
+	});
+	return [tool, ...nested];
 }
 
 /** Where a call's result for the person shows, if it made one. */

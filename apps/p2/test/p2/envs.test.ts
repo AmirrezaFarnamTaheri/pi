@@ -24,7 +24,7 @@ import { terminalDaemon } from "../../plugins/terminals/daemon.ts";
 import type { TerminalEvent } from "../../plugins/terminals/protocol.ts";
 import { Workspace } from "../../plugins/workspace/contract.ts";
 import { Hosts } from "../../src/runtime/server.ts";
-import { expectChord, failureOf, holdIn, http, poll, startFixture, until } from "./helpers.ts";
+import { expectChord, failureOf, holdIn, poll, startFixture, until } from "./helpers.ts";
 
 const config = { type: "ssh" as const, host: "box" };
 function which(program: string): string | undefined {
@@ -320,8 +320,7 @@ test(
 		await chat.send({ text: "bash", requestId: "ssh-bash" }, BACKGROUND_CONTEXT);
 		await until(chat.view, (view) => results(view, "bash").some((text) => text.includes(session.cwd)), 60000);
 		const origin = `http://127.0.0.1:${fixture.server.port}`;
-		const uploaded = await http(
-			fixture.server.port,
+		const uploaded = await fixture.http(
 			`/upload?${new URLSearchParams({ session: session.id, name: "notes.txt" })}`,
 			{ method: "POST", headers: { Origin: origin }, body: "remote attachment" },
 		);
@@ -365,6 +364,9 @@ test(
 		assert.match(system, /REMOTE PROJECT sentinel/);
 		assert.match(system, /LOCAL GLOBAL sentinel/);
 		assert.match(system, /Remote skill sentinel/);
+		// Plugins' skills point at the server's files: a remote conversation gets the hint to write plugins there instead.
+		assert.doesNotMatch(sections.skills ?? "", /writing-p2-plugins/);
+		assert.match(sections["p2-plugins"] ?? "", /spawn a subagent with env null and cwd ".*\/plugins"/);
 		// The main agent's location tools see the environment (never its key) and where the session works.
 		await chat.send({ text: "location_envs {}", requestId: "ssh-location-envs" }, BACKGROUND_CONTEXT);
 		const listed = await until(chat.view, (view) => results(view, "location_envs").length > 0, 60000);
@@ -379,7 +381,10 @@ test(
 		await sharing.link({ mode: "view" }, BACKGROUND_CONTEXT);
 		const terminals = owner.hold(Terminals, { session: session.id, view: crypto.randomUUID() }, BACKGROUND_CONTEXT);
 		const { token } = await terminals.channel({}, BACKGROUND_CONTEXT);
-		const socket = new WebSocket(`ws://127.0.0.1:${fixture.server.port}/terminal?${new URLSearchParams({ token })}`);
+		// The grant admits the byte channel together with the owner's credentials (docs/p2-notes.md, terminals).
+		const socket = new WebSocket(`ws://127.0.0.1:${fixture.server.port}/terminal?${new URLSearchParams({ token })}`, {
+			headers: { Cookie: fixture.owner.cookie },
+		});
 		const events: TerminalEvent[] = [];
 		const output: Buffer[] = [];
 		socket.on("message", (bytes, binary) => {

@@ -18,8 +18,8 @@ import { canonicalizePath, getPathComparisonKey, shortenHomePath } from "../../.
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
-import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 import { filterSessionsByRegexInWorker } from "./session-selector-regex-worker.ts";
+import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 
 type SessionScope = "current" | "all";
 
@@ -291,6 +291,8 @@ class SessionList implements Component, Focusable {
 	private filteredSessions: FlatSessionNode[] = [];
 	private selectedIndex: number = 0;
 	private selectionTouched = false;
+	/** Keep the user's target across an incomplete session-load progress list. */
+	private pendingSelectedPath: string | undefined;
 	private searchInput: Input;
 	private showCwd = false;
 	private sortMode: SortMode = "threaded";
@@ -369,8 +371,10 @@ class SessionList implements Component, Focusable {
 		this.filterSessions(this.searchInput.getValue());
 	}
 
-	setSessions(sessions: SessionInfo[], showCwd: boolean): void {
-		const selectedPath = this.selectionTouched ? this.getSelectedSessionPath() : undefined;
+	setSessions(sessions: SessionInfo[], showCwd: boolean, partial = false): void {
+		const selectedPath = this.selectionTouched
+			? (this.pendingSelectedPath ?? this.getSelectedSessionPath())
+			: undefined;
 		this.allSessions = sessions;
 		this.showCwd = showCwd;
 		// Continuous discovery progress must not keep aborting the active worker.
@@ -385,7 +389,14 @@ class SessionList implements Component, Focusable {
 			this.selectedIndex = 0;
 		} else if (selectedPath) {
 			const selectedIndex = this.filteredSessions.findIndex((node) => node.session.path === selectedPath);
-			if (selectedIndex >= 0) this.selectedIndex = selectedIndex;
+			if (selectedIndex >= 0) {
+				this.selectedIndex = selectedIndex;
+				this.pendingSelectedPath = undefined;
+			} else {
+				// A progress list may omit the chosen file until its own read completes.
+				// Preserve its path rather than adopting the temporary row at this index.
+				this.pendingSelectedPath = partial ? selectedPath : undefined;
+			}
 		}
 	}
 
@@ -428,7 +439,12 @@ class SessionList implements Component, Focusable {
 			this.regexAbort = controller;
 			this.regexDelay = setTimeout(() => {
 				this.regexDelay = undefined;
-				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal)
+				void filterSessionsByRegexInWorker(nameFiltered, pattern, this.sortMode, controller.signal, (ids) => {
+					if (this.regexSearchVersion === version && !controller.signal.aborted)
+						this.onError?.(
+							`Regex search incomplete: skipped ${ids.length} oversized or unreadable session${ids.length === 1 ? "" : "s"} (${ids.slice(0, 3).join(", ")}).`,
+						);
+				})
 					.then((filtered) => {
 						if (this.regexSearchVersion !== version || controller.signal.aborted) return;
 						this.filteredSessions = filtered.map((session) => ({
@@ -438,8 +454,13 @@ class SessionList implements Component, Focusable {
 							ancestorContinues: [],
 						}));
 						const selected = this.regexSelectedPath;
-						const restored = selected ? this.filteredSessions.findIndex((node) => node.session.path === selected) : -1;
-						this.selectedIndex = restored >= 0 ? restored : Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
+						const restored = selected
+							? this.filteredSessions.findIndex((node) => node.session.path === selected)
+							: -1;
+						this.selectedIndex =
+							restored >= 0
+								? restored
+								: Math.max(0, Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1)));
 						this.regexSearching = false;
 						this.regexAbort = undefined;
 						const needsRefresh = this.regexNeedsRefresh;
@@ -695,6 +716,7 @@ class SessionList implements Component, Focusable {
 		}
 
 		this.selectionTouched = true;
+		this.pendingSelectedPath = undefined;
 		// Up arrow
 		if (kb.matches(keyData, "tui.select.up")) {
 			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
@@ -709,7 +731,10 @@ class SessionList implements Component, Focusable {
 		}
 		// Page down - jump down by maxVisible items
 		else if (kb.matches(keyData, "tui.select.pageDown")) {
-			this.selectedIndex = Math.max(0, Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible));
+			this.selectedIndex = Math.max(
+				0,
+				Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible),
+			);
 		}
 		// Enter
 		else if (kb.matches(keyData, "tui.select.confirm")) {
@@ -1054,7 +1079,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 				} else {
 					this.allSessions = sessions;
 				}
-				if (scope === this.scope) this.sessionList.setSessions(sessions, showCwd);
+				if (scope === this.scope) this.sessionList.setSessions(sessions, showCwd, true);
 			}
 			if (scope !== this.scope) return;
 			this.header.setProgress(loaded, total);
@@ -1126,7 +1151,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		const loading = (this.scope === "current" ? this.currentLoad : this.allLoad) !== null;
 		this.header.setScope(this.scope);
 		this.header.setLoading(loading);
-		this.sessionList.setSessions(sessions ?? [], this.scope === "all");
+		this.sessionList.setSessions(sessions ?? [], this.scope === "all", loading || sessions === null);
 		this.requestRender();
 		if (sessions === null && !loading) void this.loadScope(this.scope);
 	}

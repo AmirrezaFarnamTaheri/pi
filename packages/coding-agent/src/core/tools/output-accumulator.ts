@@ -77,7 +77,6 @@ export class OutputAccumulator {
 		}
 	}
 
-
 	/** Wait for a spill-file write buffer to drain before reading more subprocess output. */
 	waitForDrain(): Promise<void> | undefined {
 		const stream = this.tempFileStream;
@@ -91,14 +90,20 @@ export class OutputAccumulator {
 				stream.off("close", onClose);
 				stream.off("error", onError);
 			};
-			const onDrain = () => { cleanup(); resolve(); };
+			const onDrain = () => {
+				cleanup();
+				resolve();
+			};
 			const onClose = () => {
 				cleanup();
 				if (stream.errored) reject(stream.errored);
 				else if (stream.writableFinished) resolve();
 				else reject(new Error("Output file closed before write completed"));
 			};
-			const onError = (error: Error) => { cleanup(); reject(error); };
+			const onError = (error: Error) => {
+				cleanup();
+				reject(error);
+			};
 			stream.once("drain", onDrain);
 			stream.once("finish", onDrain);
 			stream.once("close", onClose);
@@ -118,7 +123,10 @@ export class OutputAccumulator {
 	}
 
 	snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
-		const tailTruncation = truncateTail(this.getSnapshotText(), {
+		// Clipping drops the partial first line of the retained tail. When the tail is only the end of
+		// one over-long line, that is everything, so show the end of that line instead.
+		const snapshotText = this.getSnapshotText() || this.tailText;
+		const tailTruncation = truncateTail(snapshotText, {
 			maxLines: this.maxLines,
 			maxBytes: this.maxBytes,
 		});

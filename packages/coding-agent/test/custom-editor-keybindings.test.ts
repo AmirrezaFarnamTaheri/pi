@@ -33,6 +33,22 @@ describe("CustomEditor prompt history keybindings", () => {
 	});
 });
 
+describe("CustomEditor background prompt shortcut", () => {
+	it("Ctrl+B triggers the background action instead of moving the editor cursor", () => {
+		const keybindings = new KeybindingsManager();
+		setKeybindings(keybindings);
+		const editor = new CustomEditor(new TuiMainScreen(new VirtualTerminal()), defaultEditorTheme, keybindings);
+		editor.setText("background this task");
+		const cursorBefore = editor.getCursor();
+		let launched = 0;
+		editor.onAction("app.command.background", () => launched++);
+		editor.handleInput("\x02");
+		expect(launched).toBe(1);
+		expect(editor.getText()).toBe("background this task");
+		expect(editor.getCursor()).toEqual(cursorBefore);
+	});
+});
+
 describe("CustomEditor selection page keybindings", () => {
 	it("pages an open autocomplete menu before pasting an image with the same key (#7629)", async () => {
 		// Bind both explicitly: the paste default is Alt+V on Windows and WSL.

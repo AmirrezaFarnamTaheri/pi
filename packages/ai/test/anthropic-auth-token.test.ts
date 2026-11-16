@@ -225,6 +225,14 @@ describe("Anthropic-compatible user agents", () => {
 		expect(mockState.createParams?.betas).toEqual(["custom-beta"]);
 	});
 
+	it("sends a supported Claude Code version for OAuth requests", async () => {
+		await streamAnthropic(anthropicModel, context, { apiKey: "sk-ant-oat-test" }).result();
+
+		const headers = mockState.constructorOpts?.defaultHeaders as Record<string, string>;
+		expect(headers["user-agent"]).toBe("claude-cli/2.1.322");
+		expect(headers["x-app"]).toBe("cli");
+	});
+
 	it("preserves explicit Anthropic beta header suppression", async () => {
 		await streamAnthropic(anthropicModel, context, {
 			apiKey: "anthropic-key",

@@ -220,17 +220,26 @@ test("TUI shows pi's code mode card: the script, the newest nested calls by dept
 
 test(
 	"browser: the script's step, its highlighted script and its calls, live and settled",
-	{ skip: !browserTests, timeout: 60_000 },
-	async () => {
+	{ skip: !browserTests, timeout: 120_000 },
+	async (context) => {
+		// A cold CI runner spends substantial time starting the fixture, bundling
+		// the browser script and shutting down Chromium. Leave time for a genuine
+		// 30-second DOM timeout to report its assertion instead of cancelling it.
+		const started = Date.now();
+		const mark = (phase: string) => context.diagnostic(`${phase}: ${Date.now() - started}ms`);
 		const fixture = await startFixture({ web: true });
+		mark("fixture started");
 		let browser: Browser | undefined;
 		try {
 			browser = await Browser.start();
+			mark("Chromium started");
+			await browser.signIn(fixture.owner);
 			await browser.metrics(390, 844);
 			await browser.open(`http://127.0.0.1:${fixture.server.port}`);
 			await browser.wait("document.querySelector('.app')");
 			await browser.loadFixture("codemode-card.ts");
 			await browser.wait("typeof window.showCodemode==='function'");
+			mark("browser fixture loaded");
 			const show = (view: ConversationView) => browser!.evaluate(`window.showCodemode(${JSON.stringify(view)})`);
 			const call = (index: number) => `document.querySelectorAll('[data-testid=call]')[${index}]`;
 			await show(running());
@@ -244,7 +253,7 @@ test(
 				await browser.evaluate<string>("document.querySelector('[data-testid=step]').textContent"),
 				/^codemoderead every file● running/,
 			);
-			await browser.click("[data-testid=step] button");
+			// The running step is expanded when the panel opens.
 			// The newest eight calls, the rest behind "Show all", as the transcript's card had them.
 			await browser.wait("document.querySelectorAll('[data-testid=call]').length===8");
 			assert.equal(
@@ -254,9 +263,12 @@ test(
 			assert.match(await browser.evaluate<string>(`${call(7)}.textContent`), /Running npm test|npm test/);
 			await browser.click("[data-testid=calls-more]");
 			await browser.wait("document.querySelectorAll('[data-testid=call]').length===10");
+			mark("live call details shown");
 			assert.equal(
-				await browser.evaluate("document.querySelector('.sheet-head h2').textContent"),
-				"Ran a script · 10 calls, 1 failed",
+				await browser.evaluate(
+					"document.querySelector('[data-testid=step] > button').getAttribute('aria-expanded')",
+				),
+				"true",
 			);
 			// The script: highlighted JS, whole (8 lines need no Show all).
 			assert.equal(
@@ -276,9 +288,20 @@ test(
 				await browser.evaluate<string>(`${call(9)}.textContent`),
 				/Running npm test.*running tests|npm test.*running tests/,
 			);
+			// Nested calls expand beneath their own rows without replacing the script or its siblings.
+			await browser.evaluate(`${call(9)}.querySelector('button').click()`);
+			await browser.wait(
+				"document.querySelector('.nested-detail pre.detail-output')?.textContent==='building\\nrunning tests'",
+			);
+			assert.equal(await browser.evaluate("document.querySelectorAll('[data-testid=call]').length"), 10);
+			assert.equal(
+				await browser.evaluate("document.querySelector('[data-testid=detail-input] .hljs-keyword')!==null"),
+				true,
+			);
 			// Settled: the result's calls; a cancelled one is interrupted, a failure.
 			await show(settled());
 			await browser.wait("document.querySelectorAll('[data-testid=call]').length===3");
+			mark("settled call details shown");
 			assert.equal(
 				await browser.evaluate(
 					"[...document.querySelectorAll('[data-testid=call]')].map((row)=>row.dataset.state).join()",

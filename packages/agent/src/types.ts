@@ -316,6 +316,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	toolExecution?: ToolExecutionMode;
 
+	/** Optional 1–32 worker parallel tool-execution limit; defaults to eight. Does not parallelize permission hooks. */
+	maxParallelToolExecutions?: number;
+
 	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *

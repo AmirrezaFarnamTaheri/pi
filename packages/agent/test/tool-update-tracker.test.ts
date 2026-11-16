@@ -18,7 +18,9 @@ describe("ToolUpdateTracker", () => {
 	it("waits for unresolved updates and preserves asynchronous failures", async () => {
 		const tracker = new ToolUpdateTracker();
 		let release!: () => void;
-		const pending = new Promise<void>((resolve) => { release = resolve; });
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		tracker.track(() => pending);
 		expect(tracker.pendingCount).toBe(1);
 		release();
@@ -42,7 +44,9 @@ describe("tool update progress under slow consumers", () => {
 	it("coalesces unawaited updates instead of accumulating thousands of blocked writes", async () => {
 		const updates = new ToolUpdateTracker(2);
 		let release!: () => void;
-		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		const delivered: number[] = [];
 		for (let index = 0; index < 10_000; index++) {
 			updates.track(() => {
@@ -71,10 +75,17 @@ describe("tool update cancellation", () => {
 	it("does not send a coalesced update after cancellation", async () => {
 		const updates = new ToolUpdateTracker(1);
 		let release!: () => void;
-		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		const delivered: string[] = [];
-		updates.track(() => { delivered.push("first"); return gate; });
-		updates.track(() => { delivered.push("second"); });
+		updates.track(() => {
+			delivered.push("first");
+			return gate;
+		});
+		updates.track(() => {
+			delivered.push("second");
+		});
 		updates.cancel();
 		release();
 		await updates.drain();

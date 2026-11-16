@@ -14,7 +14,7 @@ import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { Chat } from "../../plugins/chat/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Browser, browserTests } from "./browser.ts";
-import { clientHost, holdIn, poll, until } from "./helpers.ts";
+import { clientHost, holdIn, localOwner, poll, until } from "./helpers.ts";
 
 const draft = (text: string) =>
 	`(()=>{const e=document.querySelector('.composer textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(text)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`;
@@ -125,7 +125,8 @@ export default defineFacet((host) => host.serve(Delay, (_params, self) => {
 		port = address.port;
 		await new Promise<void>((resolve) => listener.close(() => resolve()));
 		await start();
-		const client = clientHost(port);
+		const owner = await localOwner({ port, dataDir: join(root, "data") });
+		const client = clientHost(owner);
 		try {
 			id = (
 				await (
@@ -145,6 +146,7 @@ export default defineFacet((host) => host.serve(Delay, (_params, self) => {
 			await client.close(BACKGROUND_CONTEXT);
 		}
 		browser = await Browser.start();
+		await browser.signIn(owner);
 		await browser.metrics(1280, 900);
 		// Count the chord WebSocket's opens and the dev notice reads; the sockets themselves remain real.
 		await browser.call("Page.addScriptToEvaluateOnNewDocument", {
@@ -153,7 +155,7 @@ export default defineFacet((host) => host.serve(Delay, (_params, self) => {
 			const originalFetch=window.fetch.bind(window);window.fetch=async(url,options)=>{const response=await originalFetch(url,options);if(String(url)==='/__p2_dev' && options?.method!=='POST')window.devNoticeReads++;return response;};
 			window.WebSocket=new Proxy(window.WebSocket,{construct(Target,args){
 				const socket=Reflect.construct(Target,args);
-				if(String(args[0]).endsWith('/chord'))socket.addEventListener('open',()=>window.reconnectOpens++);
+				if(new URL(String(args[0])).pathname==='/chord')socket.addEventListener('open',()=>window.reconnectOpens++);
 				return socket;
 			}});
 		`,
@@ -237,6 +239,11 @@ export default defineFacet((host) => host.serve(Delay, (_params, self) => {
 		await stop();
 		await browser.wait(`document.querySelector('.offline')`);
 		await delay(30_000);
+		// The sidebar keeps the rows as last seen while the server is down.
+		assert.match(
+			await browser.evaluate<string>("document.querySelector('.session-scroll')?.textContent ?? ''"),
+			/Reconnect fixture/,
+		);
 		await start();
 		await recovered("unsent outage draft");
 		assert.equal(await browser.evaluate<number>("window.reconnectOpens"), 2);

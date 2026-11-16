@@ -15,6 +15,7 @@ import {
 	summary,
 	type ToolActivity,
 	type ToolActivityTable,
+	wheelThought,
 } from "../../src/web/activity/model.ts";
 import type { Item, NestedCall, ToolView } from "../../src/web/transcript.ts";
 
@@ -311,6 +312,41 @@ test("unchanged turns keep their items; in a changed one, only what shows differ
 	assert.notEqual(rebuilt[4], first[4]);
 });
 
+test("equivalent rebuilt snapshots preserve existing user and answer row identities", () => {
+	const firstUser: Extract<Item, { type: "user" }> = {
+		type: "user",
+		key: "rebuild-user-1",
+		text: "First",
+		entryId: 1,
+		images: [],
+		files: [],
+		author: { kind: "owner", id: "owner", name: "Owner" },
+	};
+	const firstAnswer = response("rebuild-answer-1", 2, [{ type: "text", text: "Done." }]);
+	const before = chatItems([firstUser, firstAnswer], false);
+	const rebuiltUser: Extract<Item, { type: "user" }> = {
+		...firstUser,
+		author: { kind: "owner", id: "owner", name: "Owner" },
+		images: [],
+		files: [],
+	};
+	const rebuiltAnswer = { ...firstAnswer, message: structuredClone(firstAnswer.message) };
+	const again = chatItems([rebuiltUser, rebuiltAnswer], false);
+	assert.equal(again[0], before[0], "a user with unchanged values keeps its row object");
+	assert.equal(again[1], before[1], "an answer with rebuilt, identical message data keeps its row object");
+	const changed = chatItems(
+		[
+			rebuiltUser,
+			{
+				...rebuiltAnswer,
+				message: { ...rebuiltAnswer.message, content: [{ type: "text", text: "Changed." }] },
+			},
+		],
+		false,
+	);
+	assert.notEqual(changed[1], before[1], "an answer with changed text must update");
+});
+
 test("while an answer streams, the parts before its newest words keep their objects", () => {
 	const streaming = (text: string): Item => ({
 		...response("live", 9, [
@@ -585,4 +621,51 @@ test("at detail 1, a rebuilt run keeps its wheel when it shows the same", () => 
 	const again = [...made.slice(0, -1), { ...(made.at(-1) as Extract<Item, { type: "assistant" }>) }];
 	const second = chatItemsWith(again, false, true, TOOLS, 1);
 	assert.equal(second[1], first[1]);
+});
+
+test("a working wheel shows its newest thought below it, also while it streams, and none once done", () => {
+	const content: AssistantMessage["content"] = [
+		{ type: "thinking", thinking: "First plan." },
+		{ type: "toolCall", id: "a", name: "bash", arguments: { command: "check" } },
+		{ type: "thinking", thinking: "Wait for the deployment." },
+		{ type: "toolCall", id: "b", name: "bash", arguments: { command: "watch" } },
+	];
+	const shown = (parts: AssistantMessage["content"], working: boolean) => {
+		const items = chatItemsWith(
+			[user("preview", "Go"), response("preview-response", 2, parts)],
+			working,
+			true,
+			TOOLS,
+		);
+		const activity = items.findLast((item) => item.type === "activity");
+		assert.ok(activity?.type === "activity");
+		return wheelThought(activity.entries ?? [], activity.working)?.text;
+	};
+	assert.equal(shown(content, true), "Wait for the deployment.");
+	// The thought on the wheel's front is shown too: the slot below the wheel does not repeat anything above it.
+	assert.equal(shown(content.slice(0, -1), true), "Wait for the deployment.");
+	assert.equal(shown(content, false), undefined);
+	assert.equal(shown([content[3]!], true), undefined);
+	assert.equal(wheelThought([], true), undefined);
+});
+
+test("a note ends its wheel's thought: the wheel after it starts without one, and none leaks into another turn", () => {
+	const made = turn().slice(0, 3);
+	const shown = chatItemsWith(made, true, true, TOOLS);
+	const active = shown.findLast((item) => item.type === "activity");
+	assert.ok(active?.type === "activity");
+	assert.equal(wheelThought(active.entries ?? [], active.working), undefined);
+	const next = chatItemsWith(
+		[
+			...made,
+			user("next-preview", "Next"),
+			response("next-response", 5, [{ type: "toolCall", id: "next", name: "bash", arguments: {} }]),
+		],
+		true,
+		true,
+		TOOLS,
+	);
+	const current = next.findLast((item) => item.type === "activity");
+	assert.ok(current?.type === "activity");
+	assert.equal(wheelThought(current.entries ?? [], current.working), undefined);
 });

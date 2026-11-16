@@ -38,7 +38,6 @@ import type {
 	AuthResult,
 	ImageContent,
 	Model,
-	ProviderHeaders,
 	SystemMessage,
 	TextContent,
 	ToolResultMessage,
@@ -62,6 +61,7 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
+import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -74,7 +74,6 @@ import {
 	compact,
 	estimateContextTokens,
 	estimateProjectedContextTokens,
-	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -149,6 +148,7 @@ import {
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { ManualBackgroundController } from "./tools/manual-background.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
@@ -176,28 +176,7 @@ export function markRuntimeStreamFunction(streamFn: StreamFn, modelRuntime: Mode
 // Skill Block Parsing
 // ============================================================================
 
-/** Parsed skill block from a user message */
-export interface ParsedSkillBlock {
-	name: string;
-	location: string;
-	content: string;
-	userMessage: string | undefined;
-}
-
-/**
- * Parse a skill block from message text.
- * Returns null if the text doesn't contain a skill block.
- */
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-	const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-	if (!match) return null;
-	return {
-		name: match[1],
-		location: match[2],
-		content: match[3],
-		userMessage: match[4]?.trim() || undefined,
-	};
-}
+export { type ParsedSkillBlock, parseSkillBlock } from "./agent-session-utils.ts";
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {
@@ -256,12 +235,6 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // ============================================================================
 // Types
 // ============================================================================
-
-function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
-	return headers
-		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
-		: undefined;
-}
 
 export interface AgentSessionConfig {
 	agent: Agent;
@@ -378,33 +351,9 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-function estimateMessagesTokens(messages: AgentMessage[]): number {
-	let tokens = 0;
-	for (const message of messages) {
-		tokens += estimateTokens(message);
-	}
-	return tokens;
-}
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
-
-/**
- * Index of the model to cycle to, or undefined when there is nothing to switch to.
- * When the current model is not in the list (currentIndex -1), forward picks the first
- * entry and backward the last, so a one-entry list still selects its only model.
- */
-function getNextCycleIndex(
-	currentIndex: number,
-	length: number,
-	direction: "forward" | "backward",
-): number | undefined {
-	if (length === 0) return undefined;
-	if (currentIndex === -1) return direction === "forward" ? 0 : length - 1;
-	if (length === 1) return undefined;
-	return direction === "forward" ? (currentIndex + 1) % length : (currentIndex - 1 + length) % length;
-}
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -452,6 +401,8 @@ export class AgentSession {
 
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
+	/** Enables Ctrl+B for the local command currently running in the interactive UI. */
+	readonly manualBackgroundController = new ManualBackgroundController();
 	private _pendingBashMessages: BashExecutionMessage[] = [];
 
 	// Extension system
@@ -475,9 +426,11 @@ export class AgentSession {
 	/**
 	 * Tools of the restored or reloaded loadout that are not registered yet, such as tools of MCP
 	 * servers that are still connecting. They are activated when they are registered, and dropped when
-	 * `setActiveToolsByName()` deactivates a tool or the next agent run starts.
+	 * `setActiveToolsByName()` deactivates a tool of that loadout or the next agent run starts.
 	 */
 	private _pendingToolNames = new Set<string>();
+	/** The restored or reloaded loadout that `_pendingToolNames` belongs to. */
+	private _restoredToolNames = new Set<string>();
 	private _usesDefaultTools: boolean;
 	private _defaultToolModifiers: string[];
 	/** Matches the `--tools` entries: tool names or patterns. */
@@ -1606,10 +1559,14 @@ export class AgentSession {
 	setActiveToolsByName(toolNames: string[]): void {
 		const previous = this.getActiveToolNames();
 		this._setActiveTools(toolNames);
-		// A loadout that deactivates a tool replaces the restored one, whose pending tools are dropped.
-		// One that only adds tools, like activating tool_search, keeps them.
+		// A loadout that deactivates a tool of the restored one replaces it, and its pending tools are
+		// dropped. One that only adds tools, like activating tool_search, keeps them, and so does one
+		// that only deactivates tools outside the restored loadout, such as an extension's own tool that
+		// the restore or reload activated as newly registered.
 		const active = new Set(this.getActiveToolNames());
-		if (previous.some((name) => !active.has(name))) this._pendingToolNames.clear();
+		if (previous.some((name) => !active.has(name) && this._restoredToolNames.has(name))) {
+			this._pendingToolNames.clear();
+		}
 	}
 
 	private _setActiveTools(toolNames: string[]): void {
@@ -1902,6 +1859,7 @@ export class AgentSession {
 	 */
 	private _restoreToolsFromTranscript(modifiers: readonly string[] = []): void {
 		this._pendingToolNames.clear();
+		this._restoredToolNames.clear();
 		// All system messages on the branch, including those before a compaction. Compaction snapshots
 		// are derived from these, so replaying them gives the current loadout.
 		const systemMessages = this.sessionManager
@@ -1929,6 +1887,12 @@ export class AgentSession {
 		// Recorded tools that are not registered yet, such as MCP tools of servers still connecting, are
 		// activated when they register. Excluded tools never register, so they are not kept pending.
 		this._pendingToolNames = new Set(names.filter((name) => this._isAllowedTool(name)));
+		this._restoredToolNames = new Set(
+			applyToolModifiers(
+				getCurrentTools(systemMessages).map((tool) => tool.name),
+				modifiers,
+			),
+		);
 		// Ignores names that are not registered.
 		this._setActiveTools(names);
 	}
@@ -2703,6 +2667,8 @@ export class AgentSession {
 		const availableIds = new Set(
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
+		// Scoped entries wrap the model, so filter their provider through
+		// scoped.model rather than treating the entry itself as a Model.
 		const scopedModels = this._scopedModels.filter((scoped) =>
 			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
 		);
@@ -3778,7 +3744,12 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: {
+						commandPrefix: shellCommandPrefix,
+						shellPath,
+						backgroundController: this.manualBackgroundController,
+					},
+					powershell: { backgroundController: this.manualBackgroundController },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -3844,6 +3815,7 @@ export class AgentSession {
 		const addedDefaultTools = getDefaultTools().filter((name) => !previousDefaultTools.has(name));
 		// Tools the new extensions register later, such as MCP tools, are pending until then.
 		for (const name of this.getActiveToolNames()) this._pendingToolNames.add(name);
+		this._restoredToolNames = new Set(this.getActiveToolNames());
 		this._buildRuntime({
 			activeToolNames: [...this.getActiveToolNames(), ...addedDefaultTools],
 			flagValues: previousFlagValues,
@@ -3875,7 +3847,10 @@ export class AgentSession {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
 		const selected = this.model;
-		return (selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) || isRetryableAssistantError(message);
+		return (
+			(selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) ||
+			isRetryableAssistantError(message)
+		);
 	}
 
 	/**
@@ -4021,7 +3996,8 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
+				options?.operations ??
+					createLocalBashOperations({ shellPath, backgroundController: this.manualBackgroundController }),
 				{
 					onChunk: (delta) => {
 						onChunk?.(delta);
@@ -4511,9 +4487,9 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Get text content of last assistant message.
+	 * Get text content of the last assistant reply.
 	 * Useful for /copy command.
-	 * @returns Text content, or undefined if no assistant message exists
+	 * @returns Text content, or undefined if no assistant message exists or the last reply has no text
 	 */
 	getLastAssistantText(): string | undefined {
 		const lastAssistant = this.messages
@@ -4522,8 +4498,11 @@ export class AgentSession {
 			.find((m) => {
 				if (m.role !== "assistant") return false;
 				const msg = m as AssistantMessage;
-				// Skip aborted messages with no content
-				if (msg.stopReason === "aborted" && msg.content.length === 0) return false;
+				// Ignore aborted, errored, or tool-call-only turns with no usable text, but
+				// keep normally completed empty responses as the last reply.
+				if (msg.stopReason !== "stop" && !msg.content.some((c) => c.type === "text" && c.text.trim())) {
+					return false;
+				}
 				return true;
 			});
 

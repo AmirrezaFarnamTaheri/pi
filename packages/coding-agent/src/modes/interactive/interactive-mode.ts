@@ -49,8 +49,6 @@ import {
 	type TUI,
 	TuiAltScreen,
 	TuiMainScreen,
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -104,11 +102,17 @@ import {
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import { compareProviders } from "../../core/preferred-providers.ts";
 import { findMatchingProviders } from "../../core/provider-matching.ts";
 import { RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { planRadiusMcpServer } from "../../core/radius-mcp.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
-import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
+import {
+	formatMissingSessionCwdPrompt,
+	getMissingSessionCwdOptions,
+	type MissingSessionCwdChoice,
+	MissingSessionCwdError,
+} from "../../core/session-cwd.ts";
 import {
 	type SessionEntry,
 	SessionManager,
@@ -142,6 +146,7 @@ import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
+import { BuiltInHeader, type Expandable, ExpandableText } from "./components/built-in-header.ts";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { CustomEntryComponent } from "./components/custom-entry.ts";
@@ -158,14 +163,8 @@ import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { createMarkdownTransform } from "./components/markdown-transform.ts";
 import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-import {
-	type AuthSelectorProvider,
-	formatAuthSelectorProviderStatus,
-	formatAuthSelectorProviderType,
-	OAuthSelectorComponent,
-} from "./components/oauth-selector.ts";
+import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
 import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.ts";
-import { createLoginMenuSelector } from "./components/radius-login-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -186,6 +185,11 @@ import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
 import { editInExternalEditor } from "./external-editor.ts";
+import {
+	formatLoginProviderCompletionDescription,
+	getLoginProviderCompletionOptions,
+	getLoginProviderSearchText,
+} from "./login-completion.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
 import { type BlockedStatus, ProgramStatusReporter } from "./program-status-reporter.ts";
@@ -209,11 +213,6 @@ import { createInteractiveTui, createInteractiveTuiReference } from "./tui-rende
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
-/** Interface for components that can be expanded/collapsed */
-interface Expandable {
-	setExpanded(expanded: boolean): void;
-}
-
 interface ActiveEditor extends EditorComponent {
 	getCursor?(): { line: number; col: number };
 }
@@ -234,38 +233,6 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
-}
-
-class ExpandableText extends ThemedText implements Expandable {
-	private readonly state: { expanded: boolean };
-
-	constructor(
-		getCollapsedText: () => string,
-		getExpandedText: () => string,
-		expanded = false,
-		paddingX = 0,
-		paddingY = 0,
-	) {
-		const state = { expanded };
-		super(() => (state.expanded ? getExpandedText() : getCollapsedText()), paddingX, paddingY);
-		this.state = state;
-	}
-
-	setExpanded(expanded: boolean): void {
-		this.state.expanded = expanded;
-		this.invalidate();
-	}
-}
-
-/** The built-in header. Clicking its logo (the first two lines, after one column of padding) plays an easter egg. */
-class BuiltInHeader extends ExpandableText {
-	onLogoClick: ((column: number, row: number) => void) | undefined;
-
-	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-		if (event.type !== "click" || event.y > 1 || event.x < 1 || event.x > 4 || !this.onLogoClick) return undefined;
-		this.onLogoClick(event.screenX - event.x + 1, event.screenY - event.y);
-		return { handled: true };
-	}
 }
 
 type ExtensionDialogComponent = Component & { dispose?(): void };
@@ -367,16 +334,7 @@ function llamaCppPostLoginGuidance(actionLabel: string, loadedModelCount: number
 		: `${actionLabel}. Use /model to select a loaded llama.cpp model, or /llama to manage models.`;
 }
 
-type LoginProviderCompletionOption = {
-	id: string;
-	name: string;
-	authTypes: AuthSelectorProvider["authType"][];
-	subscription?: boolean;
-};
-
 const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
-
-const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
 function createFuzzyAutocompleteItems<T>(
 	items: T[],
@@ -387,43 +345,6 @@ function createFuzzyAutocompleteItems<T>(
 	const filtered = fuzzyFilter(items, prefix, getSearchText);
 	if (filtered.length === 0) return null;
 	return filtered.map(toAutocompleteItem);
-}
-
-function getLoginProviderCompletionOptions(
-	providerOptions: readonly AuthSelectorProvider[],
-): LoginProviderCompletionOption[] {
-	const byId = new Map<string, LoginProviderCompletionOption>();
-	for (const provider of providerOptions) {
-		const existing = byId.get(provider.id);
-		if (existing) {
-			if (!existing.authTypes.includes(provider.authType)) {
-				existing.authTypes.push(provider.authType);
-				existing.authTypes.sort((a, b) => AUTH_TYPE_ORDER[a] - AUTH_TYPE_ORDER[b]);
-			}
-			continue;
-		}
-		byId.set(provider.id, {
-			id: provider.id,
-			name: provider.name,
-			authTypes: [provider.authType],
-			subscription: provider.subscription,
-		});
-	}
-	return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function getLoginProviderSearchText(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes
-		.map((authType) => `${authType} ${formatAuthSelectorProviderType(authType, provider.subscription)}`)
-		.join(" ");
-	return `${provider.id} ${provider.name} ${authTypes}`;
-}
-
-function formatLoginProviderCompletionDescription(provider: LoginProviderCompletionOption): string {
-	const authTypes = provider.authTypes
-		.map((authType) => formatAuthSelectorProviderType(authType, provider.subscription))
-		.join("/");
-	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
 /**
@@ -1027,6 +948,8 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
+
+		this.session.manualBackgroundController.enable();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
@@ -2210,6 +2133,7 @@ export class InteractiveMode {
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
 		const session = this.session;
+		session?.manualBackgroundController?.enable();
 
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
@@ -2898,12 +2822,15 @@ export class InteractiveMode {
 		return result === "Yes";
 	}
 
-	private async promptForMissingSessionCwd(error: MissingSessionCwdError): Promise<string | undefined> {
-		const confirmed = await this.showExtensionConfirm(
-			"Session cwd not found",
+	private async promptForMissingSessionCwd(
+		error: MissingSessionCwdError,
+	): Promise<MissingSessionCwdChoice | undefined> {
+		const options = getMissingSessionCwdOptions(error.issue);
+		const label = await this.showExtensionSelector(
 			formatMissingSessionCwdPrompt(error.issue),
+			options.map((option) => option.label),
 		);
-		return confirmed ? error.issue.fallbackCwd : undefined;
+		return options.find((option) => option.label === label)?.value;
 	}
 
 	/**
@@ -2912,7 +2839,7 @@ export class InteractiveMode {
 	private showExtensionInput(
 		title: string,
 		placeholder?: string,
-		opts?: ExtensionUIDialogOptions,
+		opts?: ExtensionUIDialogOptions & { initialValue?: string },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -2934,7 +2861,7 @@ export class InteractiveMode {
 				placeholder,
 				(value) => finish(value),
 				() => finish(undefined),
-				{ tui: this.ui, timeout: opts?.timeout },
+				{ tui: this.ui, timeout: opts?.timeout, initialValue: opts?.initialValue },
 			);
 			this.pushExtensionDialog(input, { kind: "question", message: title });
 		});
@@ -3229,6 +3156,7 @@ export class InteractiveMode {
 			"app.message.copy",
 			() => void this.handleCopyCommand({ flashConfirmation: true, preferSelection: true }),
 		);
+		this.defaultEditor.onAction("app.command.background", () => this.handleBackgroundCommand());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
@@ -3413,8 +3341,14 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/logout") {
-				this.showOAuthSelector("logout");
+				// Keep the command alias, but use the same identity manager as /login.
 				this.editor.setText("");
+				this.showAccountManager();
+				return;
+			}
+			if (text === "/accounts") {
+				this.editor.setText("");
+				this.showAccountManager();
 				return;
 			}
 			if (text === "/new") {
@@ -4649,6 +4583,15 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Detach the existing running shell command; never restart a test or launch another agent. */
+	private handleBackgroundCommand(): void {
+		if (!this.session.manualBackgroundController.backgroundCurrentCommand()) {
+			this.showWarning("No running local shell command to send to background");
+			return;
+		}
+		this.showStatus("Running command detached; PID and output log will appear in its shell result");
+	}
+
 	private async handleFollowUp(): Promise<void> {
 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
 		if (!text) return;
@@ -5384,6 +5327,10 @@ export class InteractiveMode {
 
 		const model = await this.findExactModelMatch(searchTerm);
 		if (model) {
+			if (model.provider === "account-profiles") {
+				await this.enableAccountRotation(model.id, false);
+				return;
+			}
 			try {
 				await this.session.setModel(model, { persist: false });
 				this.footer.invalidate();
@@ -5527,6 +5474,11 @@ export class InteractiveMode {
 	private showModelSelector(initialSearchInput?: string): void {
 		this.showSelector((done) => {
 			const selectModel = async (model: Model<any>, persist: boolean) => {
+				if (model.provider === "account-profiles") {
+					done();
+					await this.enableAccountRotation(model.id, persist);
+					return;
+				}
 				try {
 					await this.session.setModel(model, { persist });
 					this.updateAvailableProviderCount();
@@ -5950,29 +5902,54 @@ export class InteractiveMode {
 			return result;
 		} catch (error: unknown) {
 			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Resume cancelled");
-					return { cancelled: true };
+				switch (await this.promptForMissingSessionCwd(error)) {
+					case "continue": {
+						const result = await this.runtimeHost.switchSession(sessionPath, {
+							cwdOverride: error.issue.fallbackCwd,
+							withSession: options?.withSession,
+							projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+						});
+						if (!result.cancelled) this.showStatus(`Resumed session in ${error.issue.fallbackCwd}`);
+						return result;
+					}
+					case "fork":
+						return this.switchToForkedSession(sessionPath, error.issue.fallbackCwd, options);
+					case undefined:
+						this.showStatus("Resume cancelled");
+						return { cancelled: true };
 				}
-				const result = await this.runtimeHost.switchSession(sessionPath, {
-					cwdOverride: selectedCwd,
-					withSession: options?.withSession,
-					projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
-				});
-				if (result.cancelled) {
-					return result;
-				}
-				this.showStatus("Resumed session in current cwd");
-				return result;
 			}
 			return this.handleFatalRuntimeError("Failed to resume session", error);
 		}
 	}
 
+	/** Fork a session whose stored cwd is gone into `cwd` and switch to the fork, like `--session <id>` from another project (#11060). */
+	private async switchToForkedSession(
+		sourcePath: string,
+		cwd: string,
+		options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
+	): Promise<{ cancelled: boolean }> {
+		const fork = SessionManager.forkFrom(sourcePath, cwd, this.sessionManager.getSessionDir());
+		const forkPath = fork.getSessionFile()!;
+		const result = await this.runtimeHost.switchSession(forkPath, {
+			withSession: options?.withSession,
+			projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
+		});
+		if (result.cancelled) {
+			// An extension vetoed the switch; drop the fork so cancelling leaves no copy behind.
+			fs.rmSync(forkPath, { force: true });
+			return result;
+		}
+		this.showStatus(`Forked into new session ${fork.getSessionId()} in ${cwd}`);
+		return result;
+	}
+
 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
 		const options: AuthSelectorProvider[] = [];
 		for (const provider of this.session.modelRuntime.getProviders()) {
+			// A provider's brand and an account's editable nickname are different fields.
+			const label = this.session.modelRuntime.getAccountLabel(provider.id);
+			const accountLabel = label === provider.name ? {} : { accountLabel: label };
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
 			const status = authStatus.configured
 				? {
@@ -5985,6 +5962,7 @@ export class InteractiveMode {
 				options.push({
 					id: provider.id,
 					name: provider.name,
+					...accountLabel,
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5995,6 +5973,7 @@ export class InteractiveMode {
 				options.push({
 					id: provider.id,
 					name: provider.name,
+					...accountLabel,
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -6002,27 +5981,31 @@ export class InteractiveMode {
 				});
 			}
 		}
-		return options.sort((a, b) => a.name.localeCompare(b.name));
-	}
-
-	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
-		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
-			.map(({ providerId, type }) => {
-				const provider = this.session.modelRuntime.getProvider(providerId);
-				return {
-					id: providerId,
-					name: provider?.name ?? providerId,
-					authType: type,
-					status: { type, source: "stored credential" },
-					subscription: provider?.auth.oauth?.isSubscription === true,
-				};
-			})
-			.sort((a, b) => a.name.localeCompare(b.name));
+		// The sort is stable, so a provider's account option stays above its API key option.
+		return options.sort(compareProviders);
 	}
 
 	private async handleLoginCommand(providerRef?: string): Promise<void> {
 		if (!providerRef) {
-			this.showLoginAuthTypeSelector();
+			this.showAccountManager();
+			return;
+		}
+		if (providerRef.startsWith("add ")) {
+			const search = providerRef.slice(4).trim();
+			const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
+			const eligible = this.getLoginProviderOptions().filter(
+				(provider) => !aliases.has(provider.id) && !!provider.method?.login,
+			);
+			// Adding an identity does not choose an auth method. Each source provider appears once.
+			const sources = eligible.filter(
+				(provider, index) => eligible.findIndex((item) => item.id === provider.id) === index,
+			);
+			const providerOptions = findMatchingProviders(sources, search);
+			if (providerOptions.length === 1) {
+				await this.startAdditionalAccountLogin(providerOptions[0]!);
+			} else {
+				this.showLoginProviderSelector(undefined, search, true);
+			}
 			return;
 		}
 
@@ -6054,98 +6037,478 @@ export class InteractiveMode {
 		}
 	}
 
-	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
-		// The top-level selector offers Radius directly, as its last option.
-		const radiusOption = providerOptions
-			? undefined
-			: this.getLoginProviderOptions("oauth").find((provider) => provider.id === RADIUS_PROVIDER_ID);
-		const radiusText = radiusOption ? `Sign in with ${radiusOption.name}` : undefined;
-		const radiusLabel = radiusOption ? `${radiusText}${formatAuthSelectorProviderStatus(radiusOption)}` : undefined;
-		const oauthProvider = providerOptions?.find((provider) => provider.authType === "oauth");
-		const oauthLoginLabel =
-			oauthProvider?.method && "loginLabel" in oauthProvider.method ? oauthProvider.method.loginLabel : undefined;
-		const subscriptionLabel = oauthLoginLabel ?? "Sign in with an account";
-		const apiKeyLabel = "Sign in with an API key";
-		const availableAuthTypes = providerOptions
-			? new Set(providerOptions.map((provider) => provider.authType))
-			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
-		const options: string[] = [];
-		if (availableAuthTypes.has("oauth")) {
-			options.push(subscriptionLabel);
-		}
-		if (availableAuthTypes.has("api_key")) {
-			options.push(apiKeyLabel);
-		}
-		if (radiusLabel) options.push(radiusLabel);
-
-		if (options.length === 0) {
-			this.showStatus("No login methods available.");
+	/**
+	 * Create a distinct, unsigned-in identity. Connecting credentials is a separate
+	 * explicit action so Add cannot accidentally replace the source provider's login.
+	 */
+	private async startAdditionalAccountLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+		const label = await this.showExtensionInput(`Name new ${providerOption.name} account`);
+		if (label === undefined) {
+			onBack?.();
 			return;
 		}
-
-		if (providerOptions && options.length === 1) {
-			const providerOption = providerOptions[0];
-			if (providerOption) {
-				void this.startProviderLogin(providerOption);
-			}
-			return;
+		try {
+			const profile = this.session.modelRuntime.addAccountAlias(providerOption.id, label);
+			this.showStatus(`Created ${profile.label} for ${providerOption.name}. Sign in when ready.`);
+			this.showAccountActions(profile);
+		} catch (error) {
+			this.showError(`Could not add account: ${error instanceof Error ? error.message : String(error)}`);
+			onBack?.();
 		}
+	}
 
-		const title = providerOptions?.[0]
-			? `Select authentication method for ${providerOptions[0].name}:`
-			: "Select authentication method:";
+	/** One source of truth for rotation actions in every account menu. */
+	private getRotatableSources(): string[] {
+		const runtime = this.session.modelRuntime;
+		const profiles = runtime.getAccountProfiles();
+		return [...new Set(profiles.map((profile) => profile.sourceProviderId))].filter((source) => {
+			const members = [
+				source,
+				...profiles.filter((profile) => profile.sourceProviderId === source).map((profile) => profile.id),
+			];
+			return members.filter((id) => runtime.hasConfiguredAuth(id)).length >= 2;
+		});
+	}
+
+	/** A single home for /login and /accounts: see, name, connect, switch and remove identities. */
+	private showAccountManager(): void {
+		const runtime = this.session.modelRuntime;
+		const aliases = runtime.getAccountProfiles();
+		const aliasIds = new Set(aliases.map((account) => account.id));
+		const originals = runtime
+			.getProviders()
+			.filter((provider) => !aliasIds.has(provider.id) && provider.id !== "account-profiles")
+			.filter((provider) => runtime.getProviderAuthStatus(provider.id).configured)
+			.map((provider) => ({
+				id: provider.id,
+				label: runtime.getAccountLabel(provider.id),
+				sourceProviderId: provider.id,
+				original: true,
+			}));
+		const accounts = [...originals, ...aliases.map((profile) => ({ ...profile, original: false }))];
+		const baseLabels = accounts.map((profile) => {
+			const provider = runtime.getProvider(profile.sourceProviderId)?.name ?? profile.sourceProviderId;
+			return `${profile.label} · ${provider}`;
+		});
+		const duplicates = new Set(baseLabels.filter((name, index) => baseLabels.indexOf(name) !== index));
+		const items = accounts.map((profile, index) => {
+			const connected = runtime.getProviderAuthStatus(profile.id).configured;
+			const selected = this.session.model?.provider === profile.id;
+			const name = baseLabels[index]!;
+			return {
+				profile,
+				// Show stable IDs only when two accounts have the same nickname and provider.
+				label: `${selected ? "●" : connected ? "✓" : "○"} ${name}${duplicates.has(name) ? ` · ${profile.id}` : ""}`,
+			};
+		});
+		const signIn = "＋ Sign in to existing account";
+		const add = "＋ Create separate account";
+		const rotation =
+			this.session.model?.provider === "account-profiles"
+				? `↻ Rotation on · ${runtime.getProvider(this.session.model.id)?.name ?? this.session.model.id}`
+				: "↻ Rotate accounts";
+		const actions = [signIn, add, ...(this.getRotatableSources().length > 0 ? [rotation] : [])];
 		this.showSelector((done) => {
-			const onSelect = (option: string) => {
-				done();
-				if (radiusOption && option === radiusLabel) {
-					void this.startProviderLogin(radiusOption, () => this.showLoginAuthTypeSelector());
-					return;
-				}
-				const authType = option === subscriptionLabel ? "oauth" : "api_key";
-				if (providerOptions) {
-					const providerOption = providerOptions.find((provider) => provider.authType === authType);
-					if (providerOption) {
-						void this.startProviderLogin(providerOption, () => this.showLoginAuthTypeSelector(providerOptions));
+			const selector = new ExtensionSelectorComponent(
+				"Login · accounts",
+				[...items.map((item) => item.label), ...actions],
+				(option) => {
+					done();
+					if (option === signIn) this.showLoginProviderSelector();
+					else if (option === add) this.showLoginProviderSelector(undefined, undefined, true);
+					else if (option === rotation) this.showAccountRotationSelector();
+					else {
+						const account = items.find((item) => item.label === option)?.profile;
+						if (account) this.showAccountActions(account);
 					}
-					return;
-				}
-				this.showLoginProviderSelector(authType);
-			};
-			const onCancel = () => {
-				done();
-				this.ui.requestRender();
-			};
-			const selector =
-				radiusLabel && radiusText
-					? createLoginMenuSelector(
-							this.ui,
-							title,
-							options,
-							{ label: radiusLabel, text: radiusText },
-							onSelect,
-							onCancel,
-						)
-					: new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				{
+					description:
+						"Labels identify accounts; provider brands are fixed. ● active · ✓ connected · ○ unsigned · → manage · r rename · x remove",
+					sectionLabels:
+						items.length > 0
+							? { 0: "Existing accounts", [items.length]: "Account actions" }
+							: { 0: "Account actions" },
+					onShortcut: (keyData, label) => {
+						const profile = items.find((item) => item.label === label)?.profile;
+						if (!profile) return false;
+						if (matchesKey(keyData, "right")) {
+							done();
+							this.showAccountActions(profile);
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile, true);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile, true);
+						} else return false;
+						return true;
+					},
+				},
+			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
-	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
-		const providerOptions = this.getLoginProviderOptions(authType);
+	private showAccountActions(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
+		const signIn = this.session.modelRuntime.hasConfiguredAuth(profile.id) ? "Sign in again" : "Sign in";
+		const choose = "Choose model";
+		const rename = "Rename account";
+		const rotation = "Rotate accounts for this provider";
+		const remove = profile.original ? "Disconnect account" : "Delete account";
+		const canRotate = this.getRotatableSources().includes(profile.sourceProviderId);
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				profile.label,
+				[choose, signIn, rename, ...(canRotate ? [rotation] : []), remove],
+				(option) => {
+					done();
+					if (option === signIn) {
+						const methods = this.getLoginProviderOptions().filter((item) => item.id === profile.id);
+						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountManager());
+						else if (methods.length > 1) this.showLoginAuthTypeSelector(methods);
+						else this.showError("Sign-in provider not available");
+					} else if (option === choose) this.showAccountModelSelector(profile);
+					else if (option === rename) void this.renameAccountFromMenu(profile);
+					else if (option === rotation) void this.enableAccountRotation(profile.sourceProviderId);
+					else if (option === remove) this.confirmAccountRemoval(profile);
+				},
+				() => {
+					done();
+					this.showAccountManager();
+				},
+				{
+					description: `Provider: ${profile.sourceProviderId} · account ID: ${profile.id} · ← back · r rename · x remove`,
+					onShortcut: (keyData) => {
+						if (matchesKey(keyData, "left")) {
+							done();
+							this.showAccountManager();
+						} else if (keyData === "r") {
+							done();
+							void this.renameAccountFromMenu(profile);
+						} else if (keyData === "x" || matchesKey(keyData, "delete")) {
+							done();
+							this.confirmAccountRemoval(profile);
+						} else return false;
+						return true;
+					},
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private async renameAccountFromMenu(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): Promise<void> {
+		const entered = await this.showExtensionInput(`Rename ${profile.label}`, undefined, {
+			initialValue: profile.label,
+		});
+		if (entered === undefined) {
+			if (returnToLogin) this.showAccountManager();
+			else this.showAccountActions(profile);
+			return;
+		}
+		try {
+			const name = this.session.modelRuntime.renameAccount(profile.id, entered);
+			this.showStatus(`Renamed ${profile.label} to ${name}`);
+			this.showAccountManager();
+		} catch (error) {
+			this.showError(`Could not rename account: ${error instanceof Error ? error.message : String(error)}`);
+			this.showAccountActions(profile);
+		}
+	}
+
+	private showAccountModelSelector(profile: {
+		id: string;
+		label: string;
+		sourceProviderId: string;
+		original?: boolean;
+	}): void {
+		const models = this.session.modelRuntime.getModels(profile.id);
+		if (!this.session.modelRuntime.hasConfiguredAuth(profile.id)) {
+			this.showStatus("Sign in to this account before selecting its models.");
+			return;
+		}
+		if (models.length === 0) {
+			this.showStatus("No models discovered for this account. Try signing in again and refreshing its catalog.");
+			return;
+		}
+		const items = models.map((model) => ({ model, label: `${model.name}  ·  ${model.id}` }));
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Models · ${profile.label}`,
+				items.map((item) => item.label),
+				(label) => {
+					done();
+					const selected = items.find((item) => item.label === label)?.model;
+					if (!selected) return;
+					void this.session
+						.setModel(selected, { persist: true })
+						.then(() => {
+							this.footer.invalidate();
+							this.updateEditorBorderColor();
+							this.showStatus(`Selected ${selected.id} using ${profile.label}`);
+						})
+						.catch((error: unknown) =>
+							this.showError(
+								`Model selection failed: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						);
+				},
+				() => {
+					done();
+					this.showAccountActions(profile);
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private confirmAccountRemoval(
+		profile: { id: string; label: string; sourceProviderId: string; original?: boolean },
+		returnToLogin = false,
+	): void {
+		const confirm = profile.original ? "Disconnect" : "Delete";
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`${confirm} ${profile.label}?`,
+				["Cancel", confirm],
+				(option) => {
+					done();
+					if (option !== confirm) {
+						if (returnToLogin) this.showAccountManager();
+						else this.showAccountActions(profile);
+						return;
+					}
+					void (async () => {
+						const runtime = this.session.modelRuntime;
+						const selected = this.session.model;
+						const connectedAfterRemoval = [
+							profile.sourceProviderId,
+							...runtime
+								.getAccountProfiles()
+								.filter(
+									(account) =>
+										account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id,
+								)
+								.map((account) => account.id),
+						].filter((id) => id !== profile.id && runtime.hasConfiguredAuth(id)).length;
+						const rotationWillStop = connectedAfterRemoval < 2;
+						const activeNeedsSwitch =
+							selected?.provider === profile.id ||
+							(rotationWillStop &&
+								selected?.provider === "account-profiles" &&
+								selected.id === profile.sourceProviderId);
+						const defaultProvider = this.settingsManager.getDefaultProvider();
+						const defaultNeedsUpdate =
+							defaultProvider === profile.id ||
+							(rotationWillStop &&
+								defaultProvider === "account-profiles" &&
+								this.settingsManager.getDefaultModel() === profile.sourceProviderId);
+						if (activeNeedsSwitch || defaultNeedsUpdate) {
+							const fallback = runtime
+								.getAvailableSnapshot()
+								.find(
+									(model) =>
+										model.provider !== profile.id &&
+										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
+								);
+							if (!fallback) {
+								throw new Error(
+									"No other available model. Choose a different model or sign in to another account before removing the active or default account.",
+								);
+							}
+							if (activeNeedsSwitch) {
+								await this.session.setModel(fallback, { persist: defaultNeedsUpdate });
+							} else if (defaultNeedsUpdate) {
+								this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
+							}
+						}
+						if (profile.original) await runtime.logout(profile.id);
+						else await runtime.removeAccountAlias(profile.id);
+						await this.updateAvailableProviderCount();
+						this.footer.invalidate();
+						this.updateEditorBorderColor();
+						this.showStatus(
+							profile.original ? `Removed saved login for ${profile.label}` : `Deleted ${profile.label}`,
+						);
+						this.showAccountManager();
+					})().catch((error: unknown) =>
+						this.showError(
+							`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`,
+						),
+					);
+				},
+				() => {
+					done();
+					if (returnToLogin) this.showAccountManager();
+					else this.showAccountActions(profile);
+				},
+				{
+					description: profile.original
+						? "Removes the saved login; the provider remains available to sign in again."
+						: "Removes this account and its saved login. Other accounts stay unchanged.",
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private async enableAccountRotation(sourceProviderId: string, persist = false): Promise<void> {
+		const runtime = this.session.modelRuntime;
+		const members = [
+			sourceProviderId,
+			...runtime
+				.getAccountProfiles()
+				.filter((profile) => profile.sourceProviderId === sourceProviderId)
+				.map((profile) => profile.id),
+		];
+		const connected = members.filter((providerId) => runtime.hasConfiguredAuth(providerId));
+		if (connected.length < 2) {
+			this.showError("Sign in to at least two distinct accounts for this provider before enabling rotation.");
+			return;
+		}
+		const virtual = runtime.getModel("account-profiles", sourceProviderId);
+		if (!virtual) {
+			this.showError("Add another account for this provider to enable rotation.");
+			return;
+		}
+		// Selecting the rotation group already expresses intent; do not ask a second time.
+		await this.activateAccountRotation(sourceProviderId, virtual, persist);
+	}
+
+	private async activateAccountRotation(
+		sourceProviderId: string,
+		virtual: Model<any>,
+		persist: boolean,
+	): Promise<void> {
+		try {
+			await this.session.setModel(virtual, { persist });
+			this.footer.invalidate();
+			this.updateEditorBorderColor();
+			this.showStatus(
+				`Rotation enabled for ${sourceProviderId}${persist ? " (saved as default)" : " (this session)"}. Tool continuations stay on the same account.`,
+			);
+		} catch (error) {
+			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private showAccountRotationSelector(): void {
+		const sources = this.getRotatableSources();
+		if (sources.length === 0) {
+			this.showStatus("Sign in to two accounts with the same provider to enable rotation.");
+			return;
+		}
+		const items = sources.map((source) => {
+			const memberIds = [
+				source,
+				...this.session.modelRuntime
+					.getAccountProfiles()
+					.filter((profile) => profile.sourceProviderId === source)
+					.map((profile) => profile.id),
+			];
+			const connected = memberIds.filter((id) => this.session.modelRuntime.hasConfiguredAuth(id)).length;
+			return {
+				source,
+				name: `${this.session.modelRuntime.getModel("account-profiles", source)?.name ?? source}  ·  ${connected} connected`,
+			};
+		});
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				"Choose an automatic rotation group",
+				items.map((item) => item.name),
+				(name) => {
+					done();
+					const item = items.find((entry) => entry.name === name);
+					if (item) void this.enableAccountRotation(item.source);
+				},
+				() => {
+					done();
+					this.showAccountManager();
+				},
+				{
+					description:
+						"Choose a group to rotate signed-in accounts on new turns; existing messages and tool results are sent to the selected account.",
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
+		if (!providerOptions) {
+			this.showAccountManager();
+			return;
+		}
+		if (providerOptions.length === 1) {
+			void this.startProviderLogin(providerOptions[0]!, () => this.showAccountManager());
+			return;
+		}
+		const choices = providerOptions.map((provider) => ({
+			provider,
+			label: provider.authType === "oauth" ? "Sign in with an account" : "Use an API key",
+		}));
+		this.showSelector((done) => {
+			const selector = new ExtensionSelectorComponent(
+				`Sign in · ${providerOptions[0]?.name ?? "Provider"}`,
+				choices.map((item) => item.label),
+				(label) => {
+					done();
+					const selected = choices.find((item) => item.label === label)?.provider;
+					if (selected) void this.startProviderLogin(selected, () => this.showAccountManager());
+				},
+				() => {
+					done();
+					this.showAccountManager();
+				},
+			);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
+	}
+
+	private showLoginProviderSelector(
+		authType?: AuthSelectorProvider["authType"],
+		initialSearchInput?: string,
+		addAccount = false,
+	): void {
+		const aliases = new Set(this.session.modelRuntime.getAccountProfiles().map((profile) => profile.id));
+		const eligible = this.getLoginProviderOptions(authType).filter(
+			(provider) => !addAccount || (!aliases.has(provider.id) && !!provider.method?.login),
+		);
+		// The new account has no auth method until Sign in is chosen later.
+		const providerOptions = addAccount
+			? eligible
+					.filter((provider, index) => eligible.findIndex((item) => item.id === provider.id) === index)
+					.map((provider) => ({ ...provider, accountLabel: undefined }))
+			: eligible;
 		if (providerOptions.length === 0) {
 			const message =
 				authType === "oauth"
 					? "No account providers available."
 					: authType === "api_key"
 						? "No API key providers available."
-						: "No login providers available.";
+						: addAccount
+							? "No providers support a separate account."
+							: "No login providers available.";
 			this.showStatus(message);
 			return;
 		}
 
 		this.showSelector((done) => {
 			const selector = new OAuthSelectorComponent(
-				"login",
+				addAccount ? "add" : "login",
 				providerOptions,
 				async (providerId, selectedAuthType) => {
 					done();
@@ -6157,81 +6520,24 @@ export class InteractiveMode {
 						return;
 					}
 
-					await this.startProviderLogin(providerOption, () =>
-						this.showLoginProviderSelector(authType, initialSearchInput),
-					);
-				},
-				() => {
-					done();
-					if (authType) {
-						this.showLoginAuthTypeSelector();
+					if (addAccount) {
+						await this.startAdditionalAccountLogin(providerOption, () =>
+							this.showLoginProviderSelector(authType, initialSearchInput, true),
+						);
 					} else {
-						this.ui.requestRender();
-					}
-				},
-				initialSearchInput,
-			);
-			return { component: selector, focus: selector };
-		});
-	}
-
-	private async showOAuthSelector(mode: "login" | "logout"): Promise<void> {
-		if (mode === "login") {
-			this.showLoginAuthTypeSelector();
-			return;
-		}
-
-		let providerOptions: AuthSelectorProvider[];
-		try {
-			providerOptions = await this.getLogoutProviderOptions();
-		} catch (error) {
-			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
-			return;
-		}
-		if (providerOptions.length === 0) {
-			this.showStatus(
-				"No stored credentials to remove. /logout only removes credentials saved by /login; environment variables and models.json config are unchanged.",
-			);
-			return;
-		}
-
-		this.showSelector((done) => {
-			const selector = new OAuthSelectorComponent(
-				mode,
-				providerOptions,
-				async (providerId: string) => {
-					done();
-
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
-					if (!providerOption) {
-						return;
-					}
-
-					try {
-						await this.session.modelRuntime.logout(providerOption.id, {
-							signal: AbortSignal.timeout(15_000),
-						});
-						await this.updateAvailableProviderCount();
-						const message =
-							providerOption.authType === "oauth"
-								? `Logged out of ${providerOption.name}`
-								: `Removed stored API key for ${providerOption.name}. Environment variables and models.json config are unchanged.`;
-						this.showStatus(message);
-					} catch (error: unknown) {
-						const message = error instanceof Error ? error.message : String(error);
-						this.showError(
-							error instanceof CredentialSynchronizationError
-								? `Credentials removed for ${providerOption.name}, but local model state could not be synchronized: ${message}`
-								: `Logout failed: ${message}`,
+						await this.startProviderLogin(providerOption, () =>
+							this.showLoginProviderSelector(authType, initialSearchInput),
 						);
 					}
 				},
 				() => {
 					done();
-					this.ui.requestRender();
+					this.showAccountManager();
 				},
+				initialSearchInput,
+				this.ui,
 			);
-			return { component: selector, focus: selector };
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
 
@@ -6454,7 +6760,7 @@ export class InteractiveMode {
 		} else if (prompt.type === "manual_code") {
 			response = dialog.showManualInput(prompt.message);
 		} else {
-			response = dialog.showPrompt(prompt.message, prompt.placeholder);
+			response = dialog.showPrompt(prompt.message, prompt.placeholder, prompt.type === "secret");
 		}
 		if (!prompt.signal) return response;
 		if (prompt.signal.aborted) throw new Error("Login cancelled");
@@ -6742,18 +7048,21 @@ export class InteractiveMode {
 			this.showStatus(`Session imported from: ${inputPath}`);
 		} catch (error: unknown) {
 			if (error instanceof MissingSessionCwdError) {
-				const selectedCwd = await this.promptForMissingSessionCwd(error);
-				if (!selectedCwd) {
-					this.showStatus("Import cancelled");
-					return;
+				switch (await this.promptForMissingSessionCwd(error)) {
+					case "continue": {
+						const result = await this.runtimeHost.importFromJsonl(inputPath, error.issue.fallbackCwd);
+						this.showStatus(result.cancelled ? "Import cancelled" : `Session imported from: ${inputPath}`);
+						return;
+					}
+					case "fork": {
+						const result = await this.switchToForkedSession(inputPath, error.issue.fallbackCwd);
+						if (result.cancelled) this.showStatus("Import cancelled");
+						return;
+					}
+					case undefined:
+						this.showStatus("Import cancelled");
+						return;
 				}
-				const result = await this.runtimeHost.importFromJsonl(inputPath, selectedCwd);
-				if (result.cancelled) {
-					this.showStatus("Import cancelled");
-					return;
-				}
-				this.showStatus(`Session imported from: ${inputPath}`);
-				return;
 			}
 			if (error instanceof SessionImportFileNotFoundError) {
 				this.showError(`Failed to import session: ${error.message}`);
@@ -6975,6 +7284,10 @@ export class InteractiveMode {
 		const jumpBackward = this.getEditorKeyDisplay("tui.editor.jumpBackward");
 		const pageUp = this.getEditorKeyDisplay("tui.editor.pageUp");
 		const pageDown = this.getEditorKeyDisplay("tui.editor.pageDown");
+		const scrollPageUp = this.getEditorKeyDisplay("tui.altScreen.pageUp");
+		const scrollPageDown = this.getEditorKeyDisplay("tui.altScreen.pageDown");
+		const scrollLineUp = this.getEditorKeyDisplay("tui.altScreen.lineUp");
+		const scrollLineDown = this.getEditorKeyDisplay("tui.altScreen.lineDown");
 
 		// Editing keybindings
 		const submit = this.getEditorKeyDisplay("tui.input.submit");
@@ -7001,6 +7314,7 @@ export class InteractiveMode {
 		const externalEditor = this.getAppKeyDisplay("app.editor.external");
 		const cycleModelBackward = this.getAppKeyDisplay("app.model.cycleBackward");
 		const copyMessage = this.getAppKeyDisplay("app.message.copy");
+		const backgroundPrompt = this.getAppKeyDisplay("app.command.background");
 		const followUp = this.getAppKeyDisplay("app.message.followUp");
 		const dequeue = this.getAppKeyDisplay("app.message.dequeue");
 		const pasteImage = this.getAppKeyDisplay("app.clipboard.pasteImage");
@@ -7016,6 +7330,8 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+| \`${scrollLineUp}\` / \`${scrollLineDown}\` | Scroll fullscreen transcript by line |
+| \`${scrollPageUp}\` / \`${scrollPageDown}\` | Scroll fullscreen transcript by page |
 
 **Editing**
 | Key | Action |
@@ -7045,7 +7361,7 @@ export class InteractiveMode {
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${copyMessage}\` | Copy selection or last assistant message |
-| \`${followUp}\` | Queue follow-up message |
+| \`${backgroundPrompt}\` | Detach a running local shell command without restarting it |\n| \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |
 | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
 | \`/\` | Slash commands |
@@ -7215,6 +7531,9 @@ export class InteractiveMode {
 				{ excludeFromContext, operations: eventResult?.operations },
 			);
 
+			if (result.background && this.bashComponent) {
+				this.bashComponent.appendOutput(`\n${result.output}\n`);
+			}
 			if (this.bashComponent) {
 				this.bashComponent.setComplete(
 					result.exitCode,
@@ -7245,6 +7564,7 @@ export class InteractiveMode {
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+		this.session.manualBackgroundController.disable();
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

@@ -3,11 +3,19 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AnyModel, Api, Model, Provider } from "@earendil-works/pi-ai";
-import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import { RotationPool, classifyCredentialFailure, type RotationHealth, type RotationStrategy, type RotationTarget } from "./account-rotation-policy.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { createApiKeyAccountAlias, createOAuthAccountAlias } from "../core/account-aliases.ts";
+
+export { createApiKeyAccountAlias, createOAuthAccountAlias } from "../core/account-aliases.ts";
+
+import {
+	classifyCredentialFailure,
+	type RotationHealth,
+	RotationPool,
+	type RotationStrategy,
+	type RotationTarget,
+} from "./account-rotation-policy.ts";
 
 export interface RotationMember extends RotationTarget {
 	/** Environment variable name holding an API key, never its value. */
@@ -57,20 +65,35 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			throw new Error(`Rotation pool ${raw.id} needs between 1 and 64 account slots`);
 		}
 		const cooldownMs = raw.cooldownMs;
-		if (cooldownMs !== undefined && (typeof cooldownMs !== "number" || !Number.isSafeInteger(cooldownMs) || cooldownMs < 1 || cooldownMs > 86_400_000)) {
+		if (
+			cooldownMs !== undefined &&
+			(typeof cooldownMs !== "number" ||
+				!Number.isSafeInteger(cooldownMs) ||
+				cooldownMs < 1 ||
+				cooldownMs > 86_400_000)
+		) {
 			throw new Error(`Rotation pool ${raw.id} has an invalid cooldownMs`);
 		}
-		if (raw.name !== undefined && typeof raw.name !== "string") throw new Error(`Rotation pool ${raw.id} has an invalid name`);
-		if (raw.strategy !== undefined && (typeof raw.strategy !== "string" ||
-			!["round-robin", "sticky", "random", "hybrid"].includes(raw.strategy))) {
+		if (raw.name !== undefined && typeof raw.name !== "string")
+			throw new Error(`Rotation pool ${raw.id} has an invalid name`);
+		if (
+			raw.strategy !== undefined &&
+			(typeof raw.strategy !== "string" || !["round-robin", "sticky", "random", "hybrid"].includes(raw.strategy))
+		) {
 			throw new Error(`Rotation pool ${raw.id} has an invalid strategy`);
 		}
 		const members: RotationMember[] = [];
 		const slots = new Set<string>();
 		const credentials = new Set<string>();
 		for (const member of raw.members) {
-			if (!record(member) || typeof member.provider !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(member.provider) ||
-				typeof member.model !== "string" || member.model.length === 0 || member.model.length > 256) {
+			if (
+				!record(member) ||
+				typeof member.provider !== "string" ||
+				!/^[a-z][a-z0-9_-]{0,63}$/.test(member.provider) ||
+				typeof member.model !== "string" ||
+				member.model.length === 0 ||
+				member.model.length > 256
+			) {
 				throw new Error(`Rotation pool ${raw.id} has an invalid account slot`);
 			}
 			if (Object.hasOwn(member, "apiKey") || Object.hasOwn(member, "key")) {
@@ -84,12 +107,16 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			credentials.add(member.provider);
 			const target: RotationMember = { provider: member.provider, model: member.model };
 			if (member.apiKeyEnv !== undefined) {
-				if (typeof member.apiKeyEnv !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(member.apiKeyEnv) ||
-					typeof member.sourceProvider !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(member.sourceProvider) ||
-					member.provider === member.sourceProvider) {
+				if (
+					typeof member.apiKeyEnv !== "string" ||
+					!/^[A-Za-z_][A-Za-z0-9_]*$/.test(member.apiKeyEnv) ||
+					typeof member.sourceProvider !== "string" ||
+					!/^[a-z][a-z0-9_-]{0,63}$/.test(member.sourceProvider) ||
+					member.provider === member.sourceProvider
+				) {
 					throw new Error("Key slots require distinct provider alias, sourceProvider and apiKeyEnv name");
 				}
-				
+
 				const identity = `${member.sourceProvider}\u0000${member.apiKeyEnv}`;
 				const previousAlias = keyIdentities.get(identity);
 				if (previousAlias && previousAlias !== member.provider) {
@@ -99,7 +126,11 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 				target.apiKeyEnv = member.apiKeyEnv;
 				target.sourceProvider = member.sourceProvider;
 			} else if (member.sourceProvider !== undefined) {
-				if (typeof member.sourceProvider !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(member.sourceProvider) || member.provider === member.sourceProvider) {
+				if (
+					typeof member.sourceProvider !== "string" ||
+					!/^[a-z][a-z0-9_-]{0,63}$/.test(member.sourceProvider) ||
+					member.provider === member.sourceProvider
+				) {
 					throw new Error("OAuth slots require a distinct provider alias and sourceProvider");
 				}
 				target.sourceProvider = member.sourceProvider;
@@ -112,145 +143,19 @@ export function parseRotationConfiguration(value: unknown): RotationConfiguratio
 			}
 			members.push(target);
 		}
-		pools.push({ id: raw.id, ...(raw.name === undefined ? {} : { name: raw.name }),
+		pools.push({
+			id: raw.id,
+			...(raw.name === undefined ? {} : { name: raw.name }),
 			...(cooldownMs === undefined ? {} : { cooldownMs: cooldownMs as number }),
-			...(raw.strategy === undefined ? {} : { strategy: raw.strategy as RotationStrategy }), members });
+			...(raw.strategy === undefined ? {} : { strategy: raw.strategy as RotationStrategy }),
+			members,
+		});
 	}
 	return { pools };
 }
 
 /** Keep the original provider identity for upstream SDK compatibility, then restore the
  * account alias on Pi-visible responses (including partial streaming events). */
-function accountStream(stream: AssistantMessageEventStream, id: string): AssistantMessageEventStream {
-	const output = new AssistantMessageEventStream();
-	void (async () => {
-		try {
-			let terminal = false;
-			for await (const event of stream) {
-				if ("partial" in event) {
-					output.push({ ...event, partial: { ...event.partial, provider: id } });
-				} else if (event.type === "done") {
-					terminal = true;
-					output.push({ ...event, message: { ...event.message, provider: id } });
-				} else if (event.type === "error") {
-					terminal = true;
-					output.push({ ...event, error: { ...event.error, provider: id } });
-				}
-			}
-			if (!terminal) output.end({ ...(await stream.result()), provider: id });
-		} catch (error) {
-			output.fail(error);
-		}
-	})();
-	return output;
-}
-
-/** Preserve source provider's custom stream, auth-header and transport behavior. */
-function accountAlias(source: Provider, id: string, auth: Provider["auth"]): Provider {
-	const { refreshModels: _refreshModels, ...rest } = source;
-	let accountModels: readonly AnyModel[] | undefined;
-	const toAlias = <T extends AnyModel>(model: T): T => ({ ...model, provider: id });
-	return {
-		...rest, id, name: `${source.name} (${id})`, auth,
-		getModels: () => (accountModels
-			? accountModels.filter((model): model is Model<Api> =>
-				model.type !== "image" && model.type !== "classifier")
-			: source.getModels()).map(toAlias),
-		getAllModels: () => (accountModels ?? source.getAllModels?.() ?? source.getModels()).map(toAlias),
-		...(source.refreshModels ? { refreshModels: async (context: Parameters<NonNullable<Provider["refreshModels"]>>[0]) => {
-			// Dynamic provider refreshes publish through a shared source instance.
-			// Remap its persisted catalog to this alias without ever applying its update
-			// callback to the original account's in-memory model list.
-			const stored = context.stored ? {
-				...context.stored,
-				models: context.stored.models.map((model) => ({ ...model, provider: source.id })),
-			} : undefined;
-			await source.refreshModels!({
-				...context, stored,
-				publish: async (publication) => {
-					const models = publication.persist?.models ?? context.stored?.models;
-					const mapped = models?.map(toAlias);
-					if (context.allowNetwork && !mapped && publication.update) {
-						// Applying the source update would mutate another account's catalog.
-						throw new Error("Dynamic source did not publish an isolated per-account model catalog");
-					}
-					return context.publish({
-						...(publication.persist ? { persist: { ...publication.persist, models: mapped! } } : {}),
-						update: () => { if (mapped) accountModels = mapped; },
-					});
-				},
-			});
-		} } : {}),
-		stream: (model, context, options) => accountStream(
-			source.stream({ ...model, provider: source.id }, context, options), id),
-		streamSimple: (model, context, options) => accountStream(
-			source.streamSimple({ ...model, provider: source.id }, context, options), id),
-		...(source.fetchDeferred ? { fetchDeferred: (model: Parameters<NonNullable<Provider["fetchDeferred"]>>[0],
-			handle: Parameters<NonNullable<Provider["fetchDeferred"]>>[1],
-			options: Parameters<NonNullable<Provider["fetchDeferred"]>>[2]) =>
-			accountStream(source.fetchDeferred!({ ...model, provider: source.id }, handle, options), id) } : {}),
-		...(source.cancelDeferred ? { cancelDeferred: (model: Parameters<NonNullable<Provider["cancelDeferred"]>>[0],
-			handle: Parameters<NonNullable<Provider["cancelDeferred"]>>[1],
-			options: Parameters<NonNullable<Provider["cancelDeferred"]>>[2]) =>
-			source.cancelDeferred!({ ...model, provider: source.id }, handle, options) } : {}),
-		...(source.generateImages ? { generateImages: async (model: Parameters<NonNullable<Provider["generateImages"]>>[0],
-			context: Parameters<NonNullable<Provider["generateImages"]>>[1],
-			options: Parameters<NonNullable<Provider["generateImages"]>>[2]) => ({
-				...(await source.generateImages!({ ...model, provider: source.id }, context, options)), provider: id,
-			}) } : {}),
-		...(source.classify ? { classify: async (model: Parameters<NonNullable<Provider["classify"]>>[0],
-			context: Parameters<NonNullable<Provider["classify"]>>[1],
-			options: Parameters<NonNullable<Provider["classify"]>>[2]) => ({
-				...(await source.classify!({ ...model, provider: source.id }, context, options)), provider: id,
-			}) } : {}),
-		...(source.filterModels ? { filterModels: (models: Parameters<NonNullable<Provider["filterModels"]>>[0],
-			credential: Parameters<NonNullable<Provider["filterModels"]>>[1]) =>
-				source.filterModels!(models.map((model) => ({ ...model, provider: source.id })), credential)
-					.map((model) => ({ ...model, provider: id })) } : {}),
-		...(source.filterAllModels ? { filterAllModels: (models: Parameters<NonNullable<Provider["filterAllModels"]>>[0],
-			credential: Parameters<NonNullable<Provider["filterAllModels"]>>[1]) =>
-				source.filterAllModels!(models.map((model) => ({ ...model, provider: source.id })), credential)
-					.map((model) => ({ ...model, provider: id })) } : {}),
-	};
-}
-
-/** A named provider with independent OAuth credentials and the source's native SDK. */
-export function createOAuthAccountAlias(source: Provider, id: string, onLogin?: () => void): Provider {
-	const oauth = source.auth.oauth;
-	if (!oauth) throw new Error(`Provider ${source.id} does not support OAuth login`);
-	return accountAlias(source, id, { oauth: {
-		...oauth,
-		login: async (interaction, options) => {
-			const credentials = await oauth.login(interaction, options);
-			onLogin?.();
-			return credentials;
-		},
-	} });
-}
-
-/** Environment-backed identity that ignores stale credentials saved under its alias. */
-export function createApiKeyAccountAlias(source: Provider, id: string, envVar: string): Provider {
-	if (!source.auth.apiKey) throw new Error(`Source provider ${source.id} does not support API-key authentication`);
-	return accountAlias(source, id, {
-		apiKey: {
-			name: `${source.name} API key (${envVar})`,
-			check: async ({ ctx, signal }) => {
-				signal.throwIfAborted();
-				return (await ctx.env(envVar)) ? { type: "api_key", source: envVar } : undefined;
-			},
-			resolve: async ({ ctx, signal }) => {
-				signal.throwIfAborted();
-				const key = await ctx.env(envVar);
-				if (!key) return undefined;
-				const resolved = await source.auth.apiKey!.resolve({
-					ctx, signal, credential: { type: "api_key", key },
-				});
-				return resolved ? { ...resolved, source: envVar } : undefined;
-			},
-		},
-	});
-}
-
 /** Register virtual routing models and independently authenticated account aliases. */
 export function registerAccountRotation(pi: ExtensionAPI, configuration: RotationConfiguration): void {
 	const health = new Map<string, RotationHealth>();
@@ -267,10 +172,17 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 	const state = configuration.pools.map((group) => {
 		const pool = new RotationPool(group.members, group.cooldownMs, group.strategy, Math.random, health);
 		return {
-			group, pool,
-			get(_active: RotationTarget[]): RotationPool { return pool; },
-			reset() { pool.reset(); },
-			status() { return pool.status(); },
+			group,
+			pool,
+			get(_active: RotationTarget[]): RotationPool {
+				return pool;
+			},
+			reset() {
+				pool.reset();
+			},
+			status() {
+				return pool.status();
+			},
 			withAccount(provider: string, fn: (pool: RotationPool, target: RotationTarget) => void): void {
 				const match = group.members.find((member) => member.provider === provider);
 				if (!match) throw new Error(`Unknown account: ${provider}`);
@@ -323,12 +235,20 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			name: group.name ?? `Account rotation (${group.id})`,
 			thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
 			shouldRetry(message) {
-				if (message.stopReason !== "error" || !group.members.some(
-					(member) => member.provider === message.provider && member.model === message.model,
-				)) return false;
-				if (message.content.some((block) =>
-					block.type === "toolCall" || (block.type === "text" && block.text.length > 0) ||
-					(block.type === "thinking" && block.thinking.length > 0))) return false;
+				if (
+					message.stopReason !== "error" ||
+					!group.members.some((member) => member.provider === message.provider && member.model === message.model)
+				)
+					return false;
+				if (
+					message.content.some(
+						(block) =>
+							block.type === "toolCall" ||
+							(block.type === "text" && block.text.length > 0) ||
+							(block.type === "thinking" && block.thinking.length > 0),
+					)
+				)
+					return false;
 				return classifyCredentialFailure(message.errorMessage ?? "") !== undefined;
 			},
 			async route(request, ctx) {
@@ -344,29 +264,42 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 						keyFingerprints.set(member.provider, fingerprint);
 					}
 					const model = ctx.modelRegistry.find(member.provider, member.model);
-					entry.pool.setAvailable(member, model !== undefined &&
-						model.api !== "pi-virtual" &&
-						(!member.apiKeyEnv || !!process.env[member.apiKeyEnv]) &&
-						ctx.modelRegistry.hasConfiguredAuth(model));
+					entry.pool.setAvailable(
+						member,
+						model !== undefined &&
+							model.api !== "pi-virtual" &&
+							(!member.apiKeyEnv || !!process.env[member.apiKeyEnv]) &&
+							ctx.modelRegistry.hasConfiguredAuth(model),
+					);
 				}
 				const pool = entry.pool;
 				const failed = request.failed;
-				const hasOutput = failed?.message.content.some((block) =>
-					block.type === "toolCall" || (block.type === "text" && block.text.length > 0) ||
-					(block.type === "thinking" && block.thinking.length > 0)) ?? false;
+				const hasOutput =
+					failed?.message.content.some(
+						(block) =>
+							block.type === "toolCall" ||
+							(block.type === "text" && block.text.length > 0) ||
+							(block.type === "thinking" && block.thinking.length > 0),
+					) ?? false;
 				const choice = pool.choose({
 					reason: request.reason,
-					previous: request.previous && { provider: request.previous.model.provider, model: request.previous.model.id },
+					previous: request.previous && {
+						provider: request.previous.model.provider,
+						model: request.previous.model.id,
+					},
 					active: request.state?.active,
-					failed: failed && { target: { provider: failed.model.provider, model: failed.model.id },
-						errorMessage: failed.message.errorMessage ?? "", hasOutput },
+					failed: failed && {
+						target: { provider: failed.model.provider, model: failed.model.id },
+						errorMessage: failed.message.errorMessage ?? "",
+						hasOutput,
+					},
 				});
 				const model = ctx.modelRegistry.find(choice.target.provider, choice.target.model);
 				if (!model) throw new Error(`Account rotation ${group.id}: selected model is unavailable`);
 				const previous = request.state;
-				const same = previous?.active.provider === choice.target.provider && previous.active.model === choice.target.model;
-				return { model, thinkingLevel: request.thinkingLevel,
-					state: same ? previous : { active: choice.target } };
+				const same =
+					previous?.active.provider === choice.target.provider && previous.active.model === choice.target.model;
+				return { model, thinkingLevel: request.thinkingLevel, state: same ? previous : { active: choice.target } };
 			},
 		});
 	}
@@ -375,12 +308,12 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 	// This event never reads, copies, or exposes OAuth tokens.
 	pi.on("message_end", async (event) => {
 		const message = event.message;
-		if (message.role !== "assistant" ||
-			!["stop", "length", "toolUse"].includes(message.stopReason)) return;
+		if (message.role !== "assistant" || !["stop", "length", "toolUse"].includes(message.stopReason)) return;
 		for (const entry of state) {
 			const status = entry.status();
-			const match = status.find((candidate) =>
-				candidate.target.provider === message.provider && candidate.target.model === message.model);
+			const match = status.find(
+				(candidate) => candidate.target.provider === message.provider && candidate.target.model === message.model,
+			);
 			if (match) entry.pool.markSuccess(match.target);
 		}
 	});
@@ -395,34 +328,48 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			if (!command || command === "status") {
 				const lines = state.flatMap(({ group, status }) => [
 					`${group.id} (${group.strategy ?? "round-robin"}):`,
-					...(status().length > 0 ? status().map((entry) => {
-						const details = [
-							entry.enabled ? "enabled" : "disabled",
-							`health ${entry.healthScore}`,
-							...(entry.quotaRemaining === undefined ? [] : [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
-							...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
-								? ["quota exhausted (reset unknown)"]
-								: entry.readyInMs ? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`] : []),
-							...(entry.available ? [] : ["login or model unavailable"]),
-							...(entry.pinned ? ["pinned"] : []),
-						];
-						return `  ${entry.target.provider}: ${details.join(", ")}`;
-					}) : [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
+					...(status().length > 0
+						? status().map((entry) => {
+								const details = [
+									entry.enabled ? "enabled" : "disabled",
+									`health ${entry.healthScore}`,
+									...(entry.quotaRemaining === undefined
+										? []
+										: [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
+									...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
+										? ["quota exhausted (reset unknown)"]
+										: entry.readyInMs
+											? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`]
+											: []),
+									...(entry.available ? [] : ["login or model unavailable"]),
+									...(entry.pinned ? ["pinned"] : []),
+								];
+								return `  ${entry.target.provider}: ${details.join(", ")}`;
+							})
+						: [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
 				]);
 				notify(lines.join("\n") || "No rotation pools configured");
 				return;
 			}
 			const entry = state.find(({ group }) => group.id === poolId);
 			if (command === "reset") {
-				if (poolId && !entry) { notify(`Unknown rotation pool: ${poolId}`, "warning"); return; }
+				if (poolId && !entry) {
+					notify(`Unknown rotation pool: ${poolId}`, "warning");
+					return;
+				}
 				for (const item of poolId ? [entry!] : state) item.reset();
 				notify(`Account rotation health and cooldown state reset${poolId ? ` for ${poolId}` : ""}`);
 				return;
 			}
-			if (!entry) { notify("Specify a known account pool", "warning"); return; }
+			if (!entry) {
+				notify("Specify a known account pool", "warning");
+				return;
+			}
 			try {
 				if (command === "unpin") {
-					entry.withAccount(entry.status()[0]?.target.provider ?? "", (pool) => { pool.unpin(); });
+					entry.withAccount(entry.status()[0]?.target.provider ?? "", (pool) => {
+						pool.unpin();
+					});
 				} else if (command === "disable" || command === "enable" || command === "pin") {
 					if (!provider) throw new Error("Specify an account alias");
 					entry.withAccount(provider, (pool, target) => {
@@ -430,10 +377,13 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 						else pool.setEnabled(target, command === "enable");
 					});
 				} else if (command === "quota") {
-					if (!provider || fraction === undefined) throw new Error("Use: quota <pool> <account> <fraction> [reset-epoch-ms]");
+					if (!provider || fraction === undefined)
+						throw new Error("Use: quota <pool> <account> <fraction> [reset-epoch-ms]");
 					const remaining = Number(fraction);
 					const resetAt = resetTime === undefined ? undefined : Number(resetTime);
-					entry.withAccount(provider, (pool, target) => { pool.reportQuota(target, remaining, resetAt); });
+					entry.withAccount(provider, (pool, target) => {
+						pool.reportQuota(target, remaining, resetAt);
+					});
 				} else {
 					throw new Error("Usage: /account-rotation [status|reset [pool]|enable|disable|pin|unpin|quota]");
 				}

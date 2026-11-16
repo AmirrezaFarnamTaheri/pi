@@ -1,0 +1,143 @@
+name: Review Upstream Sync
+on:
+  schedule:
+    - cron: "27 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    if: ${{ github.repository == 'AmirrezaFarnamTaheri/pi' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+      proposed_sha: ${{ steps.merge.outputs.proposed_sha }}
+    steps:
+      - name: Checkout fork history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream and prepare a reviewable merge
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git fetch --no-tags https://github.com/earendil-works/pi.git \
+            refs/heads/main:refs/remotes/upstream/main
+          if git merge-base --is-ancestor refs/remotes/upstream/main origin/main; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Fork already contains upstream main." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if git fetch origin \
+            refs/heads/sync/upstream-main:refs/remotes/origin/sync/upstream-main; then
+            git switch -C sync/upstream-main refs/remotes/origin/sync/upstream-main
+            previous_head="$(git rev-parse HEAD)"
+            if ! git merge --no-edit origin/main; then
+              echo "::error::Existing sync branch conflicts with fork main; resolve manually."
+              git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          else
+            git switch -C sync/upstream-main origin/main
+            previous_head="$(git rev-parse HEAD)"
+          fi
+
+          if ! git merge --no-edit refs/remotes/upstream/main; then
+            echo "### Upstream conflicts requiring manual resolution" >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Upstream merge conflicts. No commits were pushed; resolve without discarding fork code."
+            exit 1
+          fi
+          if [ "$(git rev-parse HEAD)" = "$previous_head" ]; then
+            echo "Existing upstream proposal unchanged; reverify the same commit (a previous verify job may have failed)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Never execute merged upstream code in this write-enabled job.
+            git push origin HEAD:refs/heads/sync/upstream-main
+            echo "Updated upstream proposal on sync/upstream-main; CI and review are required." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "proposed_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+
+  verify:
+    needs: propose
+    if: needs.propose.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed upstream merge without write credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.propose.outputs.proposed_sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install shell-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fd-find ripgrep
+          sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+
+      - name: Verify upstream changes against fork tests
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+          npm run test:scripts
+          npm run test --workspace packages/coding-agent
+          npm run test --workspace packages/durable
+          args=()
+          for dir in packages/*/; do
+            case "$dir" in packages/coding-agent/ | packages/durable/) continue ;; esac
+            args+=(--workspace "${dir%/}")
+          done
+          npm run test --if-present "${args[@]}"
+          npm run test:mcp-conformance
+          ( cd apps/p2 && node --import ./src/source.ts --test test/p2/virtual-list.test.ts )
+
+  open-pull-request:
+    needs: [propose, verify]
+    if: needs.propose.outputs.changed == 'true' && needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Create or update review-only pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh pr list --head sync/upstream-main --base main --state open --json number --jq length)" -ne 0 ]; then
+            echo "Existing upstream sync PR has been updated and verified." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Do not create a second open PR while a feature PR is under review.
+          if [ "$(gh pr list --state open --json number --jq length)" -ne 0 ]; then
+            echo "Existing open PR takes priority; sync proposal remains on its branch." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh pr create --draft --base main --head sync/upstream-main \
+            --title "chore(sync): review incoming upstream main changes" \
+            --body "Automated upstream merge proposal. Tests passed in a separate read-only job. Review the full diff and fork-specific changes before merging. **This workflow never auto-merges into main.**"

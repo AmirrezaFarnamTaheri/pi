@@ -3,7 +3,10 @@ import { EventStream } from "../src/utils/event-stream.ts";
 
 describe("EventStream producer backpressure", () => {
 	it("caps buffered events for slow iterators and preserves order", async () => {
-		const stream = new EventStream<number, number>((value) => value === 199, (value) => value);
+		const stream = new EventStream<number, number>(
+			(value) => value === 199,
+			(value) => value,
+		);
 		const iterator = stream[Symbol.asyncIterator]();
 		const first = iterator.next();
 		let produced = 0;
@@ -25,13 +28,19 @@ describe("EventStream producer backpressure", () => {
 	});
 
 	it("never deadlocks a consumer which awaits only result()", async () => {
-		const stream = new EventStream<number, number>((value) => value === 199, (value) => value);
+		const stream = new EventStream<number, number>(
+			(value) => value === 199,
+			(value) => value,
+		);
 		for (let index = 0; index < 200; index++) await stream.pushWithBackpressure(index, 4);
 		expect(await stream.result()).toBe(199);
 	});
 
 	it("releases queued producers when the stream ends", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const iterator = stream[Symbol.asyncIterator]();
 		const first = iterator.next();
 		stream.push(1);
@@ -46,7 +55,10 @@ describe("EventStream producer backpressure", () => {
 	});
 
 	it("does not disable backpressure when one of two consumers exits", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const first = stream[Symbol.asyncIterator]();
 		const second = stream[Symbol.asyncIterator]();
 		const firstNext = first.next();
@@ -59,7 +71,9 @@ describe("EventStream producer backpressure", () => {
 		await stream.pushWithBackpressure(3, 1);
 		const stillBlocked = stream.pushWithBackpressure(4, 1);
 		let resolved = false;
-		void stillBlocked.then(() => { resolved = true; });
+		void stillBlocked.then(() => {
+			resolved = true;
+		});
 		await Promise.resolve();
 		await Promise.resolve();
 		expect(resolved).toBe(false);
@@ -69,7 +83,10 @@ describe("EventStream producer backpressure", () => {
 	});
 
 	it("releases producer after an iterator exits early", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const iterator = stream[Symbol.asyncIterator]();
 		const first = iterator.next();
 		stream.push(1);
@@ -85,19 +102,28 @@ describe("EventStream producer backpressure", () => {
 
 describe("event-stream producer failure", () => {
 	it("rejects result() when the producer fails before a terminal event", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const result = stream.result();
 		stream.fail(new Error("provider failed"));
 		await expect(result).rejects.toThrow("provider failed");
 	});
 	it("wakes waiting async iterators with the original error", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const waiting = stream[Symbol.asyncIterator]().next();
 		stream.fail(new Error("stream failed"));
 		await expect(waiting).rejects.toThrow("stream failed");
 	});
 	it("delivers buffered events before reporting a producer failure", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		stream.push(1);
 		stream.fail(new Error("broken"));
 		const iterator = stream[Symbol.asyncIterator]();
@@ -108,7 +134,10 @@ describe("event-stream producer failure", () => {
 
 describe("capacity waiter correctness", () => {
 	it("unblocks an active producer on terminal push without requiring an iterator read", async () => {
-		const stream = new EventStream<number, number>((event) => event === 10, (event) => event);
+		const stream = new EventStream<number, number>(
+			(event) => event === 10,
+			(event) => event,
+		);
 		const reader = stream[Symbol.asyncIterator]();
 		const start = reader.next();
 		stream.push(1);
@@ -121,7 +150,10 @@ describe("capacity waiter correctness", () => {
 		await reader.return?.();
 	});
 	it("aborted capacity waiters cannot strand a later live publisher", async () => {
-		const stream = new EventStream<number, number>(() => false, (value) => value);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(value) => value,
+		);
 		const reader = stream[Symbol.asyncIterator]();
 		const first = reader.next();
 		stream.push(1);
@@ -131,7 +163,9 @@ describe("capacity waiter correctness", () => {
 		const cancelled = stream.pushWithBackpressure(3, 1, controller.signal);
 		const live = stream.pushWithBackpressure(4, 1);
 		let published = false;
-		void live.then(() => { published = true; });
+		void live.then(() => {
+			published = true;
+		});
 		controller.abort();
 		await expect(cancelled).rejects.toThrow(/abort/i);
 		try {
@@ -149,7 +183,10 @@ describe("capacity waiter correctness", () => {
 	});
 
 	it("rejects a blocked publisher immediately when its abort signal fires", async () => {
-		const stream = new EventStream<number, number>(() => false, (event) => event);
+		const stream = new EventStream<number, number>(
+			() => false,
+			(event) => event,
+		);
 		const reader = stream[Symbol.asyncIterator]();
 		const first = reader.next();
 		stream.push(1);

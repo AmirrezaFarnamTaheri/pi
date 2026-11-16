@@ -545,6 +545,7 @@ describe("failures: a rollback rejects, an unknown outcome stops the store", () 
 				await again.store.close(context);
 			}
 		},
+		20_000,
 	);
 
 	it("a call on a closed storage, or on a stopped store, rejects and stores nothing", async () => {

@@ -836,7 +836,10 @@ async function sessionFileDigest(path: string, signal?: AbortSignal): Promise<st
  * not be decoded again. Large transcripts are intentionally not retained.
  */
 class SessionInfoCache {
-	readonly #entries = new Map<string, { size: number; mtime: number; ctime: number; digest: string; info: SessionInfo; bytes: number }>();
+	readonly #entries = new Map<
+		string,
+		{ size: number; mtime: number; ctime: number; digest: string; info: SessionInfo; bytes: number }
+	>();
 	#totalBytes = 0;
 	readonly maxBytes: number;
 	readonly maxEntries: number;
@@ -856,7 +859,7 @@ class SessionInfoCache {
 		}
 		// Some filesystems have coarse timestamps; a same-sized rewrite can look
 		// identical to stat(). Compare bytes before trusting a parsed summary.
-		if (await sessionFileDigest(path, signal) !== entry.digest) {
+		if ((await sessionFileDigest(path, signal)) !== entry.digest) {
 			this.#remove(path, entry);
 			return undefined;
 		}
@@ -871,7 +874,14 @@ class SessionInfoCache {
 		const old = this.#entries.get(path);
 		if (old) this.#remove(path, old);
 		if (bytes > this.maxBytes) return;
-		this.#entries.set(path, { size: stats.size, mtime: stats.mtimeMs, ctime: stats.ctimeMs, info: copySessionInfo(info), digest, bytes });
+		this.#entries.set(path, {
+			size: stats.size,
+			mtime: stats.mtimeMs,
+			ctime: stats.ctimeMs,
+			info: copySessionInfo(info),
+			digest,
+			bytes,
+		});
 		this.#totalBytes += bytes;
 		while (this.#entries.size > this.maxEntries || this.#totalBytes > this.maxBytes) {
 			const oldest = this.#entries.keys().next().value;
@@ -907,46 +917,54 @@ async function buildSessionInfo(
 
 		// Hash raw bytes as readline parses them, instead of reading the entire
 		// JSONL file a second time on every cold cache fill.
-		const input = createReadStream(filePath, { signal });
+		const input = createReadStream(filePath);
 		const hash = createHash("sha256");
-		input.on("data", (bytes) => { hash.update(bytes); });
+		input.on("data", (bytes) => {
+			hash.update(bytes);
+		});
 		const rl = createInterface({ input, crlfDelay: Infinity });
 
-		for await (const line of rl) {
-			const entry = parseSessionEntryLine(line);
-			if (!entry) continue;
+		try {
+			for await (const line of rl) {
+				signal?.throwIfAborted();
+				const entry = parseSessionEntryLine(line);
+				if (!entry) continue;
 
-			if (!header) {
-				if (entry.type !== "session") return null;
-				header = entry;
-				continue;
+				if (!header) {
+					if (entry.type !== "session") return null;
+					header = entry;
+					continue;
+				}
+
+				// Extract session name (use latest, including explicit clears)
+				if (entry.type === "session_info") {
+					name = entry.name?.trim() || undefined;
+				}
+
+				if (entry.type !== "message") continue;
+				messageCount++;
+
+				const activityTime = getMessageActivityTime(entry);
+				if (typeof activityTime === "number") {
+					lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
+				}
+
+				const message = entry.message;
+				if (!isMessageWithContent(message)) continue;
+				if (message.role !== "user" && message.role !== "assistant") continue;
+
+				const textContent = extractTextContent(message);
+				if (!textContent) continue;
+
+				allMessages.push(textContent);
+				if (!firstMessage && message.role === "user") {
+					firstMessage = textContent;
+				}
 			}
-
-			// Extract session name (use latest, including explicit clears)
-			if (entry.type === "session_info") {
-				name = entry.name?.trim() || undefined;
-			}
-
-			if (entry.type !== "message") continue;
-			messageCount++;
-
-			const activityTime = getMessageActivityTime(entry);
-			if (typeof activityTime === "number") {
-				lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			}
-
-			const message = entry.message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") {
-				firstMessage = textContent;
-			}
+		} finally {
+			input.destroy();
 		}
+		signal?.throwIfAborted();
 
 		if (!header) return null;
 		const digest = hash.digest("hex");
@@ -1105,9 +1123,7 @@ function providerRequestTimestamp(entry: SessionEntry): number | undefined {
 	if (entry.type === "usage" && entry.kind === "cache_warm") {
 		const usage = entry.usage;
 		const timestamp = Date.parse(entry.timestamp);
-		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(timestamp)
-			? timestamp
-			: undefined;
+		return usage.input + usage.cacheRead + usage.cacheWrite > 0 && Number.isFinite(timestamp) ? timestamp : undefined;
 	}
 	return undefined;
 }
