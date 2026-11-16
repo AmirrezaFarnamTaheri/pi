@@ -382,7 +382,23 @@ export function workerFacet(parts: {
 		host.serve(HarnessHost, () => ({}));
 		self.contribute(HarnessNative, parts.harness);
 		self.contribute(WorkerProcess, {
-			init: {} as WorkerParts["init"],
+			// Conversation views use the worker's session ID for image references, even in bare test hosts.
+			// Keep the test worker's start metadata realistic instead of an empty object.
+			init: {
+				app: "",
+				dataDir: "",
+				fake: true,
+				telemetry: false,
+				generation: 0,
+				values: {
+					session: {
+						id: "s1",
+						cwd: "/",
+						model: { provider: "faux", modelId: "faux-1" },
+						thinkingLevel: "off",
+					},
+				},
+			} as WorkerParts["init"],
 			liveness: new Liveness(),
 			location: new SessionLocation({ cwd: "/", env: null }),
 			root: (fn, context) => {

@@ -349,7 +349,11 @@ describe("branches in the browser", { skip: !browserTests }, () => {
 		await browser.wait(`!document.querySelector('.sheet') && ${rowOf("Renamed")}`);
 		// The sidebar is optimistic; wait for the server catalog to report the persisted reset.
 		await until(sessions.sessions, (list) =>
-			Boolean(list?.find((item) => item.id === id)?.branches.some((branch) => branch.conversation === 1 && branch.label === null)),
+			Boolean(
+				list
+					?.find((item) => item.id === id)
+					?.branches.some((branch) => branch.conversation === 1 && branch.label === null),
+			),
 		);
 		assert.equal((await row()).branches.find((branch) => branch.conversation === 1)?.label, null);
 	});
