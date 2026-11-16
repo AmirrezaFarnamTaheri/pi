@@ -6354,7 +6354,7 @@ export class InteractiveMode {
 			fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
 			const tmp = `${configPath}.${crypto.randomUUID()}.tmp`;
 			try {
-				fs.writeFileSync(tmp, JSON.stringify(document, null, 2) + "\\n", { mode: 0o600, flag: "wx" });
+				fs.writeFileSync(tmp, JSON.stringify(document, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 				fs.renameSync(tmp, configPath);
 			} finally { fs.rmSync(tmp, { force: true }); }
 			await this.session.modelRuntime.refresh({ allowNetwork: false });
@@ -6576,25 +6576,45 @@ export class InteractiveMode {
 
 	private async enableAccountRotation(sourceProviderId: string, persist = false): Promise<void> {
 		const runtime = this.session.modelRuntime;
-		const members = [
-			sourceProviderId,
-			...runtime
-				.getAccountProfiles()
-				.filter((profile) => profile.sourceProviderId === sourceProviderId)
-				.map((profile) => profile.id),
-		];
-		const connected = members.filter((providerId) => runtime.hasConfiguredAuth(providerId));
-		if (connected.length < 2) {
-			this.showError("Sign in to at least two distinct accounts for this provider before enabling rotation.");
+		const pref = runtime.getAccountRotationPreferences(sourceProviderId);
+		const members = pref.memberIds.filter((id) => runtime.hasConfiguredAuth(id));
+		if (members.length < 2) {
+			this.showStatus("Select at least two connected accounts in this provider's rotation pool.");
+			this.showProviderAccounts(sourceProviderId);
 			return;
 		}
 		const virtual = runtime.getModel("account-profiles", sourceProviderId);
 		if (!virtual) {
-			this.showError("Add another account for this provider to enable rotation.");
+			this.showError("No rotation model is available for these accounts.");
 			return;
 		}
-		// Selecting the rotation group already expresses intent; do not ask a second time.
-		await this.activateAccountRotation(sourceProviderId, virtual, persist);
+		try {
+			runtime.setAccountRotationPreferences(sourceProviderId, { ...pref, enabled: true });
+			await this.activateAccountRotation(sourceProviderId, virtual, persist);
+			this.showProviderAccounts(sourceProviderId);
+		} catch (error) {
+			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private async disableAccountRotation(groupId: string): Promise<void> {
+		const runtime = this.session.modelRuntime;
+		const pref = runtime.getAccountRotationPreferences(groupId);
+		const selected = this.session.model;
+		const active = selected?.provider === "account-profiles" && selected.id === groupId;
+		const defaultActive = this.settingsManager.getDefaultProvider() === "account-profiles"
+			&& this.settingsManager.getDefaultModel() === groupId;
+		if (active || defaultActive) {
+			const candidates = new Set(runtime.getRotationMemberIds(groupId));
+			const fallback = runtime.getAvailableSnapshot().find((model) => candidates.has(model.provider))
+				?? runtime.getAvailableSnapshot().find((model) => model.provider !== "account-profiles");
+			if (!fallback) { this.showError("Choose an available physical model before turning rotation off."); return; }
+			if (active) await this.session.setModel(fallback, { persist: defaultActive });
+			else if (defaultActive) this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
+		}
+		runtime.setAccountRotationPreferences(groupId, { ...pref, enabled: false });
+		this.showStatus(`Rotation disabled for ${groupId}; selected accounts and algorithm preserved.`);
+		this.showProviderAccounts(groupId);
 	}
 
 	private async activateAccountRotation(
