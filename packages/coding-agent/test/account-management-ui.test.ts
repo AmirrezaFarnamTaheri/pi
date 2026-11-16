@@ -51,6 +51,7 @@ describe("provider-first account manager", () => {
 				{ id: alias.id, name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
 			],
 			getAccountProfiles: () => [alias],
+			getConfiguredProviderIds: () => [],
 			getProviderAuthStatus: () => ({ configured: true }),
 			hasConfiguredAuth: () => true,
 			isUsingOAuth: () => true,
