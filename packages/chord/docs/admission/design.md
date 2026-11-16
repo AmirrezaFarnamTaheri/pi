@@ -4,6 +4,28 @@ Status: proposed 2026-11-13 by the p3 session, after a first review by Opus, Ast
 `/home/badlogic/chord-notes/research/p3-people-2026-11-13/admission-review-*.md`). Not built. It changes design.md §6
 (activation), §7 ("there is no async activation guard"), §16 (`serve` options), §19 (presence) and §21 (staging).
 
+## 0. Revision (owner, 2026-11-14): the admission hands the factory its data
+
+The reason for admission is that a factory is synchronous: it cannot read data about the caller before it builds the
+caller's object. Returning only a level (a variant name) defeats that: the admission reads the person's app data
+(role, team, memberships, shares) and throws it away, and the factory has to read it again after activation. So:
+
+- **`admit` returns `allow(value)` or `deny(reason)`, where `value` is a typed JSON value** the contract declares (an
+  `admission` schema beside the variants). The variant is one field of it; the rest is whatever the object needs
+  about this caller (for the family app: a parent, their id, the children whose private sessions they may see).
+- **The factory gets the value** instead of a level: `(params, principal, admitted, self)`. It builds the caller's
+  members from it, including how its lists filter rows, so a list inside an object needs no second mechanism.
+- **Change:** a recomputed value equal to the last (canonical JSON) changes nothing; a different one rebinds the
+  caller as a level change does in section 3.
+- **Not only sessions:** every object type, an app's own stores and objects included, may take an admission. An app
+  defines its admission once (in its contract file) and reuses it for all its objects, so every object of the app
+  starts from the same answer to "who is this person here".
+- Plugins never branch on principal kinds; they read the admitted value.
+
+Still open (owner, 2026-11-14): admission is opt-in per type (a type without one and without a check in its factory
+serves everyone); routing runs before admission (a person who will be denied still starts a worker); every object
+makes its own round trip for the same answer; a change seals and rebuilds the caller's objects.
+
 ## 1. Problem
 
 A factory decides its variant from params and principal only, synchronously (principle 3, §6, §7); what it declares

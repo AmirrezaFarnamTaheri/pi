@@ -369,7 +369,7 @@ async function sendToChat(host: Host, text: string, scope: Scope, route: Route):
 }
 
 /**
- * Sends `text` with its scope to the Familiar's main conversation (made or restored first, as its logo does), queued
+ * Sends `text` with its scope to the Familiar's main conversation (made or restored first, as its sidebar row does), queued
  * after its current run; returns where it went.
  */
 async function sendToFamiliar(host: Host, text: string, scope: Scope, route: Route): Promise<Sent> {
