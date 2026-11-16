@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import {
 	addAccountProfile,
+	loadAccountRotationPreferences,
+	saveAccountRotationPreferences,
 	loadAccountProfiles,
 	loadPrimaryAccountNames,
 	removeAccountProfile,
@@ -78,4 +80,45 @@ test("primary names survive adding, renaming and deleting additional accounts", 
 	assert.equal(removeAccountProfile(path, alternate.id), true);
 	assert.deepEqual(loadPrimaryAccountNames(path), { anthropic: "Main work" });
 	assert.deepEqual(loadAccountProfiles(path), []);
+});
+
+
+test("rotation membership and strategy persist by stable IDs across account renames", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-rotation-preferences-"));
+	directories.push(dir);
+	const path = join(dir, "account-profiles.json");
+	const work = addAccountProfile(path, "anthropic", ["anthropic"], "Work");
+	const personal = addAccountProfile(path, "anthropic", ["anthropic", work.id], "Personal");
+	saveAccountRotationPreferences(path, "anthropic", {
+		enabled: true,
+		strategy: "hybrid",
+		memberIds: ["anthropic", work.id],
+	});
+	renameAccountProfile(path, work.id, "Renamed");
+	assert.deepEqual(loadAccountRotationPreferences(path).anthropic, {
+		enabled: true,
+		strategy: "hybrid",
+		memberIds: ["anthropic", work.id],
+	});
+	assert.equal(loadAccountRotationPreferences(path).anthropic?.memberIds.includes(personal.id), false);
+	removeAccountProfile(path, work.id);
+	assert.deepEqual(loadAccountRotationPreferences(path).anthropic?.memberIds, ["anthropic"]);
+});
+
+test("rotation preferences reject invalid IDs and duplicate members", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-rotation-validation-"));
+	directories.push(dir);
+	const path = join(dir, "account-profiles.json");
+	assert.throws(
+		() => saveAccountRotationPreferences(path, "anthropic", { enabled: true, strategy: "unknown" as "sticky", memberIds: ["anthropic"] }),
+		/strategy/i,
+	);
+	assert.throws(
+		() => saveAccountRotationPreferences(path, "anthropic", { enabled: true, strategy: "random", memberIds: ["anthropic", "anthropic"] }),
+		/duplicate/i,
+	);
+	assert.throws(
+		() => saveAccountRotationPreferences(path, "../escape", { enabled: true, strategy: "random", memberIds: ["anthropic"] }),
+		/provider|group/i,
+	);
 });
