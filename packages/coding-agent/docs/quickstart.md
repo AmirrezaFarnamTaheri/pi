@@ -63,9 +63,13 @@ In Pi, run:
 /login
 ```
 
-Choose a provider, then follow the prompts to use a subscription or store an API key. Run `/model` afterward if you want to select a different available model.
+The first screen shows **providers** (Codex, Antigravity, Anthropic, NVIDIA and any configured custom providers), rather than account nicknames. Choose a provider and press **Enter** to manage its individual logins or API keys. If you have no connected account yet, choose **Connect another provider** and follow its subscription sign-in or API-key prompt. You can also choose **Add custom provider** for an API-compatible endpoint.
 
-See [Choose a model and provider](models.md) for supported providers, environment-variable authentication, local models, and custom endpoints.
+Inside a provider, **Enter** on an account opens its actions: sign in, choose a model, rename, or disconnect. Press **+** to add another account without replacing the existing one; press **R** to edit its nickname. Names change only their display label, not their credentials or provider ID. Run `/model` afterward to select a model for your account.
+
+For multiple connected accounts, use **Space** to check the identities you want included in rotation, **A** to select all, **M** to select Round Robin, Sticky, Random or Hybrid, and **T** to turn rotation on or off. Rotation is optional and only supports models shared by eligible accounts. **Important:** included accounts may receive your session context; keep confidential client or organization sessions on one authorized identity.
+
+See [Account management and rotation](../../docs/multi-account-login.md) for full keyboard shortcuts, deletion and isolation behavior. See [Choose a model and provider](models.md) for supported providers, environment-variable authentication, local models, and custom endpoints.
 
 ## 4. Give Pi a task
 
