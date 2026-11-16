@@ -1,6 +1,10 @@
 # Accounts and automatic rotation
 
-`/login` is the single account-management screen. `/accounts` and `/logout` without arguments open that same screen for compatibility. It shows connected provider logins and additional accounts, with their names, providers, and connection states.
+`/login` is the provider-first account manager, with `/accounts` and bare `/logout` opening the same screen. The top-level menu displays **immutable provider names** (for example, Codex, Antigravity, Anthropic and NVIDIA), not editable account nicknames. Providers with a configured credential, additional account, or preferred built-in identity appear as a category. Choose **Connect another provider** to sign into a different built-in provider, or **Add custom provider** to configure an API-compatible endpoint in `models.json`.
+
+Select a provider to see its **original and additional accounts/API keys** together, with connection status and one rotation-membership checkbox per identity. Press **Space** to include or exclude the highlighted connected identity, **A** to select/deselect all eligible identities, **R** to rename the highlighted account, **X** to delete/disconnect it, **T** to toggle rotation, **M** to choose its algorithm, and **+** to create an additional account. **Enter** opens the highlighted account, setting, or action; **Left Arrow** or **Escape** navigates back. The same page also offers **Delete all accounts**, protected by a confirmation prompt.
+
+The provider header remains fixed. An account's nickname changes only its human-readable label, not its provider brand, credential, model catalog, or stable ID. Distinct NVIDIA identities can share one presentation category while keeping independent authentication slots. Externally managed integrations do not expose their private credential pools to Pi.
 
 ## Everyday account actions
 
@@ -20,14 +24,20 @@ A separate account keeps a stable provider ID, such as `account-antigravity-mana
 
 ## Automatic rotation
 
-Rotation is represented by a virtual model at `account-profiles/<source-provider-id>`. Use the account manager or `/model` to select an individual account again. Saving a rotation model as your default keeps it selected for future sessions.
+Each provider stores rotation preferences (on/off, selected stable account IDs, and algorithm) in the credential-free `account-profiles.json`. The underlying credentials remain in their original secure store. Newly created accounts are **excluded** from an existing selection until explicitly included; older accounts without explicit preferences retain their legacy pool selection until the user customizes it.
 
-- New user turns select connected identities round-robin for the same model.
-- Tool continuations stay on the identity that started the turn.
-- A retry may switch identities on recognized pre-output authentication or availability failures; output-producing requests do not silently restart elsewhere.
-- Unavailable identities are skipped and cooldowns prevent immediate reuse of failing accounts.
+Enable rotation only after selecting at least **two connected accounts that support a model in common**. Activating rotation selects the provider's virtual routing model at `account-profiles/<group-id>` and persists it as the default model. Turning rotation off switches to an available physical account/model while preserving the member selection and algorithm for a later activation. This opt-in process does not change account quotas or entitlements.
 
-Rotation may send the current session context to another account in that group; keep unrelated contexts in separate sessions. Account quotas and entitlements are unchanged. The legacy `account-rotation.json` extension remains available for custom strategies.
+Four algorithms are available:
+
+- **Round Robin** (default) — alternate eligible identities on new user turns.
+- **Sticky** — prefer the same healthy identity until it becomes unavailable.
+- **Random** — uniformly pick an eligible identity.
+- **Hybrid** — prefer healthy identities with available quota observations, using round-robin for ties.
+
+A provider may have several identities but not every model available to all of them. The runtime skips identities lacking the model selected for that request, and failing accounts are cooled down. Tool continuations stay on their originating identity; a recognized failure before output begins may trigger an eligible failover. Output-producing requests are not silently replayed.
+
+**Privacy warning:** Rotation may send the active conversation and tool results to any included account. Do not mix identities that are not allowed to share that context, such as unrelated personal, client, or organizational accounts. Use separate sessions or a single account when isolation is required.
 
 ## Antigravity Manager
 
