@@ -195,7 +195,7 @@ describe("provider-first account manager", () => {
 		ui.selector().handleInput("t");
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(ui.getPreferences().enabled).toBe(true);
-		expect(ui.setModel).toHaveBeenCalledWith({ provider: "account-profiles", id: "anthropic" }, { persist: false });
+		expect(ui.setModel).toHaveBeenCalledWith({ provider: "account-profiles", id: "anthropic" }, { persist: true });
 	});
 
 	it("R renames only the highlighted account", async () => {
