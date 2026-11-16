@@ -16,7 +16,7 @@ import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Session } from "../../src/runtime/chord.ts";
 import { telemetryStore } from "../../src/runtime/host-dirs.ts";
 import { type GuestPrincipal, principalAttributes } from "../../src/runtime/principals.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER } from "./browser.ts";
 import { type Fixture, holdIn, poll, startFixture, until } from "./helpers.ts";
 
 const live = (view: ConversationView | null | undefined) => view?.docs["pi.live"] as LiveState | undefined;
@@ -105,7 +105,7 @@ describe("telemetry", () => {
 			await browser.signIn(fixture.owner);
 			await browser.open(`http://127.0.0.1:${fixture.server.port}/s/${session}`);
 			await browser.wait("document.getElementById('root')?.dataset.p2Telemetry === 'on'");
-			await browser.wait("document.querySelector('.composer textarea')");
+			await browser.wait(`document.querySelector(${JSON.stringify(COMPOSER)})`);
 			let spans: StoredSpan[] = [];
 			await poll(
 				async () => {
