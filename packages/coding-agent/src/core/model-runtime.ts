@@ -645,6 +645,13 @@ export class ModelRuntime implements Models {
 		if (!source || (!source.auth.oauth && !source.auth.apiKey?.login)) {
 			throw new Error(`Provider ${sourceProviderId} does not support login`);
 		}
+		// Snapshot the existing pool before adding a new credential. New identities are opt-in.
+		const groupId = this.rotationGroupId(sourceProviderId);
+		if (!this.accountRotations.has(groupId)) {
+			this.setAccountRotationPreferences(groupId, {
+				enabled: false, strategy: "round-robin", memberIds: this.getRotationMemberIds(groupId),
+			});
+		}
 		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
 		try {
 			if (this.models.getProvider(profile.id))
