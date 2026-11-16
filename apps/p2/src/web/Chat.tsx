@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	type CSSProperties,
 	createContext,
@@ -11,6 +11,8 @@ import {
 	useState,
 	useSyncExternalStore,
 } from "react";
+import type { ShownImage } from "../runtime/entry-images.ts";
+import { plainReferences, referenceParts } from "../runtime/references.ts";
 import { ActivityRow } from "./activity/ActivityRow.tsx";
 import { ActivityLayer } from "./activity/ActivitySheet.tsx";
 import {
@@ -36,7 +38,6 @@ import {
 	SparkIcon,
 	UsersIcon,
 } from "./icons.tsx";
-import { imageSize } from "./image-size.ts";
 import { useLongPress } from "./long-press.ts";
 import { Markdown } from "./Markdown.tsx";
 import { RowEstimator, type RowFeatures } from "./row-estimate.ts";
@@ -198,36 +199,33 @@ function useReply(entryId: number | undefined, name: string) {
 
 // Items, tools and their images keep their identity while unchanged (transcript.ts), so these memoized components
 // skip rendering when a streaming delta changes only the live message.
-const Images = memo(function Images({ images }: { images: ImageContent[] }) {
+const Images = memo(function Images({ images }: { images: ShownImage[] }) {
 	if (!images.length) return null;
 	return (
 		<div className="images">
 			{images.map((image, index) => (
-				<img
-					key={`${image.mimeType}-${index}`}
-					src={`data:${image.mimeType};base64,${image.data}`}
-					alt=""
-					decoding="async"
-					style={imageBox(image)}
-				/>
+				<img key={`${image.mimeType}-${index}`} src={image.src} alt="" decoding="async" style={imageBox(image)} />
 			))}
 		</div>
 	);
 });
 
 const IMAGE_MAX_HEIGHT = 320;
-const imageBoxes = new WeakMap<ImageContent, CSSProperties | undefined>();
+const imageBoxes = new WeakMap<ShownImage, CSSProperties | undefined>();
 /**
- * The box an image takes once decoded (its pixel size within the column's width and `.images img`'s max-height), so
- * decoding never resizes the transcript under the reader. Images keep their identity while unchanged: computed once.
+ * The box an image takes once loaded (its pixel size within the column's width and `.images img`'s max-height), so
+ * loading never resizes the transcript under the reader. Images keep their identity while unchanged: computed once.
  */
-function imageBox(image: ImageContent): CSSProperties | undefined {
+function imageBox(image: ShownImage): CSSProperties | undefined {
 	if (imageBoxes.has(image)) return imageBoxes.get(image);
-	const size = imageSize(image.data);
-	const box = size && {
-		width: `min(100%, ${size.width}px, ${(IMAGE_MAX_HEIGHT * size.width) / size.height}px)`,
-		aspectRatio: `${size.width} / ${size.height}`,
-	};
+	const { width, height } = image;
+	const box =
+		width === undefined || height === undefined
+			? undefined
+			: {
+					width: `min(100%, ${width}px, ${(IMAGE_MAX_HEIGHT * width) / height}px)`,
+					aspectRatio: `${width} / ${height}`,
+				};
 	imageBoxes.set(image, box);
 	return box;
 }
@@ -238,13 +236,13 @@ function hasNotice(message: AssistantMessage, streaming: boolean): boolean {
 }
 
 /** Height of images whose boxes are known from their headers (`imageBox`), at most `width` wide. */
-function imagesHeight(images: readonly ImageContent[], width: number): number {
+function imagesHeight(images: readonly ShownImage[], width: number): number {
 	let height = 0;
 	for (const image of images) {
-		const size = imageSize(image.data);
-		if (size)
+		if (image.width !== undefined && image.height !== undefined)
 			height +=
-				(Math.min(width, size.width, (IMAGE_MAX_HEIGHT * size.width) / size.height) * size.height) / size.width;
+				(Math.min(width, image.width, (IMAGE_MAX_HEIGHT * image.width) / image.height) * image.height) /
+				image.width;
 	}
 	return height;
 }
@@ -415,7 +413,7 @@ function Incoming({ item }: { item: Extract<Item, { type: "user" }> }) {
 					{agent?.intent === "failed" ? (
 						<div className="incoming-plain">{item.text}</div>
 					) : (
-						<Markdown text={item.text} />
+						<Markdown text={plainReferences(item.text)} />
 					)}
 				</Clamped>
 				{item.files.length > 0 && (
@@ -456,6 +454,19 @@ function Clamped({ text, children }: { text: string; children: ReactNode }) {
 	);
 }
 
+/** A person's text with each file reference shown as the file's name, where the message placed it. */
+function MessageText({ text }: { text: string }) {
+	return referenceParts(text).map((part) =>
+		part.kind === "text" ? (
+			part.text
+		) : (
+			<span key={part.start} className="message-ref" title={part.label}>
+				<span>{part.label}</span>
+			</span>
+		),
+	);
+}
+
 /** The owner's message (or an input without an author): a bubble. People's messages can be replied to. */
 function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 	const reveal = useContext(RevealEntry);
@@ -487,7 +498,7 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 							{item.chat && " · chat"}
 						</div>
 					)}
-					{item.text}
+					<MessageText text={item.text} />
 					{item.files.length > 0 && (
 						<div className="bubble-files">
 							{item.files.map((file) => (
@@ -514,7 +525,7 @@ function UserMessage({ item }: { item: Extract<Item, { type: "user" }> }) {
 							<PencilIcon />
 						</button>
 					)}
-					{text && <CopyButton text={text} />}
+					{text && <CopyButton text={plainReferences(text)} />}
 				</div>
 			)}
 		</div>

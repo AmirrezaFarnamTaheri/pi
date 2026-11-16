@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { NativeWatchable, Watchable } from "@earendil-works/chord/watch";
+import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { WebSocket as NodeWebSocket } from "ws";
 import { type P2Server, type ServerOptions, startServer } from "../../src/hosts/server.ts";
 import {
@@ -358,6 +359,13 @@ const NO_WORKERS: SessionWorkerControl = {
 	observe: () => ({ value: {}, detach: () => {} }),
 };
 
+/** The image processor of test workers: one that is asked to prepare an image fails the test. */
+export const NO_IMAGES: ImageProcessor = {
+	prepare: async () => {
+		throw new Error("no image processor in this test worker");
+	},
+};
+
 /**
  * A worker host's natives for a bare test host (`kind: "worker"`): the session's Harness (`harnessOf`) and the worker
  * process (`workerOf`). Unset parts are inert: no location moves, liveness counts nothing, roots run on `TEST`.
@@ -374,7 +382,23 @@ export function workerFacet(parts: {
 		host.serve(HarnessHost, () => ({}));
 		self.contribute(HarnessNative, parts.harness);
 		self.contribute(WorkerProcess, {
-			init: {} as WorkerParts["init"],
+			// Conversation views use the worker's session ID for image references, even in bare test hosts.
+			// Keep the test worker's start metadata realistic instead of an empty object.
+			init: {
+				app: "",
+				dataDir: "",
+				fake: true,
+				telemetry: false,
+				generation: 0,
+				values: {
+					session: {
+						id: "s1",
+						cwd: "/",
+						model: { provider: "faux", modelId: "faux-1" },
+						thinkingLevel: "off",
+					},
+				},
+			} as WorkerParts["init"],
 			liveness: new Liveness(),
 			location: new SessionLocation({ cwd: "/", env: null }),
 			root: (fn, context) => {
@@ -384,6 +408,7 @@ export function workerFacet(parts: {
 			copyFilesTo: async () => {
 				throw new Error("no files in this test worker");
 			},
+			images: NO_IMAGES,
 			...parts.worker,
 		});
 	});
@@ -577,7 +602,13 @@ export async function poll(
 	}
 }
 
-export type HttpResult = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
+export type HttpResult = {
+	status: number;
+	headers: Record<string, string | string[] | undefined>;
+	body: string;
+	/** The body as sent, for binary responses. */
+	bytes: Buffer;
+};
 export type HttpOptions = { method?: string; headers?: Record<string, string>; body?: string | Buffer };
 
 /** An HTTP request to the fixture's server (any Host, cookie and body). */
@@ -588,13 +619,15 @@ export function http(port: number, path: string, options: HttpOptions = {}): Pro
 			(response) => {
 				const chunks: Buffer[] = [];
 				response.on("data", (chunk: Buffer) => chunks.push(chunk));
-				response.on("end", () =>
+				response.on("end", () => {
+					const bytes = Buffer.concat(chunks);
 					resolve({
 						status: response.statusCode ?? 0,
 						headers: response.headers,
-						body: Buffer.concat(chunks).toString("utf8"),
-					}),
-				);
+						body: bytes.toString("utf8"),
+						bytes,
+					});
+				});
 			},
 		);
 		req.on("error", reject);

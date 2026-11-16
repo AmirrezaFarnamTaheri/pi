@@ -12,7 +12,7 @@ import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { WebSocket } from "ws";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Sharing } from "../../plugins/sharing/contract.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER } from "./browser.ts";
 import { type Fixture, holdIn, http, poll, startFixture, until } from "./helpers.ts";
 
 const NO_CORS = { "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "script" };
@@ -166,7 +166,7 @@ describe("foreign browser requests", () => {
 			const owner = await Browser.start();
 			await owner.signIn(fixture.owner);
 			const fresh = await Browser.start();
-			const ownerUi = `document.querySelector('.composer textarea') && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
+			const ownerUi = `document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
 			try {
 				// Every request the browser sends to p2: its URL, whether it carried the owner cookie, and p2's status.
 				const seen = new Map<string, { url: string; cookie?: boolean; status?: number }>();

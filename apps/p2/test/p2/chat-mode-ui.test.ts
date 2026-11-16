@@ -4,11 +4,8 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { Sessions } from "../../plugins/sessions/contract.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, setComposer } from "./browser.ts";
 import { type Fixture, holdIn, startFixture } from "./helpers.ts";
-
-const input = (selector: string, value: string) =>
-	`(()=>{const e=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`;
 
 describe("chat mode in the browser", { skip: !browserTests }, () => {
 	let fixture: Fixture;
@@ -35,7 +32,7 @@ describe("chat mode in the browser", { skip: !browserTests }, () => {
 		await browser.click(".composer button.chat-mode");
 		await browser.wait(`document.querySelector('.composer button.chat-mode')?.getAttribute('aria-pressed')==='true'`);
 
-		await browser.evaluate(input(".composer textarea", "Lunch first?"));
+		await browser.evaluate(setComposer("Lunch first?"));
 		await browser.click("button[aria-label=Send]");
 		await browser.wait(`document.querySelector('.chat-message .bubble')?.textContent.includes('Lunch first?')`);
 		assert.match(
@@ -50,7 +47,7 @@ describe("chat mode in the browser", { skip: !browserTests }, () => {
 		await browser.wait(`document.querySelector('.composer button.chat-mode')?.getAttribute('aria-pressed')==='true'`);
 		await browser.wait(`document.querySelector('.chat-message .bubble')?.textContent.includes('Lunch first?')`);
 
-		await browser.evaluate(input(".composer textarea", "@pi where should we go?"));
+		await browser.evaluate(setComposer("@pi where should we go?"));
 		await browser.click("button[aria-label=Send]");
 		await browser.wait(`document.querySelector('.messages .assistant')?.textContent.includes('Owner: Lunch first?')`);
 		// The mention shows what the owner wrote, from its entry's data, and how much chat went with it.
@@ -77,7 +74,7 @@ describe("chat mode in the browser", { skip: !browserTests }, () => {
 		await browser.click('.composer button[aria-label="Cancel reply"]');
 		await browser.wait(`!document.querySelector('.composer .replying')`);
 		await browser.click(reply("Owner"));
-		await browser.evaluate(input(".composer textarea", "The place downstairs"));
+		await browser.evaluate(setComposer("The place downstairs"));
 		await browser.click("button[aria-label=Send]");
 		await browser.wait(`document.querySelector('.reply-quote')?.textContent==='Owner Lunch first?'`);
 		await browser.wait(`!document.querySelector('.composer .replying')`);
@@ -100,7 +97,7 @@ describe("chat mode in the browser", { skip: !browserTests }, () => {
 		await new Promise((resolve) => setTimeout(resolve, 1000)); // the long press needs 500 ms; leave room under load
 		await browser.call("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 		await browser.wait(`document.querySelector('.composer .replying')?.textContent==='Replying to Pi'`);
-		await browser.evaluate(input(".composer textarea", "Agreed"));
+		await browser.evaluate(setComposer("Agreed"));
 		await browser.click("button[aria-label=Send]");
 		await browser.wait(
 			`[...document.querySelectorAll('.reply-quote')].some(e=>e.textContent.startsWith('Pi Echo:'))`,

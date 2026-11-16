@@ -158,7 +158,11 @@ describe("chat mode (server, sharing, fake provider)", () => {
 	});
 
 	it("gives a mention the chat no mention passed on yet, with authors, attachments and capped images", async () => {
-		const png = Buffer.from("89504e470d0a1a0a", "hex");
+		// A real 1x1 PNG: inline images are decoded, and bytes that are not one are left out.
+		const png = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+			"base64",
+		);
 		const alice = await joinAs("full", "Alice");
 		const [aliceChat, aliceMode] = await Promise.all([
 			holdIn(alice.host, Chat, { session, conversation: 1 }, "participant"),
@@ -199,7 +203,12 @@ describe("chat mode (server, sharing, fake provider)", () => {
 		assert.match(text, /^Owner: my notes \[attached: notes\.txt, d\.png, e\.png\]$/m);
 		assert.match(text, /Alice \(guest\) mentioned you:\n@Pi, what do you think\?/);
 		assert.match(text, /^Owner: hello people$/m, "chat never passed on goes with the first mention");
-		for (const name of ["a.png", "b.png", "c.png", "notes.txt", "d.png", "e.png"]) assert(text.includes(`(${name},`));
+		assert.equal(
+			(text.match(/<image name=\[Image #\d+\] path="/g) ?? []).length,
+			5,
+			"the model is given a path for every attached image",
+		);
+		assert.match(text, /<file name=\[File #1\] path="[^"]+" \/>/, "the text attachment remains accessible");
 		const inlined = (asked.content as { type: string }[]).filter((part) => part.type === "image");
 		assert.equal(inlined.length, MAX_DIGEST_IMAGES, "only the newest images are inlined");
 		// People see the mention from its entry's data: Alice's own words, and which chat went with it.

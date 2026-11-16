@@ -19,14 +19,13 @@ import {
 	Commands,
 	closeLayers,
 	getNavigation,
+	type Layer,
 	MoreIcon,
 	NEW_SESSION,
 	navigate,
 	openLayer,
 	openPage,
-	PiLogo,
 	rememberMains,
-	Slot,
 	SlotList,
 	Slots,
 	startNewSession,
@@ -44,8 +43,8 @@ import {
 } from "@p2/app/v1/web";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Envs } from "../envs/contract.ts";
-import { directoryPickerLayer } from "../envs/contract.web.tsx";
-import { Projects, placeOn } from "../projects/contract.ts";
+import { DirectoryPicker, directoryPickerLayer } from "../envs/contract.web.tsx";
+import { type ProjectPlace, Projects, placeOn } from "../projects/contract.ts";
 import { SidebarRollups } from "../rollups/contract.ts";
 import { Search, SessionReads } from "../search/contract.ts";
 import { SessionStatus } from "../status/contract.ts";
@@ -65,6 +64,7 @@ import {
 	moved,
 	type NewTarget,
 	ordered,
+	PROJECTS,
 	ROLLUPS,
 	type RollupContext,
 	type SidebarRow,
@@ -72,6 +72,7 @@ import {
 	type Wanting,
 	wantingOf,
 } from "./sidebar/model.ts";
+import { NEW_PROJECT, NewProjectSheet, newProjectLayer, PROJECT_FOLDER, placeOf } from "./sidebar/NewProjectSheet.tsx";
 import { publishPage, usePageData } from "./sidebar/page-data.ts";
 import { type CodeSource, RollupSheet } from "./sidebar/RollupSheet.tsx";
 import { folderName } from "./sidebar/Row.tsx";
@@ -90,8 +91,8 @@ const subscribeVisibility = (listener: () => void) => {
 /** Whether the page is shown (not a background tab or a hidden app). */
 const usePageVisible = () => useSyncExternalStore(subscribeVisibility, () => document.visibilityState === "visible");
 
-/** The owner's sidebar header start: the Pi logo, unless a plugin puts its own there (the Familiar's). */
-const brand = <Slot name="drawer-brand" fallback={<PiLogo compact />} />;
+/** Rows before the sidebar's "New session", each a list item (`sidebar-start:<name>`, e.g. the Familiar's). */
+const startRows = <SlotList prefix="sidebar-start" />;
 /** Icon buttons at the footer's end, before the theme switch (`sidebar-actions:<name>`, e.g. the Settings gear). */
 const actions = <SlotList prefix="sidebar-actions" />;
 /** Icon buttons in the header, before the collapse button (`sidebar-header:<name>`, e.g. the scope prompt's). */
@@ -355,7 +356,7 @@ function Sidebar() {
 	const { focusWhenOpen } = useComposerState();
 	// Project glyphs for groups and the sessions of flat lists; the owner's only (guests read no projects).
 	const glyphs = useMemo(() => (owner ? glyphsOf(context) : undefined), [owner, context]);
-	// Sessions a plugin's sidebar entry shows (the Familiar's, in `drawer-brand`) are left out of the rollups.
+	// Sessions a plugin's sidebar entry shows (the Familiar's, a `sidebar-start` row) are left out of the rollups.
 	const [apart, setApart] = useState<Readonly<Record<string, readonly string[]>>>({});
 	const listApart = useCallback(
 		(key: string, ids: readonly string[]) => setApart((current) => ({ ...current, [key]: ids })),
@@ -534,6 +535,19 @@ function Sidebar() {
 			...(live ? { onRefresh: refresh } : {}),
 		};
 	};
+	const projectFolder = useSheet(PROJECT_FOLDER);
+	const newProject = useSheet(NEW_PROJECT);
+	const newPlace = placeOf(newProject?.locator);
+	/** Each step of New project is a layer over the rollup's options: Back returns to the previous one. */
+	const pushLayer = (layer: Layer) => {
+		const nav = getNavigation();
+		void nav.push({ ...nav.route, layers: [...nav.route.layers, layer] });
+	};
+	const createProject = async (name: string, place: ProjectPlace) => {
+		const live = projectsHeld && liveIn(projectsHeld, "owner");
+		if (!live) throw new Error("Not connected");
+		await live.create({ name, place }, BACKGROUND_CONTEXT);
+	};
 	/** A rollup's options: its window, and moving it among the rollups. */
 	const rollupActions = (key: string) => {
 		const at = rollups.findIndex((rollup) => rollup.key === key);
@@ -557,7 +571,7 @@ function Sidebar() {
 				now={view.now}
 				page={route.page}
 				newSession={route.newSession === true}
-				brand={brand}
+				startRows={startRows}
 				guest={guest}
 				activeId={route.session}
 				conversationId={route.conversation}
@@ -581,7 +595,29 @@ function Sidebar() {
 					section={optionsOf}
 					code={codeOf(optionsOf.key)}
 					now={view.now}
+					{...(optionsOf.key === PROJECTS
+						? { onNewProject: () => pushLayer(directoryPickerLayer(null, "~", PROJECT_FOLDER)) }
+						: {})}
 					{...rollupActions(optionsOf.key)}
+					onClose={closeLayers}
+				/>
+			)}
+			{projectFolder && (
+				<DirectoryPicker
+					sheet={PROJECT_FOLDER}
+					title="Project folder"
+					env={null}
+					value="~"
+					onChange={(env, path) => pushLayer(newProjectLayer({ env, path }))}
+					onClose={closeLayers}
+				/>
+			)}
+			{newProject && newPlace && (
+				<NewProjectSheet
+					key={newProject.locator}
+					place={newPlace}
+					taken={context.projects.map((project) => project.name)}
+					onCreate={(name) => createProject(name, newPlace)}
 					onClose={closeLayers}
 				/>
 			)}
