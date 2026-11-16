@@ -6057,7 +6057,6 @@ export class InteractiveMode {
 		}
 	}
 
-
 	/** Return to the owning provider, not to the flat login list. */
 	private showAccountParent(providerId: string): void {
 		const group = this.accountProviderGroups().find((candidate) =>
@@ -6753,7 +6752,9 @@ export class InteractiveMode {
 			runtime.setAccountRotationPreferences(sourceProviderId, { ...pref, enabled: true });
 			this.footer.invalidate();
 			this.updateEditorBorderColor();
-			this.showStatus(`Rotation enabled for ${sourceProviderId}; tool continuations remain on their originating account.`);
+			this.showStatus(
+				`Rotation enabled for ${sourceProviderId}; tool continuations remain on their originating account.`,
+			);
 			this.showProviderAccounts(sourceProviderId);
 		} catch (error) {
 			this.showError(`Cannot enable rotation: ${error instanceof Error ? error.message : String(error)}`);
@@ -6784,7 +6785,6 @@ export class InteractiveMode {
 		this.showStatus(`Rotation disabled for ${groupId}; selected accounts and algorithm preserved.`);
 		this.showProviderAccounts(groupId);
 	}
-
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
 		if (!providerOptions) {

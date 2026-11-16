@@ -105,7 +105,11 @@ describe("interactive account rotation activation", () => {
 					hasConfiguredAuth: () => true,
 					getModel: () => virtual,
 					getModels: () => [{ id: "claude-sonnet" }],
-					getAccountRotationPreferences: () => ({ enabled: false, strategy: "round-robin", memberIds: ["anthropic", "account-anthropic-2"] }),
+					getAccountRotationPreferences: () => ({
+						enabled: false,
+						strategy: "round-robin",
+						memberIds: ["anthropic", "account-anthropic-2"],
+					}),
 					setAccountRotationPreferences: () => {},
 				},
 				setModel: async (model: typeof virtual, options: unknown) => {
