@@ -1,266 +1,196 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import type { AccountRotationPreferences } from "../src/core/account-profiles.ts";
 import type { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
-describe("account management menu", () => {
+describe("provider-first account manager", () => {
 	beforeEach(() => {
 		initTheme("dark");
 		setKeybindings(new KeybindingsManager());
 	});
 
-	function harness(
-		activeProvider = "anthropic",
-		defaultProvider?: string,
-		available = [{ provider: "anthropic", id: "claude-sonnet" }],
-	) {
+	function harness() {
 		const actions: string[] = [];
-		const names = new Map([
-			["anthropic", "Main"],
-			["account-anthropic-1", "Work"],
-		]);
-		const renameAccount = vi.fn((id: string, name: string) => {
-			names.set(id, name.trim());
-			return name.trim();
+		let preferences: AccountRotationPreferences = {
+			enabled: false, strategy: "round-robin", memberIds: ["anthropic", "account-anthropic-1"],
+		};
+		const names = new Map([["anthropic", "Atomic Chat"], ["account-anthropic-1", "Work"]]);
+		const alias = { id: "account-anthropic-1", label: "Work", sourceProviderId: "anthropic" };
+		const renameAccount = vi.fn((id: string, label: string) => {
+			names.set(id, label.trim());
+			return label.trim();
 		});
-		const addAccountAlias = vi.fn((sourceProviderId: string, name?: string) => {
-			const account = { id: "account-anthropic-2", sourceProviderId, label: name?.trim() ?? "Unnamed" };
-			actions.push(`add ${account.id}`);
-			return account;
+		const addAccountAlias = vi.fn((sourceProviderId: string, label?: string) => {
+			const profile = { id: "account-anthropic-2", sourceProviderId, label: label?.trim() ?? "Backup" };
+			actions.push(`add ${profile.id}`);
+			return profile;
 		});
-		const removeAccountAlias = vi.fn(async (id: string) => {
-			actions.push(`delete ${id}`);
-		});
-		const logout = vi.fn(async (id: string) => {
-			actions.push(`logout ${id}`);
-		});
-		const setModel = vi.fn(async (model: { provider: string }, _options?: { persist?: boolean }) => {
+		const removeAccountAlias = vi.fn(async (id: string) => { actions.push(`delete ${id}`); });
+		const logout = vi.fn(async (id: string) => { actions.push(`logout ${id}`); });
+		const setModel = vi.fn(async (model: { provider: string }, _opts?: { persist?: boolean }) => {
 			actions.push(`switch ${model.provider}`);
 		});
-		const alias = { id: "account-anthropic-1", label: "Work", sourceProviderId: "anthropic" };
+		const setAccountRotationPreferences = vi.fn((_id: string, value: AccountRotationPreferences) => {
+			preferences = { ...value, memberIds: [...value.memberIds] };
+		});
 		const runtime = {
 			getProviders: () => [
 				{ id: "anthropic", name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
-				{ id: "account-anthropic-1", name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
+				{ id: alias.id, name: "Anthropic", auth: { oauth: { login: async () => undefined } } },
 			],
 			getAccountProfiles: () => [alias],
 			getProviderAuthStatus: () => ({ configured: true }),
 			hasConfiguredAuth: () => true,
 			isUsingOAuth: () => true,
-			addAccountAlias,
-			getProvider: () => ({ name: "Anthropic" }),
-			getAccountLabel: (id: string) => names.get(id) ?? "Unnamed",
-			getAvailableSnapshot: () => available,
-			renameAccount,
-			removeAccountAlias,
-			logout,
+			getAccountLabel: (id: string) => names.get(id) ?? "Primary",
+			getProvider: () => ({ name: "Anthropic", auth: { oauth: { login: async () => undefined } } }),
+			getAccountRotationPreferences: () => ({ ...preferences, memberIds: [...preferences.memberIds] }),
+			setAccountRotationPreferences,
+			getRotationMemberIds: () => ["anthropic", alias.id],
+			getModel: () => ({ provider: "account-profiles", id: "anthropic" }),
+			getModels: () => [{ provider: "anthropic", id: "claude-sonnet", name: "Sonnet" }],
+			getAvailableSnapshot: () => [{ provider: "anthropic", id: "claude-sonnet" }],
+			renameAccount, addAccountAlias, removeAccountAlias, logout,
 		};
 		let selected: ExtensionSelectorComponent | undefined;
 		const mode = Object.create(InteractiveMode.prototype) as {
 			runtimeHost: unknown;
 			showSelector: (factory: (done: () => void) => { component: ExtensionSelectorComponent }) => void;
-			showExtensionInput: (label: string, initial?: string) => Promise<string | undefined>;
+			showExtensionInput: (...args: unknown[]) => Promise<string | undefined>;
 			showStatus: (message: string) => void;
 			showError: (message: string) => void;
 			showAccountManager: () => void;
+			showProviderAccounts: (id: string) => void;
+			getLoginProviderOptions: () => { name: string; accountLabel?: string }[];
 			updateAvailableProviderCount: () => Promise<void>;
 			updateEditorBorderColor: () => void;
 			footer: { invalidate: () => void };
+			ui: { requestRender: () => void };
+			settingsManager: { getDefaultProvider: () => string | undefined; getDefaultModel: () => string; setDefaultModelAndProvider: () => void };
 		};
 		mode.runtimeHost = {
 			session: {
 				settingsManager: {
-					getDefaultProvider: () => defaultProvider,
+					getDefaultProvider: () => undefined,
 					getDefaultModel: () => "claude-sonnet",
-					setDefaultModelAndProvider: (provider: string, modelId: string) =>
-						actions.push(`default ${provider}/${modelId}`),
+					setDefaultModelAndProvider: () => {},
 				},
-				model: { provider: activeProvider, id: "claude-sonnet" },
+				model: { provider: "anthropic", id: "claude-sonnet" },
 				modelRuntime: runtime,
 				setModel,
 			},
 		};
-		mode.showSelector = (factory) => {
-			selected = factory(() => {}).component;
-		};
+		mode.showSelector = (factory) => { selected = factory(() => {}).component; };
 		mode.showExtensionInput = async () => "  Client projects  ";
-		mode.showStatus = () => {};
-		const logins: string[] = [];
-		(mode as unknown as { showLoginDialog: (id: string) => Promise<void> }).showLoginDialog = async (id) => {
-			logins.push(id);
-		};
-		mode.showError = (message) => {
-			throw new Error(message);
-		};
+		mode.showStatus = (message) => { actions.push(`status ${message}`); };
+		mode.showError = (message) => { throw new Error(message); };
 		mode.updateAvailableProviderCount = async () => {};
 		mode.updateEditorBorderColor = () => {};
 		mode.footer = { invalidate() {} };
-		const getSelector = () => {
+		mode.ui = { requestRender() {} };
+		mode.settingsManager = {
+			getDefaultProvider: () => undefined, getDefaultModel: () => "claude-sonnet",
+			setDefaultModelAndProvider() {},
+		};
+		const selector = () => {
 			if (!selected) throw new Error("No account selector");
 			return selected;
 		};
 		const choose = (index: number) => {
-			const selector = getSelector();
-			for (let i = 0; i < index; i++) selector.handleInput("j");
-			selector.handleInput("\n");
+			for (let i = 0; i < index; i++) selector().handleInput("j");
+			selector().handleInput("\n");
 		};
 		return {
-			mode,
-			actions,
-			renameAccount,
-			addAccountAlias,
-			logins,
-			removeAccountAlias,
-			logout,
-			setModel,
-			getSelector,
-			choose,
+			mode, actions, selector, choose, renameAccount, addAccountAlias, removeAccountAlias,
+			logout, setModel, setAccountRotationPreferences, getPreferences: () => preferences,
+			openProvider() { mode.showAccountManager(); choose(0); },
 		};
 	}
 
-	it("/login home shows management actions without a separate accounts screen", () => {
+	it("shows immutable provider names, not editable labels, at /login root", () => {
 		const ui = harness();
 		ui.mode.showAccountManager();
-		const view = ui.getSelector().render(100).join("\n");
-		expect(view).toContain("Login");
-		expect(view).toContain("Main");
+		const view = ui.selector().render(100).join("\n");
+		expect(view).toContain("Anthropic");
+		expect(view).not.toContain("Atomic Chat");
+		expect(view).not.toContain("Work");
+		expect(view).toContain("Add custom provider");
+	});
+
+	it("shows account nicknames, types and checkboxes within the provider", () => {
+		const ui = harness();
+		ui.openProvider();
+		const view = ui.selector().render(100).join("\n");
+		expect(view).toContain("Atomic Chat");
 		expect(view).toContain("Work");
-		expect(view).toContain("Existing accounts");
-		expect(view).toContain("Account actions");
+		expect(view).toContain("subscription");
+		expect(view).toContain("Select all");
+		expect(view).toContain("Rotation algorithm");
 	});
 
-	it("keeps the provider brand distinct from an account label in sign-in choices", () => {
+	it("login provider choices do not append mutable nicknames", () => {
 		const ui = harness();
-		const mode = ui.mode as unknown as {
-			getLoginProviderOptions: () => { id: string; name: string; accountLabel?: string }[];
-		};
-		ui.renameAccount("anthropic", "Client projects");
-		const options = mode.getLoginProviderOptions();
-		expect(options.find((option) => option.id === "anthropic")).toMatchObject({
-			name: "Anthropic",
-			accountLabel: "Client projects",
-		});
-		expect(options.find((option) => option.id === "account-anthropic-1")).toMatchObject({
-			name: "Anthropic",
-			accountLabel: "Work",
-		});
+		expect(ui.mode.getLoginProviderOptions().map((option) => option.name)).toEqual(["Anthropic", "Anthropic"]);
+		expect(ui.mode.getLoginProviderOptions().every((option) => option.accountLabel === undefined)).toBe(true);
 	});
 
-	it("Add account creates a named identity without signing in to a provider", async () => {
+	it("Space changes persisted rotation membership by stable account ID", () => {
 		const ui = harness();
-		const mode = ui.mode as unknown as {
-			startAdditionalAccountLogin: (option: { id: string; name: string; authType: "oauth" }) => Promise<void>;
-			showAccountActions: (profile: { id: string; label: string }) => void;
-		};
-		const actions = vi.spyOn(mode, "showAccountActions");
-		await mode.startAdditionalAccountLogin({ id: "anthropic", name: "Anthropic", authType: "oauth" });
-		expect(ui.addAccountAlias).toHaveBeenCalledWith("anthropic", "  Client projects  ");
-		expect(ui.logins).toEqual([]);
-		expect(actions).toHaveBeenCalledWith(expect.objectContaining({ label: "Client projects" }));
+		ui.openProvider();
+		ui.selector().handleInput("j"); // Primary account
+		ui.selector().handleInput(" ");
+		expect(ui.getPreferences().memberIds).toEqual(["account-anthropic-1"]);
+		expect(ui.setAccountRotationPreferences).toHaveBeenCalledWith("anthropic", expect.objectContaining({
+			memberIds: ["account-anthropic-1"],
+		}));
 	});
 
-	it("does not delete an active account when there is no replacement model", async () => {
-		const ui = harness("account-anthropic-1", undefined, []);
-		ui.mode.showError = (message) => ui.actions.push(`error ${message}`);
-		ui.mode.showAccountManager();
-		ui.choose(1);
-		ui.choose(4);
-		ui.choose(1);
+	it("M selects a persisted rotation algorithm", () => {
+		const ui = harness();
+		ui.openProvider();
+		ui.selector().handleInput("m");
+		ui.choose(3);
+		expect(ui.getPreferences().strategy).toBe("hybrid");
+	});
+
+	it("T enables rotation using the selected accounts", async () => {
+		const ui = harness();
+		ui.openProvider();
+		ui.selector().handleInput("t");
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.removeAccountAlias).not.toHaveBeenCalled();
-		expect(ui.actions.some((action) => action.includes("error"))).toBe(true);
+		expect(ui.getPreferences().enabled).toBe(true);
+		expect(ui.setModel).toHaveBeenCalledWith({ provider: "account-profiles", id: "anthropic" }, { persist: false });
 	});
 
-	it("starts rename with the current nickname, ready to edit", async () => {
+	it("R renames only the highlighted account", async () => {
 		const ui = harness();
-		const edit = vi.spyOn(ui.mode, "showExtensionInput");
-		ui.mode.showAccountManager();
-		ui.getSelector().handleInput("r");
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(edit).toHaveBeenCalledWith("Rename Main", undefined, { initialValue: "Main" });
-	});
-
-	it("renames the highlighted login directly with r", async () => {
-		const ui = harness();
-		ui.mode.showAccountManager();
-		ui.getSelector().handleInput("r");
+		ui.openProvider();
+		ui.selector().handleInput("j");
+		ui.selector().handleInput("r");
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(ui.renameAccount).toHaveBeenCalledWith("anthropic", "  Client projects  ");
 	});
 
-	it("deletes the highlighted additional account directly with x", async () => {
-		const ui = harness("account-anthropic-1");
-		ui.mode.showAccountManager();
-		ui.getSelector().handleInput("j"); // Additional login
-		ui.getSelector().handleInput("x");
-		ui.choose(1); // Single removal confirmation
+	it("+ creates an additional unsigned account instead of overwriting existing credentials", async () => {
+		const ui = harness();
+		ui.openProvider();
+		ui.selector().handleInput("+");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(ui.addAccountAlias).toHaveBeenCalledWith("anthropic", "  Client projects  ");
+	});
+
+	it("X removes a selected additional account with confirmation", async () => {
+		const ui = harness();
+		ui.openProvider();
+		ui.selector().handleInput("j");
+		ui.selector().handleInput("j");
+		ui.selector().handleInput("x");
+		ui.choose(1);
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(ui.removeAccountAlias).toHaveBeenCalledWith("account-anthropic-1");
 		expect(ui.logout).not.toHaveBeenCalled();
-	});
-
-	it("right opens account actions and left returns to login list", async () => {
-		const ui = harness();
-		ui.mode.showAccountManager();
-		ui.getSelector().handleInput("\x1b[C");
-		expect(ui.getSelector().render(100).join("\n")).toContain("Rename account");
-		ui.getSelector().handleInput("\x1b[D");
-		expect(ui.getSelector().render(100).join("\n")).toContain("＋ Create separate account");
-	});
-
-	it("shows original and additional accounts in the same menu and renames the original", async () => {
-		const ui = harness();
-		ui.mode.showAccountManager();
-		ui.choose(0); // Main
-		ui.choose(2); // Rename account
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.renameAccount).toHaveBeenCalledWith("anthropic", "  Client projects  ");
-	});
-
-	it("renames an additional account without changing its stable ID", async () => {
-		const ui = harness();
-		ui.mode.showAccountManager();
-		ui.choose(1); // Work
-		ui.choose(2); // Rename account
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.renameAccount).toHaveBeenCalledWith("account-anthropic-1", "  Client projects  ");
-	});
-
-	it("deletes the selected additional account, switching away first when it is active", async () => {
-		const ui = harness("account-anthropic-1");
-		ui.mode.showAccountManager();
-		ui.choose(1); // Work
-		ui.choose(4); // Delete account (rotation option is present)
-		ui.choose(1); // Confirm once
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.actions).toEqual(["switch anthropic", "delete account-anthropic-1"]);
-		expect(ui.logout).not.toHaveBeenCalled();
-	});
-
-	it("updates a saved default when deleting the account it uses", async () => {
-		const ui = harness("account-anthropic-1", "account-anthropic-1");
-		ui.mode.showAccountManager();
-		ui.choose(1);
-		ui.choose(4);
-		ui.choose(1);
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.setModel).toHaveBeenCalledWith({ provider: "anthropic", id: "claude-sonnet" }, { persist: true });
-	});
-
-	it("disconnects the original login without deleting unrelated accounts", async () => {
-		const ui = harness("anthropic", undefined, [
-			{ provider: "anthropic", id: "claude-sonnet" },
-			{ provider: "account-anthropic-1", id: "claude-sonnet" },
-		]);
-		ui.mode.showAccountManager();
-		ui.choose(0); // Main
-		ui.choose(4); // Disconnect account
-		ui.choose(1); // Confirm once
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		expect(ui.actions).toEqual(["switch account-anthropic-1", "logout anthropic"]);
-		expect(ui.logout).toHaveBeenCalledWith("anthropic");
-		expect(ui.removeAccountAlias).not.toHaveBeenCalled();
 	});
 });
