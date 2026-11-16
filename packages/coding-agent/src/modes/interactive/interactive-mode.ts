@@ -101,7 +101,7 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
-import { groupProviderAccounts, type ProviderAccountGroup, type GroupedAccount } from "../../core/account-provider-groups.ts";
+import { groupProviderAccounts, type ProviderAccountGroup } from "../../core/account-provider-groups.ts";
 import type { AccountRotationStrategy, AccountRotationPreferences } from "../../core/account-profiles.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { compareProviders } from "../../core/preferred-providers.ts";
@@ -5951,7 +5951,6 @@ export class InteractiveMode {
 		for (const provider of this.session.modelRuntime.getProviders()) {
 			// A provider's brand and an account's editable nickname are different fields.
 			// Login provider choices show the immutable brand only; account nicknames live in the provider manager.
-			const accountLabel = {};
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
 			const status = authStatus.configured
 				? {
@@ -5964,7 +5963,6 @@ export class InteractiveMode {
 				options.push({
 					id: provider.id,
 					name: provider.name,
-					...accountLabel,
 					authType: "oauth",
 					method: provider.auth.oauth,
 					status,
@@ -5975,7 +5973,6 @@ export class InteractiveMode {
 				options.push({
 					id: provider.id,
 					name: provider.name,
-					...accountLabel,
 					authType: "api_key",
 					method: provider.auth.apiKey,
 					status,
@@ -6070,6 +6067,14 @@ export class InteractiveMode {
 			];
 			return members.filter((id) => runtime.hasConfiguredAuth(id)).length >= 2;
 		});
+	}
+
+	/** Return to the owning provider, not to the flat login list. */
+	private showAccountParent(providerId: string): void {
+		const group = this.accountProviderGroups().find((candidate) =>
+			candidate.accounts.some((account) => account.id === providerId));
+		if (group) this.showProviderAccounts(group.id);
+		else this.showAccountManager();
 	}
 
 	/** Immutable provider categories are the /login root; nicknames belong only inside a category. */
@@ -6374,7 +6379,8 @@ export class InteractiveMode {
 		const rename = "Rename account";
 		const rotation = "Rotate accounts for this provider";
 		const remove = profile.original ? "Disconnect account" : "Delete account";
-		const canRotate = this.getRotatableSources().includes(profile.sourceProviderId);
+		const groupId = this.accountProviderGroups().find((group) => group.accounts.some((account) => account.id === profile.id))?.id ?? profile.sourceProviderId;
+		const canRotate = this.session.modelRuntime.getRotationMemberIds(groupId).length >= 2;
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
 				profile.label,
@@ -6383,24 +6389,24 @@ export class InteractiveMode {
 					done();
 					if (option === signIn) {
 						const methods = this.getLoginProviderOptions().filter((item) => item.id === profile.id);
-						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountManager());
+						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountParent(profile.id));
 						else if (methods.length > 1) this.showLoginAuthTypeSelector(methods);
 						else this.showError("Sign-in provider not available");
 					} else if (option === choose) this.showAccountModelSelector(profile);
 					else if (option === rename) void this.renameAccountFromMenu(profile);
-					else if (option === rotation) void this.enableAccountRotation(profile.sourceProviderId);
+					else if (option === rotation) void this.enableAccountRotation(groupId);
 					else if (option === remove) this.confirmAccountRemoval(profile);
 				},
 				() => {
 					done();
-					this.showAccountManager();
+					this.showAccountParent(profile.id);
 				},
 				{
 					description: `Provider: ${profile.sourceProviderId} · account ID: ${profile.id} · ← back · r rename · x remove`,
 					onShortcut: (keyData) => {
 						if (matchesKey(keyData, "left")) {
 							done();
-							this.showAccountManager();
+							this.showAccountParent(profile.id);
 						} else if (keyData === "r") {
 							done();
 							void this.renameAccountFromMenu(profile);
@@ -6424,14 +6430,14 @@ export class InteractiveMode {
 			initialValue: profile.label,
 		});
 		if (entered === undefined) {
-			if (returnToLogin) this.showAccountManager();
+			if (returnToLogin) this.showAccountParent(profile.id);
 			else this.showAccountActions(profile);
 			return;
 		}
 		try {
 			const name = this.session.modelRuntime.renameAccount(profile.id, entered);
 			this.showStatus(`Renamed ${profile.label} to ${name}`);
-			this.showAccountManager();
+			this.showAccountParent(profile.id);
 		} catch (error) {
 			this.showError(`Could not rename account: ${error instanceof Error ? error.message : String(error)}`);
 			this.showAccountActions(profile);
@@ -6496,42 +6502,38 @@ export class InteractiveMode {
 				(option) => {
 					done();
 					if (option !== confirm) {
-						if (returnToLogin) this.showAccountManager();
+						if (returnToLogin) this.showAccountParent(profile.id);
 						else this.showAccountActions(profile);
 						return;
 					}
 					void (async () => {
 						const runtime = this.session.modelRuntime;
 						const selected = this.session.model;
-						const connectedAfterRemoval = [
-							profile.sourceProviderId,
-							...runtime
-								.getAccountProfiles()
-								.filter(
-									(account) =>
-										account.sourceProviderId === profile.sourceProviderId && account.id !== profile.id,
-								)
-								.map((account) => account.id),
-						].filter((id) => id !== profile.id && runtime.hasConfiguredAuth(id)).length;
+						const groupId = this.accountProviderGroups().find((group) =>
+							group.accounts.some((account) => account.id === profile.id))?.id ?? profile.sourceProviderId;
+						const preference = runtime.getAccountRotationPreferences(groupId);
+						const connectedAfterRemoval = preference.memberIds.filter(
+							(id) => id !== profile.id && runtime.hasConfiguredAuth(id),
+						).length;
 						const rotationWillStop = connectedAfterRemoval < 2;
 						const activeNeedsSwitch =
 							selected?.provider === profile.id ||
 							(rotationWillStop &&
 								selected?.provider === "account-profiles" &&
-								selected.id === profile.sourceProviderId);
+								selected.id === groupId);
 						const defaultProvider = this.settingsManager.getDefaultProvider();
 						const defaultNeedsUpdate =
 							defaultProvider === profile.id ||
 							(rotationWillStop &&
 								defaultProvider === "account-profiles" &&
-								this.settingsManager.getDefaultModel() === profile.sourceProviderId);
+								this.settingsManager.getDefaultModel() === groupId);
 						if (activeNeedsSwitch || defaultNeedsUpdate) {
 							const fallback = runtime
 								.getAvailableSnapshot()
 								.find(
 									(model) =>
 										model.provider !== profile.id &&
-										!(model.provider === "account-profiles" && model.id === profile.sourceProviderId),
+										!(model.provider === "account-profiles" && model.id === groupId),
 								);
 							if (!fallback) {
 								throw new Error(
@@ -6546,13 +6548,17 @@ export class InteractiveMode {
 						}
 						if (profile.original) await runtime.logout(profile.id);
 						else await runtime.removeAccountAlias(profile.id);
+						if (rotationWillStop && preference.enabled) {
+							const latest = runtime.getAccountRotationPreferences(groupId);
+							runtime.setAccountRotationPreferences(groupId, { ...latest, enabled: false });
+						}
 						await this.updateAvailableProviderCount();
 						this.footer.invalidate();
 						this.updateEditorBorderColor();
 						this.showStatus(
 							profile.original ? `Removed saved login for ${profile.label}` : `Deleted ${profile.label}`,
 						);
-						this.showAccountManager();
+						this.showAccountParent(profile.id);
 					})().catch((error: unknown) =>
 						this.showError(
 							`Could not ${confirm.toLowerCase()} account: ${error instanceof Error ? error.message : String(error)}`,
@@ -6561,7 +6567,7 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
-					if (returnToLogin) this.showAccountManager();
+					if (returnToLogin) this.showAccountParent(profile.id);
 					else this.showAccountActions(profile);
 				},
 				{
