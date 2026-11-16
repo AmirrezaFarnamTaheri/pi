@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders, request } from "node:http";
 import { after, before, describe, it } from "node:test";
 import { WebSocket as NodeWebSocket } from "ws";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER } from "./browser.ts";
 import { type Fixture, startFixture, webAssets } from "./helpers.ts";
 
 function get(
@@ -173,7 +173,7 @@ describe("web host", () => {
 						"window.cspViolations=[];document.addEventListener('securitypolicyviolation',(e)=>window.cspViolations.push(e.violatedDirective+' '+e.blockedURI))",
 				});
 				await browser.open(`http://127.0.0.1:${fixture.server.port}/`);
-				await browser.wait("document.querySelector('.composer textarea') && !document.querySelector('.offline')");
+				await browser.wait(`document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`);
 				assert.deepEqual(await browser.evaluate("window.cspViolations"), []);
 				// A page of another origin (another port, same site) framing the app: Chromium refuses to render it.
 				await browser.open(`http://127.0.0.1:${framerPort}/`);
