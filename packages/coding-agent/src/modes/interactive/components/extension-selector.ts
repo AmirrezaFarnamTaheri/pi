@@ -90,6 +90,14 @@ export class ExtensionSelectorComponent extends Container {
 		this.updateList();
 	}
 
+	/** Refresh checkbox/status text without closing the overlay or resetting keyboard focus. */
+	setOptions(options: string[], sectionLabels?: Readonly<Record<number, string>>): void {
+		this.options = options;
+		this.sectionLabels = sectionLabels;
+		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, options.length - 1));
+		this.updateList();
+	}
+
 	private updateList(): void {
 		this.listContainer.clear();
 
