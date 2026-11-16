@@ -1,5 +1,7 @@
 name: Review Upstream Sync
 on:
+  push:
+    branches: [sync/request-latest-upstream-20261116]
   schedule:
     - cron: "27 5 * * 1"
   workflow_dispatch:
