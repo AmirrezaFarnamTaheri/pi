@@ -1,7 +1,7 @@
 import { setKeybindings } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { AccountRotationPreferences } from "../src/core/account-profiles.ts";
+import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { ExtensionSelectorComponent } from "../src/modes/interactive/components/extension-selector.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -15,9 +15,14 @@ describe("provider-first account manager", () => {
 	function harness() {
 		const actions: string[] = [];
 		let preferences: AccountRotationPreferences = {
-			enabled: false, strategy: "round-robin", memberIds: ["anthropic", "account-anthropic-1"],
+			enabled: false,
+			strategy: "round-robin",
+			memberIds: ["anthropic", "account-anthropic-1"],
 		};
-		const names = new Map([["anthropic", "Atomic Chat"], ["account-anthropic-1", "Work"]]);
+		const names = new Map([
+			["anthropic", "Atomic Chat"],
+			["account-anthropic-1", "Work"],
+		]);
 		const alias = { id: "account-anthropic-1", label: "Work", sourceProviderId: "anthropic" };
 		const renameAccount = vi.fn((id: string, label: string) => {
 			names.set(id, label.trim());
@@ -28,8 +33,12 @@ describe("provider-first account manager", () => {
 			actions.push(`add ${profile.id}`);
 			return profile;
 		});
-		const removeAccountAlias = vi.fn(async (id: string) => { actions.push(`delete ${id}`); });
-		const logout = vi.fn(async (id: string) => { actions.push(`logout ${id}`); });
+		const removeAccountAlias = vi.fn(async (id: string) => {
+			actions.push(`delete ${id}`);
+		});
+		const logout = vi.fn(async (id: string) => {
+			actions.push(`logout ${id}`);
+		});
 		const setModel = vi.fn(async (model: { provider: string }, _opts?: { persist?: boolean }) => {
 			actions.push(`switch ${model.provider}`);
 		});
@@ -53,7 +62,10 @@ describe("provider-first account manager", () => {
 			getModel: () => ({ provider: "account-profiles", id: "anthropic" }),
 			getModels: () => [{ provider: "anthropic", id: "claude-sonnet", name: "Sonnet" }],
 			getAvailableSnapshot: () => [{ provider: "anthropic", id: "claude-sonnet" }],
-			renameAccount, addAccountAlias, removeAccountAlias, logout,
+			renameAccount,
+			addAccountAlias,
+			removeAccountAlias,
+			logout,
 		};
 		let selected: ExtensionSelectorComponent | undefined;
 		const mode = Object.create(InteractiveMode.prototype) as {
@@ -69,7 +81,11 @@ describe("provider-first account manager", () => {
 			updateEditorBorderColor: () => void;
 			footer: { invalidate: () => void };
 			ui: { requestRender: () => void };
-			settingsManager: { getDefaultProvider: () => string | undefined; getDefaultModel: () => string; setDefaultModelAndProvider: () => void };
+			settingsManager: {
+				getDefaultProvider: () => string | undefined;
+				getDefaultModel: () => string;
+				setDefaultModelAndProvider: () => void;
+			};
 		};
 		mode.runtimeHost = {
 			session: {
@@ -83,10 +99,16 @@ describe("provider-first account manager", () => {
 				setModel,
 			},
 		};
-		mode.showSelector = (factory) => { selected = factory(() => {}).component; };
+		mode.showSelector = (factory) => {
+			selected = factory(() => {}).component;
+		};
 		mode.showExtensionInput = async () => "  Client projects  ";
-		mode.showStatus = (message) => { actions.push(`status ${message}`); };
-		mode.showError = (message) => { throw new Error(message); };
+		mode.showStatus = (message) => {
+			actions.push(`status ${message}`);
+		};
+		mode.showError = (message) => {
+			throw new Error(message);
+		};
 		mode.updateAvailableProviderCount = async () => {};
 		mode.updateEditorBorderColor = () => {};
 		mode.footer = { invalidate() {} };
@@ -100,9 +122,21 @@ describe("provider-first account manager", () => {
 			selector().handleInput("\n");
 		};
 		return {
-			mode, actions, selector, choose, renameAccount, addAccountAlias, removeAccountAlias,
-			logout, setModel, setAccountRotationPreferences, getPreferences: () => preferences,
-			openProvider() { mode.showAccountManager(); choose(0); },
+			mode,
+			actions,
+			selector,
+			choose,
+			renameAccount,
+			addAccountAlias,
+			removeAccountAlias,
+			logout,
+			setModel,
+			setAccountRotationPreferences,
+			getPreferences: () => preferences,
+			openProvider() {
+				mode.showAccountManager();
+				choose(0);
+			},
 		};
 	}
 
@@ -139,9 +173,12 @@ describe("provider-first account manager", () => {
 		ui.selector().handleInput("j"); // Primary account
 		ui.selector().handleInput(" ");
 		expect(ui.getPreferences().memberIds).toEqual(["account-anthropic-1"]);
-		expect(ui.setAccountRotationPreferences).toHaveBeenCalledWith("anthropic", expect.objectContaining({
-			memberIds: ["account-anthropic-1"],
-		}));
+		expect(ui.setAccountRotationPreferences).toHaveBeenCalledWith(
+			"anthropic",
+			expect.objectContaining({
+				memberIds: ["account-anthropic-1"],
+			}),
+		);
 	});
 
 	it("M selects a persisted rotation algorithm", () => {

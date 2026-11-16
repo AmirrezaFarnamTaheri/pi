@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import {
 	addAccountProfile,
-	loadAccountRotationPreferences,
-	saveAccountRotationPreferences,
 	loadAccountProfiles,
+	loadAccountRotationPreferences,
 	loadPrimaryAccountNames,
 	removeAccountProfile,
 	renameAccountProfile,
 	renamePrimaryAccount,
+	saveAccountRotationPreferences,
 } from "../src/core/account-profiles.ts";
 
 const directories: string[] = [];
@@ -82,7 +82,6 @@ test("primary names survive adding, renaming and deleting additional accounts", 
 	assert.deepEqual(loadAccountProfiles(path), []);
 });
 
-
 test("rotation membership and strategy persist by stable IDs across account renames", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-rotation-preferences-"));
 	directories.push(dir);
@@ -110,15 +109,30 @@ test("rotation preferences reject invalid IDs and duplicate members", () => {
 	directories.push(dir);
 	const path = join(dir, "account-profiles.json");
 	assert.throws(
-		() => saveAccountRotationPreferences(path, "anthropic", { enabled: true, strategy: "unknown" as "sticky", memberIds: ["anthropic"] }),
+		() =>
+			saveAccountRotationPreferences(path, "anthropic", {
+				enabled: true,
+				strategy: "unknown" as "sticky",
+				memberIds: ["anthropic"],
+			}),
 		/strategy/i,
 	);
 	assert.throws(
-		() => saveAccountRotationPreferences(path, "anthropic", { enabled: true, strategy: "random", memberIds: ["anthropic", "anthropic"] }),
+		() =>
+			saveAccountRotationPreferences(path, "anthropic", {
+				enabled: true,
+				strategy: "random",
+				memberIds: ["anthropic", "anthropic"],
+			}),
 		/duplicate/i,
 	);
 	assert.throws(
-		() => saveAccountRotationPreferences(path, "../escape", { enabled: true, strategy: "random", memberIds: ["anthropic"] }),
+		() =>
+			saveAccountRotationPreferences(path, "../escape", {
+				enabled: true,
+				strategy: "random",
+				memberIds: ["anthropic"],
+			}),
 		/provider|group/i,
 	);
 });

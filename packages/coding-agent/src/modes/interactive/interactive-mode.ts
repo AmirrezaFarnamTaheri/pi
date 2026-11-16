@@ -64,6 +64,8 @@ import {
 	getDocsPath,
 	VERSION,
 } from "../../config.ts";
+import type { AccountRotationPreferences, AccountRotationStrategy } from "../../core/account-profiles.ts";
+import { groupProviderAccounts, type ProviderAccountGroup } from "../../core/account-provider-groups.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
@@ -101,8 +103,6 @@ import {
 	resolveModelScopeFromModels,
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
-import { groupProviderAccounts, type ProviderAccountGroup } from "../../core/account-provider-groups.ts";
-import type { AccountRotationStrategy, AccountRotationPreferences } from "../../core/account-profiles.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { compareProviders } from "../../core/preferred-providers.ts";
 import { findMatchingProviders } from "../../core/provider-matching.ts";
@@ -6072,7 +6072,8 @@ export class InteractiveMode {
 	/** Return to the owning provider, not to the flat login list. */
 	private showAccountParent(providerId: string): void {
 		const group = this.accountProviderGroups().find((candidate) =>
-			candidate.accounts.some((account) => account.id === providerId));
+			candidate.accounts.some((account) => account.id === providerId),
+		);
 		if (group) this.showProviderAccounts(group.id);
 		else this.showAccountManager();
 	}
@@ -6080,23 +6081,29 @@ export class InteractiveMode {
 	/** Immutable provider categories are the /login root; nicknames belong only inside a category. */
 	private accountProviderGroups(): ProviderAccountGroup[] {
 		const runtime = this.session.modelRuntime;
-		const entries = runtime.getProviders()
+		const entries = runtime
+			.getProviders()
 			.filter((provider) => provider.id !== "account-profiles")
 			.map((provider) => ({
 				id: provider.id,
 				name: provider.name,
 				connected: runtime.getProviderAuthStatus(provider.id).configured,
 				authType: (runtime.getProviderAuthStatus(provider.id).configured
-					? runtime.isUsingOAuth(provider.id) ? "oauth" : "api_key" : null) as "oauth" | "api_key" | null,
+					? runtime.isUsingOAuth(provider.id)
+						? "oauth"
+						: "api_key"
+					: null) as "oauth" | "api_key" | null,
 			}));
 		return groupProviderAccounts(entries, runtime.getAccountProfiles(), (id) => runtime.getAccountLabel(id));
 	}
 
 	/** Providers are navigation categories, not individual logins. */
 	private showAccountManager(): void {
-		const groups = this.accountProviderGroups()
-			.filter((group) => group.accounts.some((account) => account.connected || !account.original)
-				|| ["openai-codex", "antigravity-manager", "antigravity", "anthropic", "nvidia"].includes(group.id));
+		const groups = this.accountProviderGroups().filter(
+			(group) =>
+				group.accounts.some((account) => account.connected || !account.original) ||
+				["openai-codex", "antigravity-manager", "antigravity", "anthropic", "nvidia"].includes(group.id),
+		);
 		const rows = groups.map((group) => ({
 			group,
 			label: `${group.name}  ·  ${group.accounts.filter((account) => account.connected).length} connected`,
@@ -6108,17 +6115,20 @@ export class InteractiveMode {
 				"Login · Providers",
 				[...rows.map((row) => row.label), connect, add],
 				(option) => {
-				const selected = rows.find((row) => row.label === option);
-				done();
-				if (selected) this.showProviderAccounts(selected.group.id);
-				else if (option === connect) this.showLoginProviderSelector();
-				else if (option === add) void this.addCustomProvider();
-			},
-			() => { done(); this.ui.requestRender(); },
-			{
-				description: "Provider names are fixed · Enter manage accounts · Esc back",
-				sectionLabels: { 0: "Providers", [rows.length]: "Actions" },
-			},
+					const selected = rows.find((row) => row.label === option);
+					done();
+					if (selected) this.showProviderAccounts(selected.group.id);
+					else if (option === connect) this.showLoginProviderSelector();
+					else if (option === add) void this.addCustomProvider();
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+				{
+					description: "Provider names are fixed · Enter manage accounts · Esc back",
+					sectionLabels: { 0: "Providers", [rows.length]: "Actions" },
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6128,7 +6138,10 @@ export class InteractiveMode {
 	private showProviderAccounts(groupId: string): void {
 		const runtime = this.session.modelRuntime;
 		const group = this.accountProviderGroups().find((candidate) => candidate.id === groupId);
-		if (!group) { this.showAccountManager(); return; }
+		if (!group) {
+			this.showAccountManager();
+			return;
+		}
 		const prefs = runtime.getAccountRotationPreferences(groupId);
 		const connected = group.accounts.filter((account) => account.connected);
 		const members = connected.filter((account) => prefs.memberIds.includes(account.id));
@@ -6136,7 +6149,7 @@ export class InteractiveMode {
 		const all = `${allSelected ? "[x]" : "[ ]"} Select all eligible`;
 		const rows = group.accounts.map((account) => ({
 			account,
-			label: `${prefs.memberIds.includes(account.id) ? "[x]" : "[ ]"} ${account.connected ? "✓" : "○"} ${account.label}  ·  ${account.connected ? account.authType === "oauth" ? "subscription" : "API key" : "not signed in"}`,
+			label: `${prefs.memberIds.includes(account.id) ? "[x]" : "[ ]"} ${account.connected ? "✓" : "○"} ${account.label}  ·  ${account.connected ? (account.authType === "oauth" ? "subscription" : "API key") : "not signed in"}`,
 		}));
 		const rotation = `↻ Rotation: ${prefs.enabled ? "on" : "off"}  ·  ${members.length} included`;
 		const algorithm = `Rotation algorithm: ${prefs.strategy}`;
@@ -6144,8 +6157,12 @@ export class InteractiveMode {
 		const clear = "× Delete all accounts";
 		const choices = [all, ...rows.map((item) => item.label), rotation, algorithm, add, clear];
 		const update = (next: AccountRotationPreferences) => {
-			try { runtime.setAccountRotationPreferences(groupId, next); this.showProviderAccounts(groupId); }
-			catch (error) { this.showError(`Could not update rotation: ${error instanceof Error ? error.message : String(error)}`); }
+			try {
+				runtime.setAccountRotationPreferences(groupId, next);
+				this.showProviderAccounts(groupId);
+			} catch (error) {
+				this.showError(`Could not update rotation: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		};
 		const toggle = (accountId: string) => {
 			if (!connected.some((account) => account.id === accountId)) {
@@ -6163,7 +6180,8 @@ export class InteractiveMode {
 		};
 		const selectAll = () => {
 			const connectedIds = new Set(connected.map((account) => account.id));
-			const ids = allSelected ? prefs.memberIds.filter((id) => !connectedIds.has(id))
+			const ids = allSelected
+				? prefs.memberIds.filter((id) => !connectedIds.has(id))
 				: [...new Set([...prefs.memberIds, ...connectedIds])];
 			if (prefs.enabled && ids.filter((id) => connectedIds.has(id)).length < 2) {
 				this.showStatus("Turn off rotation before deselecting all accounts.");
@@ -6177,7 +6195,10 @@ export class InteractiveMode {
 		};
 		const open = (option: string | undefined) => {
 			const item = rows.find((row) => row.label === option);
-			if (item) { this.showAccountActions(item.account); return; }
+			if (item) {
+				this.showAccountActions(item.account);
+				return;
+			}
 			if (option === all) selectAll();
 			else if (option === rotation) void toggleRotation();
 			else if (option === algorithm) this.showProviderRotationAlgorithms(groupId);
@@ -6188,26 +6209,68 @@ export class InteractiveMode {
 			const selector = new ExtensionSelectorComponent(
 				group.name,
 				choices,
-				(option) => { done(); open(option); },
-				() => { done(); this.showAccountManager(); },
-			{
-				description: "Space select · A select all · R rename · X delete · T rotation · M algorithm · + add · Esc back",
-				sectionLabels: { 0: "Select rotation members", [1 + rows.length]: "Rotation", [3 + rows.length]: "Account actions" },
-				onShortcut: (key, label) => {
-					const item = rows.find((row) => row.label === label);
-					if (key === " " && item) { done(); toggle(item.account.id); return true; }
-					if (key === " " && label === all || key === "a") { done(); selectAll(); return true; }
-					if (key === "t") { done(); void toggleRotation(); return true; }
-					if (key === "m") { done(); this.showProviderRotationAlgorithms(groupId); return true; }
-					if (key === "+") { done(); this.showProviderAddAccount(group); return true; }
-					if (key === "r" && item) { done(); void this.renameAccountFromMenu(item.account); return true; }
-					if ((key === "x" || matchesKey(key, "delete")) && item) {
-						done(); this.confirmAccountRemoval(item.account); return true;
-					}
-					if (matchesKey(key, "left")) { done(); this.showAccountManager(); return true; }
-					return false;
+				(option) => {
+					done();
+					open(option);
 				},
-			});
+				() => {
+					done();
+					this.showAccountManager();
+				},
+				{
+					description:
+						"Space select · A select all · R rename · X delete · T rotation · M algorithm · + add · Esc back",
+					sectionLabels: {
+						0: "Select rotation members",
+						[1 + rows.length]: "Rotation",
+						[3 + rows.length]: "Account actions",
+					},
+					onShortcut: (key, label) => {
+						const item = rows.find((row) => row.label === label);
+						if (key === " " && item) {
+							done();
+							toggle(item.account.id);
+							return true;
+						}
+						if ((key === " " && label === all) || key === "a") {
+							done();
+							selectAll();
+							return true;
+						}
+						if (key === "t") {
+							done();
+							void toggleRotation();
+							return true;
+						}
+						if (key === "m") {
+							done();
+							this.showProviderRotationAlgorithms(groupId);
+							return true;
+						}
+						if (key === "+") {
+							done();
+							this.showProviderAddAccount(group);
+							return true;
+						}
+						if (key === "r" && item) {
+							done();
+							void this.renameAccountFromMenu(item.account);
+							return true;
+						}
+						if ((key === "x" || matchesKey(key, "delete")) && item) {
+							done();
+							this.confirmAccountRemoval(item.account);
+							return true;
+						}
+						if (matchesKey(key, "left")) {
+							done();
+							this.showAccountManager();
+							return true;
+						}
+						return false;
+					},
+				},
+			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
 	}
@@ -6224,16 +6287,25 @@ export class InteractiveMode {
 			const selector = new ExtensionSelectorComponent(
 				"Rotation algorithm",
 				strategies.map((strategy) => `${current.strategy === strategy.value ? "✓ " : "  "}${strategy.name}`),
-			(label) => {
-				done();
-				const chosen = strategies.find((strategy) => label.endsWith(strategy.name));
-				if (chosen) {
-					try { this.session.modelRuntime.setAccountRotationPreferences(groupId, { ...current, strategy: chosen.value }); }
-					catch (error) { this.showError(String(error)); }
-				}
-				this.showProviderAccounts(groupId);
-			},
-			() => { done(); this.showProviderAccounts(groupId); },
+				(label) => {
+					done();
+					const chosen = strategies.find((strategy) => label.endsWith(strategy.name));
+					if (chosen) {
+						try {
+							this.session.modelRuntime.setAccountRotationPreferences(groupId, {
+								...current,
+								strategy: chosen.value,
+							});
+						} catch (error) {
+							this.showError(String(error));
+						}
+					}
+					this.showProviderAccounts(groupId);
+				},
+				() => {
+					done();
+					this.showProviderAccounts(groupId);
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6241,7 +6313,9 @@ export class InteractiveMode {
 
 	private showProviderAddAccount(group: ProviderAccountGroup): void {
 		const runtime = this.session.modelRuntime;
-		const originalIds = [...new Set(group.accounts.filter((account) => account.original).map((account) => account.id))];
+		const originalIds = [
+			...new Set(group.accounts.filter((account) => account.original).map((account) => account.id)),
+		];
 		const eligible = originalIds.filter((id) => {
 			const provider = runtime.getProvider(id);
 			return !!provider?.auth.oauth || !!provider?.auth.apiKey?.login;
@@ -6259,14 +6333,18 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const items = eligible.map((id) => ({ id, label: runtime.getProvider(id)?.name ?? id }));
 			const selector = new ExtensionSelectorComponent(
-				`Add ${group.name} account`, items.map((item) => item.label),
-			(label) => {
-				done();
-				const id = items.find((item) => item.label === label)?.id;
-				const option = options.find((candidate) => candidate.id === id);
-				if (option) void this.startAdditionalAccountLogin(option, () => this.showProviderAccounts(group.id));
-			},
-			() => { done(); this.showProviderAccounts(group.id); },
+				`Add ${group.name} account`,
+				items.map((item) => item.label),
+				(label) => {
+					done();
+					const id = items.find((item) => item.label === label)?.id;
+					const option = options.find((candidate) => candidate.id === id);
+					if (option) void this.startAdditionalAccountLogin(option, () => this.showProviderAccounts(group.id));
+				},
+				() => {
+					done();
+					this.showProviderAccounts(group.id);
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6281,12 +6359,22 @@ export class InteractiveMode {
 				["Cancel", "Disconnect and delete all"],
 				(label) => {
 					done();
-					if (label !== "Disconnect and delete all") { this.showProviderAccounts(groupId); return; }
+					if (label !== "Disconnect and delete all") {
+						this.showProviderAccounts(groupId);
+						return;
+					}
 					void this.deleteProviderAccounts(group).catch((error: unknown) =>
-						this.showError(`Delete all failed: ${error instanceof Error ? error.message : String(error)}`));
+						this.showError(`Delete all failed: ${error instanceof Error ? error.message : String(error)}`),
+					);
 				},
-				() => { done(); this.showProviderAccounts(groupId); },
-				{ description: "Disconnects stored credentials and deletes additional accounts; built-in providers remain." },
+				() => {
+					done();
+					this.showProviderAccounts(groupId);
+				},
+				{
+					description:
+						"Disconnects stored credentials and deletes additional accounts; built-in providers remain.",
+				},
 			);
 			return { component: selector, focus: selector, dispose: () => selector.dispose() };
 		});
@@ -6302,9 +6390,14 @@ export class InteractiveMode {
 		const needsActive = !!selected && wouldDelete(selected.provider, selected.id);
 		const needsDefault = !!defaultProvider && wouldDelete(defaultProvider, this.settingsManager.getDefaultModel());
 		if (needsActive || needsDefault) {
-			const fallback = runtime.getAvailableSnapshot().find((model) =>
-				!deleting.has(model.provider) && !(model.provider === "account-profiles" && model.id === group.id));
-			if (!fallback) throw new Error("Choose an available model outside this provider before deleting all accounts.");
+			const fallback = runtime
+				.getAvailableSnapshot()
+				.find(
+					(model) =>
+						!deleting.has(model.provider) && !(model.provider === "account-profiles" && model.id === group.id),
+				);
+			if (!fallback)
+				throw new Error("Choose an available model outside this provider before deleting all accounts.");
 			if (needsActive) await this.session.setModel(fallback, { persist: needsDefault });
 			else if (needsDefault) this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
 		}
@@ -6323,49 +6416,104 @@ export class InteractiveMode {
 	/** Custom endpoint definitions live in models.json; secrets are referenced only through environment variables. */
 	private async addCustomProvider(): Promise<void> {
 		const id = await this.showExtensionInput("Custom provider ID (lowercase)");
-		if (id === undefined) { this.showAccountManager(); return; }
-		if (!/^[a-z][a-z0-9_-]{0,63}$/.test(id)) { this.showError("Use lowercase letters, numbers, hyphens or underscores."); this.showAccountManager(); return; }
+		if (id === undefined) {
+			this.showAccountManager();
+			return;
+		}
+		if (!/^[a-z][a-z0-9_-]{0,63}$/.test(id)) {
+			this.showError("Use lowercase letters, numbers, hyphens or underscores.");
+			this.showAccountManager();
+			return;
+		}
 		const name = await this.showExtensionInput("Provider display name");
-		if (name === undefined) { this.showAccountManager(); return; }
+		if (name === undefined) {
+			this.showAccountManager();
+			return;
+		}
 		const baseUrl = await this.showExtensionInput("HTTPS API base URL");
-		if (baseUrl === undefined) { this.showAccountManager(); return; }
+		if (baseUrl === undefined) {
+			this.showAccountManager();
+			return;
+		}
 		try {
 			const url = new URL(baseUrl.trim());
-			if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
+			if (
+				url.protocol !== "https:" &&
+				!(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))
+			) {
 				throw new Error("Use HTTPS or a local HTTP endpoint");
 			}
-			if (url.username || url.password || url.search || url.hash) throw new Error("Do not put credentials or query parameters in the URL");
-		} catch (error) { this.showError(`Invalid endpoint: ${String(error)}`); return; }
+			if (url.username || url.password || url.search || url.hash)
+				throw new Error("Do not put credentials or query parameters in the URL");
+		} catch (error) {
+			this.showError(`Invalid endpoint: ${String(error)}`);
+			return;
+		}
 		const modelId = await this.showExtensionInput("Model ID");
-		if (modelId === undefined) { this.showAccountManager(); return; }
-		const api = await this.showExtensionInput("API protocol (openai-completions, openai-responses, anthropic-messages, google-generative-ai)", undefined, { initialValue: "openai-completions" });
-		if (api === undefined) { this.showAccountManager(); return; }
+		if (modelId === undefined) {
+			this.showAccountManager();
+			return;
+		}
+		const api = await this.showExtensionInput(
+			"API protocol (openai-completions, openai-responses, anthropic-messages, google-generative-ai)",
+			undefined,
+			{ initialValue: "openai-completions" },
+		);
+		if (api === undefined) {
+			this.showAccountManager();
+			return;
+		}
 		if (!["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"].includes(api)) {
-			this.showError("Unsupported API protocol."); return;
+			this.showError("Unsupported API protocol.");
+			return;
 		}
 		const envName = await this.showExtensionInput("API key environment variable (e.g. MY_PROVIDER_API_KEY)");
-		if (envName === undefined) { this.showAccountManager(); return; }
-		if (!/^[A-Z_][A-Z0-9_]*$/.test(envName)) { this.showError("Enter an environment variable NAME, not the API key."); return; }
+		if (envName === undefined) {
+			this.showAccountManager();
+			return;
+		}
+		if (!/^[A-Z_][A-Z0-9_]*$/.test(envName)) {
+			this.showError("Enter an environment variable NAME, not the API key.");
+			return;
+		}
 		try {
 			const configPath = path.join(getAgentDir(), "models.json");
-			const document = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : { providers: {} };
-			if (!document || typeof document !== "object" || !document.providers || typeof document.providers !== "object" || Array.isArray(document.providers)) {
+			const document = fs.existsSync(configPath)
+				? JSON.parse(fs.readFileSync(configPath, "utf8"))
+				: { providers: {} };
+			if (
+				!document ||
+				typeof document !== "object" ||
+				!document.providers ||
+				typeof document.providers !== "object" ||
+				Array.isArray(document.providers)
+			) {
 				throw new Error("Invalid existing models.json");
 			}
 			if (Object.hasOwn(document.providers, id) || this.session.modelRuntime.getProvider(id)) {
 				throw new Error("Provider ID already exists; choose a different ID");
 			}
-			document.providers[id] = { name: name.trim() || id, baseUrl: baseUrl.trim(), api, apiKey: `$${envName}`, models: [{ id: modelId.trim() }] };
+			document.providers[id] = {
+				name: name.trim() || id,
+				baseUrl: baseUrl.trim(),
+				api,
+				apiKey: `$${envName}`,
+				models: [{ id: modelId.trim() }],
+			};
 			fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
 			const tmp = `${configPath}.${crypto.randomUUID()}.tmp`;
 			try {
 				fs.writeFileSync(tmp, JSON.stringify(document, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 				fs.renameSync(tmp, configPath);
-			} finally { fs.rmSync(tmp, { force: true }); }
+			} finally {
+				fs.rmSync(tmp, { force: true });
+			}
 			await this.session.modelRuntime.refresh({ allowNetwork: false });
 			this.showStatus(`Added ${name.trim() || id}. Set $${envName} in your environment before connecting.`);
 			this.showAccountManager();
-		} catch (error) { this.showError(`Could not add provider: ${error instanceof Error ? error.message : String(error)}`); }
+		} catch (error) {
+			this.showError(`Could not add provider: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	private showAccountActions(profile: {
@@ -6379,7 +6527,9 @@ export class InteractiveMode {
 		const rename = "Rename account";
 		const rotation = "Rotate accounts for this provider";
 		const remove = profile.original ? "Disconnect account" : "Delete account";
-		const groupId = this.accountProviderGroups().find((group) => group.accounts.some((account) => account.id === profile.id))?.id ?? profile.sourceProviderId;
+		const groupId =
+			this.accountProviderGroups().find((group) => group.accounts.some((account) => account.id === profile.id))
+				?.id ?? profile.sourceProviderId;
 		const canRotate = this.session.modelRuntime.getRotationMemberIds(groupId).length >= 2;
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
@@ -6389,7 +6539,8 @@ export class InteractiveMode {
 					done();
 					if (option === signIn) {
 						const methods = this.getLoginProviderOptions().filter((item) => item.id === profile.id);
-						if (methods.length === 1) void this.startProviderLogin(methods[0]!, () => this.showAccountParent(profile.id));
+						if (methods.length === 1)
+							void this.startProviderLogin(methods[0]!, () => this.showAccountParent(profile.id));
 						else if (methods.length > 1) this.showLoginAuthTypeSelector(methods);
 						else this.showError("Sign-in provider not available");
 					} else if (option === choose) this.showAccountModelSelector(profile);
@@ -6509,8 +6660,10 @@ export class InteractiveMode {
 					void (async () => {
 						const runtime = this.session.modelRuntime;
 						const selected = this.session.model;
-						const groupId = this.accountProviderGroups().find((group) =>
-							group.accounts.some((account) => account.id === profile.id))?.id ?? profile.sourceProviderId;
+						const groupId =
+							this.accountProviderGroups().find((group) =>
+								group.accounts.some((account) => account.id === profile.id),
+							)?.id ?? profile.sourceProviderId;
 						const preference = runtime.getAccountRotationPreferences(groupId);
 						const connectedAfterRemoval = preference.memberIds.filter(
 							(id) => id !== profile.id && runtime.hasConfiguredAuth(id),
@@ -6518,9 +6671,7 @@ export class InteractiveMode {
 						const rotationWillStop = connectedAfterRemoval < 2;
 						const activeNeedsSwitch =
 							selected?.provider === profile.id ||
-							(rotationWillStop &&
-								selected?.provider === "account-profiles" &&
-								selected.id === groupId);
+							(rotationWillStop && selected?.provider === "account-profiles" && selected.id === groupId);
 						const defaultProvider = this.settingsManager.getDefaultProvider();
 						const defaultNeedsUpdate =
 							defaultProvider === profile.id ||
@@ -6608,13 +6759,18 @@ export class InteractiveMode {
 		const pref = runtime.getAccountRotationPreferences(groupId);
 		const selected = this.session.model;
 		const active = selected?.provider === "account-profiles" && selected.id === groupId;
-		const defaultActive = this.settingsManager.getDefaultProvider() === "account-profiles"
-			&& this.settingsManager.getDefaultModel() === groupId;
+		const defaultActive =
+			this.settingsManager.getDefaultProvider() === "account-profiles" &&
+			this.settingsManager.getDefaultModel() === groupId;
 		if (active || defaultActive) {
 			const candidates = new Set(runtime.getRotationMemberIds(groupId));
-			const fallback = runtime.getAvailableSnapshot().find((model) => candidates.has(model.provider))
-				?? runtime.getAvailableSnapshot().find((model) => model.provider !== "account-profiles");
-			if (!fallback) { this.showError("Choose an available physical model before turning rotation off."); return; }
+			const fallback =
+				runtime.getAvailableSnapshot().find((model) => candidates.has(model.provider)) ??
+				runtime.getAvailableSnapshot().find((model) => model.provider !== "account-profiles");
+			if (!fallback) {
+				this.showError("Choose an available physical model before turning rotation off.");
+				return;
+			}
 			if (active) await this.session.setModel(fallback, { persist: defaultActive });
 			else if (defaultActive) this.settingsManager.setDefaultModelAndProvider(fallback.provider, fallback.id);
 		}

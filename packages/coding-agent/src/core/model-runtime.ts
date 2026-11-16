@@ -69,7 +69,6 @@ import {
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
 import { classifyCredentialFailure, RotationPool } from "../extensions/account-rotation-policy.ts";
-import { getProviderGroupId } from "./account-provider-groups.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { createStoredAccountAlias } from "./account-aliases.ts";
 import {
@@ -84,6 +83,7 @@ import {
 	renamePrimaryAccount,
 	saveAccountRotationPreferences,
 } from "./account-profiles.ts";
+import { getProviderGroupId } from "./account-provider-groups.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
@@ -603,7 +603,8 @@ export class ModelRuntime implements Models {
 		for (const [id, name] of Object.entries(loadPrimaryAccountNames(this.accountProfilesPath))) {
 			this.accountNames.set(id, name);
 		}
-		for (const [source, pref] of Object.entries(loadAccountRotationPreferences(this.accountProfilesPath))) this.accountRotations.set(source, pref);
+		for (const [source, pref] of Object.entries(loadAccountRotationPreferences(this.accountProfilesPath)))
+			this.accountRotations.set(source, pref);
 		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
 			if (this.models.getProvider(profile.id))
 				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
@@ -649,7 +650,9 @@ export class ModelRuntime implements Models {
 		const groupId = this.rotationGroupId(sourceProviderId);
 		if (!this.accountRotations.has(groupId)) {
 			this.setAccountRotationPreferences(groupId, {
-				enabled: false, strategy: "round-robin", memberIds: this.getRotationMemberIds(groupId),
+				enabled: false,
+				strategy: "round-robin",
+				memberIds: this.getRotationMemberIds(groupId),
 			});
 		}
 		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
@@ -680,7 +683,8 @@ export class ModelRuntime implements Models {
 		this.accountProfiles.delete(id);
 		this.nativeExtensionProviders.delete(id);
 		for (const [group, pref] of this.accountRotations) {
-			if (pref.memberIds.includes(id)) this.accountRotations.set(group, { ...pref, memberIds: pref.memberIds.filter((member) => member !== id) });
+			if (pref.memberIds.includes(id))
+				this.accountRotations.set(group, { ...pref, memberIds: pref.memberIds.filter((member) => member !== id) });
 		}
 		this.configureAutomaticAccountRotation(this.rotationGroupId(sourceProviderId));
 		this.recomposeProvider(id);
@@ -702,9 +706,12 @@ export class ModelRuntime implements Models {
 			.filter((provider) => getProviderGroupId(provider.id, provider.name) === groupId)
 			.map((provider) => provider.id);
 		const sources = new Set(originals);
-		return [...originals, ...[...this.accountProfiles.values()]
-			.filter((profile) => sources.has(profile.sourceProviderId))
-			.map((profile) => profile.id)];
+		return [
+			...originals,
+			...[...this.accountProfiles.values()]
+				.filter((profile) => sources.has(profile.sourceProviderId))
+				.map((profile) => profile.id),
+		];
 	}
 
 	getAccountRotationPreferences(groupId: string): AccountRotationPreferences {
@@ -728,22 +735,27 @@ export class ModelRuntime implements Models {
 
 	/** Keep a virtual model for each provider with multiple distinct identities. */
 	private configureAutomaticAccountRotation(sourceFilter?: string): void {
-		const sources = new Set([...this.accountProfiles.values()].map((profile) => this.rotationGroupId(profile.sourceProviderId)));
+		const sources = new Set(
+			[...this.accountProfiles.values()].map((profile) => this.rotationGroupId(profile.sourceProviderId)),
+		);
 		// Some providers (notably NVIDIA I and II) are distinct original IDs, not profiles.
 		for (const provider of this.getProviders()) {
-			if (provider.id !== "account-profiles" && getProviderGroupId(provider.id, provider.name) === "nvidia") sources.add("nvidia");
+			if (provider.id !== "account-profiles" && getProviderGroupId(provider.id, provider.name) === "nvidia")
+				sources.add("nvidia");
 		}
 		const candidates = sourceFilter ? [sourceFilter] : [...sources];
 		for (const groupId of candidates) {
 			const allMembers = this.getRotationMemberIds(groupId);
 			if (allMembers.length < 2) {
-				if (this.virtualModels.get("account-profiles")?.has(groupId)) this.unregisterVirtualModel("account-profiles", groupId);
+				if (this.virtualModels.get("account-profiles")?.has(groupId))
+					this.unregisterVirtualModel("account-profiles", groupId);
 				continue;
 			}
 			const preference = this.getAccountRotationPreferences(groupId);
 			const memberIds = allMembers.filter((id) => preference.memberIds.includes(id));
 			if (memberIds.length === 0) {
-				if (this.virtualModels.get("account-profiles")?.has(groupId)) this.unregisterVirtualModel("account-profiles", groupId);
+				if (this.virtualModels.get("account-profiles")?.has(groupId))
+					this.unregisterVirtualModel("account-profiles", groupId);
 				continue;
 			}
 			const pools = new Map<string, RotationPool>();
@@ -785,7 +797,11 @@ export class ModelRuntime implements Models {
 					if (!primaryModelId) throw new Error("No physical models found for these accounts");
 					let pool = pools.get(primaryModelId);
 					if (!pool) {
-						pool = new RotationPool(memberIds.map((provider) => ({ provider, model: primaryModelId })), 60_000, preference.strategy);
+						pool = new RotationPool(
+							memberIds.map((provider) => ({ provider, model: primaryModelId })),
+							60_000,
+							preference.strategy,
+						);
 						pools.set(primaryModelId, pool);
 					}
 					for (const provider of memberIds) {

@@ -41,7 +41,9 @@ export function groupProviderAccounts(
 	getAccountLabel: (id: string) => string,
 ): ProviderAccountGroup[] {
 	const aliases = new Map(profiles.map((profile) => [profile.id, profile]));
-	const sources = new Map(providers.filter((provider) => !aliases.has(provider.id)).map((provider) => [provider.id, provider]));
+	const sources = new Map(
+		providers.filter((provider) => !aliases.has(provider.id)).map((provider) => [provider.id, provider]),
+	);
 	const groups = new Map<string, ProviderAccountGroup>();
 	for (const provider of providers) {
 		if (aliases.has(provider.id) || provider.id === "account-profiles") continue;
@@ -66,7 +68,11 @@ export function groupProviderAccounts(
 		const groupId = source ? getProviderGroupId(source.id, source.name) : profile.sourceProviderId;
 		let group = groups.get(groupId);
 		if (!group) {
-			group = { id: groupId, name: source ? getProviderGroupName(groupId, source.name) : profile.sourceProviderId, accounts: [] };
+			group = {
+				id: groupId,
+				name: source ? getProviderGroupName(groupId, source.name) : profile.sourceProviderId,
+				accounts: [],
+			};
 			groups.set(groupId, group);
 		}
 		const actual = providers.find((provider) => provider.id === profile.id);

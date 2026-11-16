@@ -21,8 +21,11 @@ const STRATEGIES: readonly string[] = ["round-robin", "sticky", "random", "hybri
 function validateRotationPreference(value: AccountRotationPreferences): AccountRotationPreferences {
 	if (typeof value.enabled !== "boolean") throw new Error("Invalid rotation enabled state");
 	if (!STRATEGIES.includes(value.strategy)) throw new Error("Invalid rotation strategy");
-	if (!Array.isArray(value.memberIds) || value.memberIds.length > 128 ||
-		value.memberIds.some((id) => typeof id !== "string" || !PROVIDER_ID.test(id))) {
+	if (
+		!Array.isArray(value.memberIds) ||
+		value.memberIds.length > 128 ||
+		value.memberIds.some((id) => typeof id !== "string" || !PROVIDER_ID.test(id))
+	) {
 		throw new Error("Invalid rotation member ID");
 	}
 	if (new Set(value.memberIds).size !== value.memberIds.length) throw new Error("Duplicate rotation member");
@@ -83,9 +86,10 @@ function validateProfiles(json: unknown): AccountProfileFile {
 		if (normalizeAccountLabel(label) !== label) throw new Error("Invalid account name");
 		names[id] = label;
 	}
- 	const rotations: Record<string, AccountRotationPreferences> = {};
+	const rotations: Record<string, AccountRotationPreferences> = {};
 	const rawRotations = value.rotations ?? {};
-	if (!rawRotations || typeof rawRotations !== "object" || Array.isArray(rawRotations)) throw new Error("Invalid rotations");
+	if (!rawRotations || typeof rawRotations !== "object" || Array.isArray(rawRotations))
+		throw new Error("Invalid rotations");
 	for (const [id, entry] of Object.entries(rawRotations)) {
 		if (!PROVIDER_ID.test(id) || !entry || typeof entry !== "object" || Array.isArray(entry)) {
 			throw new Error("Invalid rotation group");
@@ -114,11 +118,16 @@ export function loadAccountRotationPreferences(path: string): Record<string, Acc
 	return loadAccountFile(path).rotations;
 }
 
-export function saveAccountRotationPreferences(path: string, sourceId: string, value: AccountRotationPreferences): void {
+export function saveAccountRotationPreferences(
+	path: string,
+	sourceId: string,
+	value: AccountRotationPreferences,
+): void {
 	if (!PROVIDER_ID.test(sourceId)) throw new Error("Invalid rotation group provider");
 	const validated = validateRotationPreference(value);
 	withAccountFileLock(path, (_accounts, _names, rotations) => ({
-		nextRotations: { ...rotations, [sourceId]: validated }, result: undefined,
+		nextRotations: { ...rotations, [sourceId]: validated },
+		result: undefined,
 	}));
 }
 
@@ -128,7 +137,12 @@ function withAccountFileLock<T>(
 		current: AccountProfile[],
 		names: Record<string, string>,
 		rotations: Record<string, AccountRotationPreferences>,
-	) => { next?: AccountProfile[]; nextNames?: Record<string, string>; nextRotations?: Record<string, AccountRotationPreferences>; result: T },
+	) => {
+		next?: AccountProfile[];
+		nextNames?: Record<string, string>;
+		nextRotations?: Record<string, AccountRotationPreferences>;
+		result: T;
+	},
 ): T {
 	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
 	// Lock the destination name BEFORE its initial creation. Another process must
@@ -157,7 +171,16 @@ function withAccountFileLock<T>(
 			try {
 				writeFileSync(
 					temporary,
-					JSON.stringify({ version: 1, accounts: next ?? accounts, names: nextNames ?? names, rotations: nextRotations ?? rotations }, null, 2) + "\n",
+					JSON.stringify(
+						{
+							version: 1,
+							accounts: next ?? accounts,
+							names: nextNames ?? names,
+							rotations: nextRotations ?? rotations,
+						},
+						null,
+						2,
+					) + "\n",
 					{
 						encoding: "utf8",
 						mode: 0o600,
@@ -204,9 +227,12 @@ export function removeAccountProfile(path: string, id: string): boolean {
 	if (!existsSync(path)) return false;
 	return withAccountFileLock(path, (current, _names, rotations) => {
 		const next = current.filter((profile) => profile.id !== id);
-		const nextRotations = Object.fromEntries(Object.entries(rotations).map(([source, setting]) => [
-			source, { ...setting, memberIds: setting.memberIds.filter((member) => member !== id) },
-		]));
+		const nextRotations = Object.fromEntries(
+			Object.entries(rotations).map(([source, setting]) => [
+				source,
+				{ ...setting, memberIds: setting.memberIds.filter((member) => member !== id) },
+			]),
+		);
 		return {
 			next: next.length !== current.length ? next : undefined,
 			nextRotations: next.length !== current.length ? nextRotations : undefined,
