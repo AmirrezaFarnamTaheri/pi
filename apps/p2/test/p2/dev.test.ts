@@ -374,7 +374,9 @@ test(
 				page = await Browser.start();
 				await page.signIn(await ownerOf(port));
 				await page.open(`http://127.0.0.1:${port}/new`);
-				await page.wait(`document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`);
+				await page.wait(
+					`document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`,
+				);
 				await page.evaluate(`window.beforeReload = true`);
 			}
 			await appendFile(join(probeDirectory, "web.tsx"), "\nconsole.log('web edit');\n");
