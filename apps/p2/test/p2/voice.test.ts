@@ -677,9 +677,7 @@ describe("voice in chat mode", () => {
 	});
 
 	it("places spoken chat as the speaker's chat entry, and a spoken address as a mention that Pi answers", async (t) => {
-		process.stderr.write("[p2-voice] entering fixture\n");
 		const fixture = await chatModeHost();
-		process.stderr.write("[p2-voice] fixture ready\n");
 		t.after(() => fixture.close());
 		const OWNER = { kind: "owner", access: "local" } as const;
 		const ALICE = {
@@ -696,14 +694,11 @@ describe("voice in chat mode", () => {
 		const mode = await holdIn(fixture.client(OWNER), ChatMode, where, "owner");
 		await mode.set({ enabled: true }, BACKGROUND_CONTEXT);
 		await until(mode.enabled, (value) => value === true);
-		process.stderr.write("[p2-voice] chat enabled\n");
 		const answered = (view: ConversationView | null | undefined) =>
 			view?.entries.some((entry) => entry.model?.[0]?.role === "assistant") ?? false;
 		// What the voice engine sends: the transcript as `voiceMessage` makes it.
 		await owner.send({ text: voiceMessage("lunch first?", true).text, requestId: "1" }, BACKGROUND_CONTEXT);
-		process.stderr.write("[p2-voice] first chat sent\n");
 		await alice.send({ text: voiceMessage("Pie sounds good", true).text, requestId: "2" }, BACKGROUND_CONTEXT);
-		process.stderr.write("[p2-voice] second chat sent\n");
 		const chatted = await until(
 			owner.view,
 			(view) => (view?.entries ?? []).filter((entry) => entry.kind === "chat.message").length === 2,
@@ -716,18 +711,14 @@ describe("voice in chat mode", () => {
 			],
 		);
 		assert(!answered(chatted), "no run for chat");
-		process.stderr.write("[p2-voice] chat assertions complete\n");
 		await alice.send({ text: voiceMessage("Hey Pi, which place?", true).text, requestId: "3" }, BACKGROUND_CONTEXT);
-		process.stderr.write("[p2-voice] mention accepted\n");
 		const view = await until(owner.view, answered);
-		process.stderr.write("[p2-voice] answer observed\n");
 		assert.deepEqual(view?.entries.find((entry) => entry.kind === "chat.mention")?.data, {
 			author: { kind: "guest", id: "alice", name: "Alice" },
 			text: "@pi Hey Pi, which place?",
 			attachments: [],
 			included: chatted?.entries.filter((entry) => entry.kind === "chat.message").map((entry) => entry.id),
 		});
-		process.stderr.write("[p2-voice] third test assertions complete\n");
 	});
 });
 

@@ -111,23 +111,17 @@ const answered = (view: View) => (view?.entries ?? []).some((entry) => entry.mod
 
 describe("user shell commands", () => {
 	it("`!` places the output in the context without a run; `!!` keeps it out", async (t) => {
-		process.stderr.write("[p2-shell] entering fixture\n");
 		const fixture = await shellHost();
-		process.stderr.write("[p2-shell] fixture ready\n");
 		t.after(() => fixture.close());
 		const owner = await holdIn(fixture.client(OWNER), Chat, where, "participant");
-		process.stderr.write("[p2-shell] owner held\n");
 		if (owner.variant !== "participant") return;
 		// A state's value is current while subscribed.
 		t.after(follow(owner.view, () => {}));
-		process.stderr.write("[p2-shell] starting first shell\n");
 		await owner.shell(
 			{ command: "echo out; echo err >&2; exit 3", includeInContext: true, requestId: "1" },
 			BACKGROUND_CONTEXT,
 		);
-		process.stderr.write("[p2-shell] first shell accepted\n");
 		let view = await until(owner.view, (next) => shells(next).length === 1);
-		process.stderr.write("[p2-shell] first entry visible\n");
 		const [first] = shells(view);
 		assert.equal(first?.data.command, "echo out; echo err >&2; exit 3");
 		assert.match(first?.data.output ?? "", /out/);
@@ -141,9 +135,7 @@ describe("user shell commands", () => {
 		// The live state clears once the entry is placed.
 		await until(owner.liveShell, (value) => value === null);
 
-		process.stderr.write("[p2-shell] starting private command\n");
 		await owner.shell({ command: "echo private", includeInContext: false, requestId: "2" }, BACKGROUND_CONTEXT);
-		process.stderr.write("[p2-shell] private command accepted\n");
 		view = await until(owner.view, (next) => shells(next).length === 2);
 		assert.equal(shells(view)[1]?.data.includeInContext, false);
 		assert.equal(shells(view)[1]?.model, undefined, "`!!` is display-only");
@@ -169,7 +161,6 @@ describe("user shell commands", () => {
 		assert.match(marker.detail ?? "", /```\nout\nerr\n```|```\nerr\nout\n```/);
 		assert.match(marker.detail ?? "", /Exited with code 3/);
 		assert(!transcript.items.some((item) => item.type === "user"), "never shown as a person's message");
-		process.stderr.write("[p2-shell] first test assertions complete\n");
 	});
 
 	it("one command at a time; Escape cancels (its author or the owner); full guests run, viewers watch", async (t) => {
