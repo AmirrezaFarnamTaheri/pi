@@ -563,6 +563,11 @@ export class ModelRuntime implements Models {
 		return [...new Set([...this.extensionProviders.keys(), ...this.nativeExtensionProviders.keys()])];
 	}
 
+	/** User-defined providers from models.json, including those not yet authenticated. */
+	getConfiguredProviderIds(): readonly string[] {
+		return this.config.getProviderIds();
+	}
+
 	/** Profiles identify independently stored credentials; they never contain API keys or OAuth tokens. */
 	getAccountProfiles(): readonly AccountProfile[] {
 		return [...this.accountProfiles.values()];
