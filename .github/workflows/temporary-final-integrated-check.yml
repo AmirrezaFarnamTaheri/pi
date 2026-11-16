@@ -1,0 +1,37 @@
+name: Verify final provider manager integration
+
+on:
+  push:
+    branches:
+      - feat/provider-first-account-manager
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-manager-final-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install pinned dependencies
+        run: npm ci --ignore-scripts
+      - name: Build and check all packages
+        run: |
+          npm run build
+          npm run check
+      - name: Account-manager regression tests
+        run: npm run test --workspace packages/coding-agent -- account-provider-groups account-profiles account-management-ui account-rotation-consent
+      - name: Chord live-query regression tests
+        run: npm run test --workspace packages/chord -- live-query
+      - name: Complete coding-agent suite
+        run: npm run test --workspace packages/coding-agent
