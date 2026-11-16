@@ -6087,9 +6087,10 @@ export class InteractiveMode {
 
 	/** Providers are navigation categories, not individual logins. */
 	private showAccountManager(): void {
+		const customIds = new Set(this.session.modelRuntime.getConfiguredProviderIds());
 		const groups = this.accountProviderGroups().filter(
 			(group) =>
-				group.accounts.some((account) => account.connected || !account.original) ||
+				group.accounts.some((account) => account.connected || !account.original || customIds.has(account.id)) ||
 				["openai-codex", "antigravity-manager", "antigravity", "anthropic", "nvidia"].includes(group.id),
 		);
 		const rows = groups.map((group) => ({
