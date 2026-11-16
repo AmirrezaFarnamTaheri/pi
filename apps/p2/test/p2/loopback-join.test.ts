@@ -8,7 +8,7 @@ import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { Chat } from "../../plugins/chat/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Sharing } from "../../plugins/sharing/contract.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER, setComposer } from "./browser.ts";
 import { type Fixture, holdIn, http, startFixture, until } from "./helpers.ts";
 
 const setInput = (selector: string, value: string) =>
@@ -104,7 +104,7 @@ describe("share links on loopback", () => {
 			const owner = await Browser.start();
 			const viewer = await Browser.start();
 			const writer = await Browser.start();
-			const ownerUi = `document.querySelector('.composer textarea') && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
+			const ownerUi = `document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
 			try {
 				// The owner's browser opens a sign-in link on the host, as the server prints at startup.
 				const { token } = JSON.parse(
@@ -129,7 +129,7 @@ describe("share links on loopback", () => {
 					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector('.subagent-bar')?.textContent.includes('Joined as Incognito · read-only') && !document.querySelector('.offline')`,
 				);
 				assert.equal(
-					await viewer.evaluate<boolean>(`Boolean(document.querySelector('.composer textarea'))`),
+					await viewer.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(COMPOSER)}))`),
 					false,
 				);
 				const denied = await viewer.evaluate<number[]>(
@@ -142,7 +142,7 @@ describe("share links on loopback", () => {
 					`document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`,
 				);
 				assert.equal(
-					await viewer.evaluate<boolean>(`Boolean(document.querySelector('.composer textarea'))`),
+					await viewer.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(COMPOSER)}))`),
 					false,
 				);
 
@@ -152,9 +152,9 @@ describe("share links on loopback", () => {
 				await writer.evaluate(setInput("#name", "Writer"));
 				await writer.click("#join button");
 				await writer.wait(
-					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector('.composer textarea') && !document.querySelector('.offline')`,
+					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`,
 				);
-				await writer.evaluate(setInput(".composer textarea", "hello from the writer"));
+				await writer.evaluate(setComposer("hello from the writer"));
 				await writer.click("button[aria-label=Send]");
 				const chat = await holdIn(fixture.browser(), Chat, { session, conversation: 1 }, "participant");
 				await until(chat.view, (value) => JSON.stringify(value?.entries ?? []).includes("hello from the writer"));

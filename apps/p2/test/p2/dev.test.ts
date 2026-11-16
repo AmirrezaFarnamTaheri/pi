@@ -13,7 +13,7 @@ import { Sessions } from "../../plugins/sessions/contract.ts";
 import { SessionStatus } from "../../plugins/status/contract.ts";
 import type { Host } from "../../src/runtime/chord.ts";
 import type { DevCommand, DevStatus } from "../../src/runtime/dev-protocol.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER } from "./browser.ts";
 import { clientHost, holdIn, http, type LocalOwner, localOwner, poll, until, webAssets } from "./helpers.ts";
 
 /** Local owner sessions of a dev server by port (each restart listens on a new one), signed in on first use. */
@@ -374,7 +374,7 @@ test(
 				page = await Browser.start();
 				await page.signIn(await ownerOf(port));
 				await page.open(`http://127.0.0.1:${port}/new`);
-				await page.wait(`document.querySelector('.composer textarea') && !document.querySelector('.offline')`);
+				await page.wait(`document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`);
 				await page.evaluate(`window.beforeReload = true`);
 			}
 			await appendFile(join(probeDirectory, "web.tsx"), "\nconsole.log('web edit');\n");
