@@ -9,10 +9,10 @@ on:
     # Release tags also run the full verification suite.
     tags: ['v*.*.*']
   pull_request:
-    branches: [main]
+    branches: [main, "sync/**"]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
