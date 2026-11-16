@@ -232,7 +232,9 @@ test(
 			assert.deepEqual(await browser.evaluate("window.filled"), ["2-9"]);
 			await browser.evaluate("document.querySelector('button.history-edge.earlier').click()");
 			assert.deepEqual(await browser.evaluate("window.filled"), ["2-9", "2-9"]);
-			// Keep the gap mounted in the virtual list after clicking before checking its loading state.
+			// A virtual gap row may unmount after clicking. Scroll to it again before testing loading.
+			await browser.evaluate("document.querySelector('.scroller.transcript').scrollTop = 0");
+			await browser.wait("document.querySelector('button.history-edge.earlier')");
 			await browser.evaluate(
 				"document.querySelector('button.history-edge.earlier').scrollIntoView({ block: 'center' })",
 			);
