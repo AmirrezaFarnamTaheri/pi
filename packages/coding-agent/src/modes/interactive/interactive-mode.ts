@@ -135,6 +135,7 @@ import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../.
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoder } from "../../utils/image-convert.ts";
+import { stripJsonComments } from "../../utils/json.ts";
 import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -6056,18 +6057,6 @@ export class InteractiveMode {
 		}
 	}
 
-	/** One source of truth for rotation actions in every account menu. */
-	private getRotatableSources(): string[] {
-		const runtime = this.session.modelRuntime;
-		const profiles = runtime.getAccountProfiles();
-		return [...new Set(profiles.map((profile) => profile.sourceProviderId))].filter((source) => {
-			const members = [
-				source,
-				...profiles.filter((profile) => profile.sourceProviderId === source).map((profile) => profile.id),
-			];
-			return members.filter((id) => runtime.hasConfiguredAuth(id)).length >= 2;
-		});
-	}
 
 	/** Return to the owning provider, not to the flat login list. */
 	private showAccountParent(providerId: string): void {
@@ -6106,7 +6095,7 @@ export class InteractiveMode {
 		);
 		const rows = groups.map((group) => ({
 			group,
-			label: `${group.name}  ·  ${group.accounts.filter((account) => account.connected).length} connected`,
+			label: `${group.name}${groups.filter((candidate) => candidate.name === group.name).length > 1 ? ` (${group.id})` : ""}  ·  ${group.accounts.filter((account) => account.connected).length} connected`,
 		}));
 		const add = "＋ Add custom provider";
 		const connect = "＋ Connect another provider";
@@ -6219,7 +6208,7 @@ export class InteractiveMode {
 				},
 				{
 					description:
-						"Space select · A select all · R rename · X delete · T rotation · M algorithm · + add · Esc back",
+						"Space select · A all · R rename · X delete · T rotation · M algorithm · + add · Esc back. Rotation shares conversation history among included accounts.",
 					sectionLabels: {
 						0: "Select rotation members",
 						[1 + rows.length]: "Rotation",
@@ -6454,6 +6443,10 @@ export class InteractiveMode {
 			this.showAccountManager();
 			return;
 		}
+		if (!modelId.trim() || /[\x00-\x1f]/.test(modelId)) {
+			this.showError("Model ID cannot be empty or contain control characters.");
+			return;
+		}
 		const api = await this.showExtensionInput(
 			"API protocol (openai-completions, openai-responses, anthropic-messages, google-generative-ai)",
 			undefined,
@@ -6479,7 +6472,7 @@ export class InteractiveMode {
 		try {
 			const configPath = path.join(getAgentDir(), "models.json");
 			const document = fs.existsSync(configPath)
-				? JSON.parse(fs.readFileSync(configPath, "utf8"))
+				? JSON.parse(stripJsonComments(fs.readFileSync(configPath, "utf8")))
 				: { providers: {} };
 			if (
 				!document ||
@@ -6796,47 +6789,6 @@ export class InteractiveMode {
 		}
 	}
 
-	private showAccountRotationSelector(): void {
-		const sources = this.getRotatableSources();
-		if (sources.length === 0) {
-			this.showStatus("Sign in to two accounts with the same provider to enable rotation.");
-			return;
-		}
-		const items = sources.map((source) => {
-			const memberIds = [
-				source,
-				...this.session.modelRuntime
-					.getAccountProfiles()
-					.filter((profile) => profile.sourceProviderId === source)
-					.map((profile) => profile.id),
-			];
-			const connected = memberIds.filter((id) => this.session.modelRuntime.hasConfiguredAuth(id)).length;
-			return {
-				source,
-				name: `${this.session.modelRuntime.getModel("account-profiles", source)?.name ?? source}  ·  ${connected} connected`,
-			};
-		});
-		this.showSelector((done) => {
-			const selector = new ExtensionSelectorComponent(
-				"Choose an automatic rotation group",
-				items.map((item) => item.name),
-				(name) => {
-					done();
-					const item = items.find((entry) => entry.name === name);
-					if (item) void this.enableAccountRotation(item.source);
-				},
-				() => {
-					done();
-					this.showAccountManager();
-				},
-				{
-					description:
-						"Choose a group to rotate signed-in accounts on new turns; existing messages and tool results are sent to the selected account.",
-				},
-			);
-			return { component: selector, focus: selector, dispose: () => selector.dispose() };
-		});
-	}
 
 	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
 		if (!providerOptions) {
