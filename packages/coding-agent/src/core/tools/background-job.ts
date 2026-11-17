@@ -2,6 +2,7 @@
 import { lstat, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { backgroundJobScope } from "./background-shell.ts";
@@ -126,6 +127,11 @@ async function tail(folder: string, cursor: number | undefined, maxBytes: number
 	}
 }
 
+/** Return a JSON-compatible payload without optional undefined keys from branch unions. */
+function reply(text: string, data: Record<string, JsonValue>) {
+	return { content: [{ type: "text" as const, text }], details: undefined, structuredContent: data };
+}
+
 /** The host keeps running jobs independent of a tool invocation; waiting never starts another process. */
 export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<typeof jobSchema> {
 	return {
@@ -144,13 +150,22 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 			if (signal?.aborted) throw new Error("Background job operation aborted");
 			if (params.action === "list") {
 				const limit = params.limit ?? 20;
-				if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new Error("Invalid background job limit");
+				if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
+					throw new Error("Invalid background job limit");
 				const jobs = await list(currentCwd, limit);
-				return {
-					content: [{ type: "text" as const, text: jobs.length ? jobs.map((job) => `${job.job_id}: ${job.status}`).join("\n") : "(no background jobs)" }],
-					details: undefined,
-					structuredContent: { jobs } satisfies BackgroundJobToolOutput,
-				};
+				return reply(
+					jobs.length ? jobs.map((job) => `${job.job_id}: ${job.status}`).join("\n") : "(no background jobs)",
+					{
+						jobs: jobs.map((job) => ({
+							job_id: job.job_id,
+							status: job.status,
+							created_at: job.created_at,
+							updated_at: job.updated_at,
+							exit_code: job.exit_code ?? null,
+							output_truncated: job.output_truncated,
+						})),
+					},
+				);
 			}
 			if (!params.job_id) throw new Error("background_job requires job_id for this action");
 			const jobId = params.job_id;
@@ -163,40 +178,33 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					if (signal?.aborted) throw new Error("Background job wait aborted");
 					const { info } = await inspect(jobId, currentCwd);
 					if (TERMINAL.has(info.status)) {
-						return {
-							content: [{ type: "text" as const, text: `${jobId}: ${info.status} (exit ${info.exit_code ?? "unknown"})` }],
-							details: undefined,
-							structuredContent: {
-								job_id: jobId, status: info.status, ...(info.exit_code === undefined ? {} : { exit_code: info.exit_code }),
-						} satisfies BackgroundJobToolOutput,
-						};
+						return reply(`${jobId}: ${info.status} (exit ${info.exit_code ?? "unknown"})`, {
+							job_id: jobId, status: info.status, exit_code: info.exit_code ?? null,
+						});
 					}
 					if (Date.now() - startedAt >= timeout) {
-						return {
-							content: [{ type: "text" as const, text: `${jobId}: still running; wait timed out, not completed` }],
-							details: undefined,
-							structuredContent: { job_id: jobId, status: info.status, timed_out: true } satisfies BackgroundJobToolOutput,
-						};
+						return reply(`${jobId}: still running; wait timed out, not completed`, {
+							job_id: jobId, status: info.status, timed_out: true,
+						});
 					}
-					await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100, timeout - (Date.now() - startedAt))));
+					await new Promise<void>((resolve) =>
+						setTimeout(resolve, Math.max(0, Math.min(100, timeout - (Date.now() - startedAt)))),
+					);
 				}
 			}
 			const { folder, info } = await inspect(jobId, currentCwd);
 			if (params.action === "tail") {
 				const maxBytes = params.max_bytes ?? DEFAULT_TAIL;
-				if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_TAIL) throw new Error("Invalid tail byte limit");
+				if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_TAIL)
+					throw new Error("Invalid tail byte limit");
 				const cursor = params.cursor;
 				if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0))
 					throw new Error("Invalid background log cursor");
 				const result = await tail(folder, cursor, maxBytes);
-				return {
-					content: [{ type: "text" as const, text: result.output || "(no new output)" }],
-					details: undefined,
-					structuredContent: {
-						job_id: jobId, status: info.status, output: result.output,
-						next_cursor: result.cursor, output_truncated: info.output_truncated,
-					} satisfies BackgroundJobToolOutput,
-				};
+				return reply(result.output || "(no new output)", {
+					job_id: jobId, status: info.status, output: result.output,
+					next_cursor: result.cursor, output_truncated: info.output_truncated,
+				});
 			}
 			if (params.action === "stop") {
 				if (!TERMINAL.has(info.status)) {
@@ -206,22 +214,19 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 						if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 					}
 				}
-				return {
-					content: [{ type: "text" as const, text: TERMINAL.has(info.status) ? `${jobId}: ${info.status}` : `${jobId}: cancellation requested` }],
-					details: undefined,
-					structuredContent: {
-						job_id: jobId, status: info.status, cancel_requested: !TERMINAL.has(info.status),
-					} satisfies BackgroundJobToolOutput,
-				};
+				return reply(
+					TERMINAL.has(info.status) ? `${jobId}: ${info.status}` : `${jobId}: cancellation requested`,
+					{ job_id: jobId, status: info.status, cancel_requested: !TERMINAL.has(info.status) },
+				);
 			}
-			return {
-				content: [{ type: "text" as const, text: `${jobId}: ${info.status}${info.exit_code === undefined ? "" : ` (exit ${info.exit_code})`}` }],
-				details: undefined,
-				structuredContent: {
-					job_id: jobId, status: info.status, ...(info.exit_code === undefined ? {} : { exit_code: info.exit_code }),
-					output_truncated: info.output_truncated,
-				} satisfies BackgroundJobToolOutput,
-			};
+			return reply(
+				`${jobId}: ${info.status}${info.exit_code === undefined ? "" : ` (exit ${info.exit_code})`}`,
+				{
+					job_id: jobId, status: info.status,
+					exit_code: info.exit_code ?? null, output_truncated: info.output_truncated,
+				},
+			);
+		}
 		},
 	};
 }
