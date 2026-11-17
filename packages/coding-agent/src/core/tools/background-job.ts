@@ -148,6 +148,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 				const jobs = await list(currentCwd, limit);
 				return {
 					content: [{ type: "text" as const, text: jobs.length ? jobs.map((job) => `${job.job_id}: ${job.status}`).join("\n") : "(no background jobs)" }],
+					details: undefined,
 					structuredContent: { jobs } satisfies BackgroundJobToolOutput,
 				};
 			}
@@ -164,6 +165,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					if (TERMINAL.has(info.status)) {
 						return {
 							content: [{ type: "text" as const, text: `${jobId}: ${info.status} (exit ${info.exit_code ?? "unknown"})` }],
+							details: undefined,
 							structuredContent: {
 								job_id: jobId, status: info.status, ...(info.exit_code === undefined ? {} : { exit_code: info.exit_code }),
 						} satisfies BackgroundJobToolOutput,
@@ -172,6 +174,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					if (Date.now() - startedAt >= timeout) {
 						return {
 							content: [{ type: "text" as const, text: `${jobId}: still running; wait timed out, not completed` }],
+							details: undefined,
 							structuredContent: { job_id: jobId, status: info.status, timed_out: true } satisfies BackgroundJobToolOutput,
 						};
 					}
@@ -188,6 +191,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 				const result = await tail(folder, cursor, maxBytes);
 				return {
 					content: [{ type: "text" as const, text: result.output || "(no new output)" }],
+					details: undefined,
 					structuredContent: {
 						job_id: jobId, status: info.status, output: result.output,
 						next_cursor: result.cursor, output_truncated: info.output_truncated,
@@ -204,6 +208,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 				}
 				return {
 					content: [{ type: "text" as const, text: TERMINAL.has(info.status) ? `${jobId}: ${info.status}` : `${jobId}: cancellation requested` }],
+					details: undefined,
 					structuredContent: {
 						job_id: jobId, status: info.status, cancel_requested: !TERMINAL.has(info.status),
 					} satisfies BackgroundJobToolOutput,
@@ -211,6 +216,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 			}
 			return {
 				content: [{ type: "text" as const, text: `${jobId}: ${info.status}${info.exit_code === undefined ? "" : ` (exit ${info.exit_code})`}` }],
+				details: undefined,
 				structuredContent: {
 					job_id: jobId, status: info.status, ...(info.exit_code === undefined ? {} : { exit_code: info.exit_code }),
 					output_truncated: info.output_truncated,

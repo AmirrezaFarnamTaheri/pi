@@ -8,6 +8,7 @@
 
 import type { ToolRenderers } from "../../extensions/types.ts";
 import type { ToolName } from "../index.ts";
+import { backgroundJobRenderers } from "./background-job.ts";
 import { createShellRenderers } from "./bash.ts";
 import { editRenderers } from "./edit.ts";
 import { findRenderers } from "./find.ts";
@@ -34,6 +35,7 @@ export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
 		read: readRenderers,
 		bash: createShellRenderers("$"),
 		powershell: createShellRenderers("PS>"),
+		background_job: backgroundJobRenderers,
 		edit: editRenderers,
 		write: writeRenderers,
 		grep: grepRenderers,
