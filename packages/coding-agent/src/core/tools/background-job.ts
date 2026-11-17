@@ -23,14 +23,14 @@ const jobSchema = Type.Object({
 });
 export type BackgroundJobToolInput = Static<typeof jobSchema>;
 export type BackgroundJobState = "running" | "completed" | "failed" | "canceled" | "lost";
-export interface BackgroundJobStatus {
+export type BackgroundJobStatus = {
 	job_id: string;
 	status: BackgroundJobState;
 	created_at: number;
 	updated_at: number;
 	exit_code?: number | null;
 	output_truncated: boolean;
-}
+};
 export interface BackgroundJobToolOutput {
 	job_id?: string;
 	status?: BackgroundJobState;
