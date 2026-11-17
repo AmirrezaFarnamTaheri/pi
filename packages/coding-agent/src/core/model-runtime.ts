@@ -770,16 +770,13 @@ export class ModelRuntime implements Models {
 					this.unregisterVirtualModel("account-profiles", groupId);
 				continue;
 			}
-			const routable = memberIds
-				.filter((providerId) => this.hasConfiguredAuth(providerId))
-				.flatMap((providerId) => this.getModels(providerId).filter((model) => !isVirtualModel(model)));
-			const thinkingLevels = sharedRotationThinkingLevels(routable);
-			if (thinkingLevels.length === 0) {
-				this.rotationModelSignatures.delete(groupId);
-				if (this.virtualModels.get("account-profiles")?.has(groupId))
-					this.unregisterVirtualModel("account-profiles", groupId);
-				continue;
-			}
+			const physical = memberIds.flatMap((providerId) =>
+				this.getModels(providerId).filter((model) => !isVirtualModel(model)),
+			);
+			// The rotation selector remains available before login and catalog refresh.
+			// Without known physical capabilities it must advertise only no reasoning.
+			const thinkingLevels = sharedRotationThinkingLevels(physical);
+			if (thinkingLevels.length === 0) thinkingLevels.push("off");
 			const signature = JSON.stringify({ memberIds, thinkingLevels, strategy: preference.strategy });
 			if (this.rotationModelSignatures.get(groupId) === signature) continue;
 			const pools = new Map<string, RotationPool>();
