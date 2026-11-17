@@ -4,6 +4,8 @@
  * CortexKit's account selector, and realagy's quota-reset notices.
  * All state is per credential alias. No tokens or secrets are stored here.
  */
+import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+
 export interface RotationTarget {
 	provider: string;
 	model: string;
@@ -28,6 +30,15 @@ export interface RouteInput {
 
 export type RotationStrategy = "round-robin" | "sticky" | "random" | "hybrid";
 export type CredentialFailure = "rate-limit" | "auth" | "overload";
+
+/** Offer only effort levels accepted by every possible physical account target. */
+export function sharedRotationThinkingLevels(models: readonly Model<Api>[]): ModelThinkingLevel[] {
+	const first = models[0];
+	if (!first) return [];
+	return getSupportedThinkingLevels(first).filter((level) =>
+		models.every((model) => getSupportedThinkingLevels(model).includes(level)),
+	);
+}
 
 export function classifyCredentialFailure(message: string): CredentialFailure | undefined {
 	if (/content[ -]?policy|safety|moderation|context[ _-]?(length|window)|invalid request/i.test(message)) {

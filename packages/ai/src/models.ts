@@ -1312,25 +1312,33 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
 	});
 }
 
+/** Resolve a saved effort to the nearest level in the selected model's advertised capabilities. */
+export function clampThinkingLevelFromLevels<TLevel extends string>(
+	availableLevels: readonly TLevel[],
+	level: string,
+): TLevel {
+	if (availableLevels.length === 0) throw new Error("No supported thinking levels");
+	const exact = availableLevels.find((candidate) => candidate === level);
+	if (exact !== undefined) return exact;
+
+	const requestedIndex = EXTENDED_THINKING_LEVELS.findIndex((candidate) => candidate === level);
+	if (requestedIndex < 0) return availableLevels[0]!;
+	for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
+		const match = availableLevels.find((candidate) => candidate === EXTENDED_THINKING_LEVELS[i]);
+		if (match !== undefined) return match;
+	}
+	for (let i = requestedIndex - 1; i >= 0; i--) {
+		const match = availableLevels.find((candidate) => candidate === EXTENDED_THINKING_LEVELS[i]);
+		if (match !== undefined) return match;
+	}
+	return availableLevels[0]!;
+}
+
 export function clampThinkingLevel<TApi extends Api>(
 	model: Model<TApi>,
 	level: ModelThinkingLevel,
 ): ModelThinkingLevel {
-	const availableLevels = getSupportedThinkingLevels(model);
-	if (availableLevels.includes(level)) return level;
-
-	const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level);
-	if (requestedIndex === -1) return availableLevels[0] ?? "off";
-
-	for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
-		const candidate = EXTENDED_THINKING_LEVELS[i];
-		if (availableLevels.includes(candidate)) return candidate;
-	}
-	for (let i = requestedIndex - 1; i >= 0; i--) {
-		const candidate = EXTENDED_THINKING_LEVELS[i];
-		if (availableLevels.includes(candidate)) return candidate;
-	}
-	return availableLevels[0] ?? "off";
+	return clampThinkingLevelFromLevels(getSupportedThinkingLevels(model), level);
 }
 
 /**

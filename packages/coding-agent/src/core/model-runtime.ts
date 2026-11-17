@@ -68,7 +68,7 @@ import {
 	imageErrorResult,
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
-import { classifyCredentialFailure, RotationPool } from "../extensions/account-rotation-policy.ts";
+import { classifyCredentialFailure, RotationPool, sharedRotationThinkingLevels } from "../extensions/account-rotation-policy.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { createStoredAccountAlias } from "./account-aliases.ts";
 import {
@@ -204,6 +204,7 @@ export class ModelRuntime implements Models {
 	private readonly accountProfiles = new Map<string, AccountProfile>();
 	private readonly accountNames = new Map<string, string>();
 	private readonly accountRotations = new Map<string, AccountRotationPreferences>();
+	private readonly rotationModelSignatures = new Map<string, string>();
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -752,6 +753,7 @@ export class ModelRuntime implements Models {
 		for (const groupId of candidates) {
 			const allMembers = this.getRotationMemberIds(groupId);
 			if (allMembers.length < 2) {
+				this.rotationModelSignatures.delete(groupId);
 				if (this.virtualModels.get("account-profiles")?.has(groupId))
 					this.unregisterVirtualModel("account-profiles", groupId);
 				continue;
@@ -759,17 +761,30 @@ export class ModelRuntime implements Models {
 			const preference = this.getAccountRotationPreferences(groupId);
 			const memberIds = allMembers.filter((id) => preference.memberIds.includes(id));
 			if (memberIds.length === 0) {
+				this.rotationModelSignatures.delete(groupId);
 				if (this.virtualModels.get("account-profiles")?.has(groupId))
 					this.unregisterVirtualModel("account-profiles", groupId);
 				continue;
 			}
+			const routable = memberIds
+				.filter((providerId) => this.hasConfiguredAuth(providerId))
+				.flatMap((providerId) => this.getModels(providerId).filter((model) => !isVirtualModel(model)));
+			const thinkingLevels = sharedRotationThinkingLevels(routable);
+			if (thinkingLevels.length === 0) {
+				this.rotationModelSignatures.delete(groupId);
+				if (this.virtualModels.get("account-profiles")?.has(groupId))
+					this.unregisterVirtualModel("account-profiles", groupId);
+				continue;
+			}
+			const signature = JSON.stringify({ memberIds, thinkingLevels, strategy: preference.strategy });
+			if (this.rotationModelSignatures.get(groupId) === signature) continue;
 			const pools = new Map<string, RotationPool>();
 			const memberSet = new Set(memberIds);
 			this.registerVirtualModel({
 				provider: "account-profiles",
 				id: groupId,
 				name: `Rotate ${groupId} (${memberIds.length} accounts)`,
-				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+				thinkingLevels,
 				shouldRetry: (message) =>
 					message.stopReason === "error" &&
 					memberSet.has(message.provider) &&
@@ -847,6 +862,7 @@ export class ModelRuntime implements Models {
 					return { model, thinkingLevel: request.thinkingLevel, state: { active: result.target } };
 				},
 			});
+			this.rotationModelSignatures.set(groupId, signature);
 		}
 	}
 
@@ -936,6 +952,7 @@ export class ModelRuntime implements Models {
 			if (refreshError) throw refreshError;
 			this.updateModelSnapshot();
 			await this.refreshProviderAvailability(providerId, signal);
+			this.configureAutomaticAccountRotation();
 		} catch (cause) {
 			throw new CredentialSynchronizationError(providerId, operation, credential, { cause });
 		}
@@ -1249,6 +1266,7 @@ export class ModelRuntime implements Models {
 				// Availability errors are recorded by the latest pass; refreshed models remain usable.
 			}
 		}
+		this.configureAutomaticAccountRotation();
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
