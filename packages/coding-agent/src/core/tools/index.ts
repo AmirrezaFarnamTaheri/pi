@@ -1,4 +1,10 @@
 export {
+	createBackgroundJobTool,
+	createBackgroundJobToolDefinition,
+	type BackgroundJobToolInput,
+	type BackgroundJobToolOutput,
+} from "./background-job.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -81,6 +87,7 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { createBackgroundJobTool, createBackgroundJobToolDefinition } from "./background-job.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
@@ -92,11 +99,12 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "powershell" | "edit" | "write" | "grep" | "find" | "ls";
+export type ToolName = "read" | "bash" | "powershell" | "background_job" | "edit" | "write" | "grep" | "find" | "ls";
 export const allToolNames: Set<ToolName> = new Set([
 	"read",
 	"bash",
 	"powershell",
+	"background_job",
 	"edit",
 	"write",
 	"grep",
@@ -123,6 +131,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createBashToolDefinition(cwd, options?.bash);
 		case "powershell":
 			return createPowerShellToolDefinition(cwd, options?.powershell);
+		case "background_job":
+			return createBackgroundJobToolDefinition(cwd);
 		case "edit":
 			return createEditToolDefinition(cwd, options?.edit);
 		case "write":
@@ -146,6 +156,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createBashTool(cwd, options?.bash);
 		case "powershell":
 			return createPowerShellTool(cwd, options?.powershell);
+		case "background_job":
+			return createBackgroundJobTool(cwd);
 		case "edit":
 			return createEditTool(cwd, options?.edit);
 		case "write":
@@ -165,6 +177,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 	return [
 		createReadToolDefinition(cwd, options?.read),
 		createBashToolDefinition(cwd, options?.bash),
+		createBackgroundJobToolDefinition(cwd),
 		createEditToolDefinition(cwd, options?.edit),
 		createWriteToolDefinition(cwd, options?.write),
 	];
@@ -184,6 +197,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
 		powershell: createPowerShellToolDefinition(cwd, options?.powershell),
+		background_job: createBackgroundJobToolDefinition(cwd),
 		edit: createEditToolDefinition(cwd, options?.edit),
 		write: createWriteToolDefinition(cwd, options?.write),
 		grep: createGrepToolDefinition(cwd, options?.grep),
@@ -196,6 +210,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
 		createReadTool(cwd, options?.read),
 		createBashTool(cwd, options?.bash),
+		createBackgroundJobTool(cwd),
 		createEditTool(cwd, options?.edit),
 		createWriteTool(cwd, options?.write),
 	];
@@ -215,6 +230,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
 		powershell: createPowerShellTool(cwd, options?.powershell),
+		background_job: createBackgroundJobTool(cwd),
 		edit: createEditTool(cwd, options?.edit),
 		write: createWriteTool(cwd, options?.write),
 		grep: createGrepTool(cwd, options?.grep),

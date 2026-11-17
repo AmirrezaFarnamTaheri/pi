@@ -33,7 +33,7 @@ export const powershellToolSystemPromptContribution = {
 		"You can inspect PI_* environment variables for current model and session details.",
 		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
 		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
-		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+		"A background PID only means started, never passed. Use background_job status, wait and tail to confirm a terminal exit code before relying on its results or reporting success.",
 	],
 } as const;
 
