@@ -24,7 +24,7 @@ it("opens a redirect's final document without waiting for the superseded loader"
 	// Owner sign-in replaces /owner with / before the first document is necessarily loaded.
 	const loaded = new Set(["redirected"]);
 	let frames = 0;
-	const browser = Object.assign(Object.create(Browser.prototype) as Browser, {
+	const browser = Object.assign(Object.create(Browser.prototype), {
 		loaded,
 		call: async (method: string): Promise<unknown> => {
 			if (method === "Page.getFrameTree")
@@ -32,7 +32,7 @@ it("opens a redirect's final document without waiting for the superseded loader"
 			if (method === "Page.navigate") return { loaderId: "superseded" };
 			throw new Error(`Unexpected DevTools command: ${method}`);
 		},
-	});
+	}) as Browser;
 	const open = browser.open("http://127.0.0.1/owner#token");
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let openedOnRedirect = false;
