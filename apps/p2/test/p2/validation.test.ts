@@ -38,8 +38,12 @@ describe("validation (fake provider)", () => {
 			sessions.create({ cwd: fixture.workspace, thinkingLevel: "extreme" }, BACKGROUND_CONTEXT),
 			"invalid",
 		);
-		const created = await sessions.create({ cwd: fixture.workspace, thinkingLevel: "low" }, BACKGROUND_CONTEXT);
-		assert.equal(created.thinkingLevel, "low");
+		await assert.rejects(
+			sessions.create({ cwd: fixture.workspace, thinkingLevel: "low" }, BACKGROUND_CONTEXT),
+			/unsupported by the selected model/,
+		);
+		const created = await sessions.create({ cwd: fixture.workspace, thinkingLevel: "off" }, BACKGROUND_CONTEXT);
+		assert.equal(created.thinkingLevel, "off");
 	});
 
 	it("refuses a blank message without attachments", async () => {
@@ -49,10 +53,14 @@ describe("validation (fake provider)", () => {
 
 	it("refuses unknown thinking levels and updates the catalog from a single field", async () => {
 		await expectChord(chat.configure({ thinkingLevel: "extreme" }, BACKGROUND_CONTEXT), "invalid");
-		await chat.configure({ thinkingLevel: "minimal" }, BACKGROUND_CONTEXT);
-		await until(sessions.sessions, (list) => list?.find((s) => s.id === session.id)?.thinkingLevel === "minimal");
+		await assert.rejects(
+			chat.configure({ thinkingLevel: "minimal" }, BACKGROUND_CONTEXT),
+			/unsupported by the selected model/,
+		);
+		await chat.configure({ thinkingLevel: "off" }, BACKGROUND_CONTEXT);
+		await until(sessions.sessions, (list) => list?.find((s) => s.id === session.id)?.thinkingLevel === "off");
 		await chat.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
 		const list = await until(sessions.sessions, (value) => Boolean(value?.find((s) => s.id === session.id)));
-		assert.equal(list?.find((s) => s.id === session.id)?.thinkingLevel, "minimal", "the other field keeps its value");
+		assert.equal(list?.find((s) => s.id === session.id)?.thinkingLevel, "off", "the other field keeps its value");
 	});
 });
