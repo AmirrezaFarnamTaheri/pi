@@ -1,6 +1,6 @@
-import { readFile, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { dirname } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { type BackgroundJobToolOutput, createBackgroundJobTool } from "../src/core/tools/background-job.ts";
 import { type BashToolOutput, createBashTool } from "../src/core/tools/bash.ts";
 import { killProcessTree } from "../src/utils/shell.ts";
@@ -41,33 +41,41 @@ describe("background_job lifecycle", () => {
 		expect((log.structuredContent as BackgroundJobToolOutput).output).toContain("ready");
 	});
 
-	it.skipIf(process.platform === "win32")("uses a scoped job ID rather than a caller-supplied PID or path", async () => {
-		const cwd = process.cwd();
-		const jobId = await start(cwd, 'setInterval(() => {}, 1000)');
-		const wrongScope = createBackgroundJobTool(dirname(cwd));
-		await expect(wrongScope.execute("wrong", { action: "status", job_id: jobId })).rejects.toThrow(
-			/unauthorized|not found/i,
-		);
-		const tool = createBackgroundJobTool(cwd);
-		await expect(tool.execute("path", { action: "status", job_id: "../state.json" })).rejects.toThrow();
-		const listed = await tool.execute("list", { action: "list" });
-		expect((listed.structuredContent as BackgroundJobToolOutput).jobs?.some((job) => job.job_id === jobId)).toBe(true);
-	});
+	it.skipIf(process.platform === "win32")(
+		"uses a scoped job ID rather than a caller-supplied PID or path",
+		async () => {
+			const cwd = process.cwd();
+			const jobId = await start(cwd, "setInterval(() => {}, 1000)");
+			const wrongScope = createBackgroundJobTool(dirname(cwd));
+			await expect(wrongScope.execute("wrong", { action: "status", job_id: jobId })).rejects.toThrow(
+				/unauthorized|not found/i,
+			);
+			const tool = createBackgroundJobTool(cwd);
+			await expect(tool.execute("path", { action: "status", job_id: "../state.json" })).rejects.toThrow();
+			const listed = await tool.execute("list", { action: "list" });
+			expect((listed.structuredContent as BackgroundJobToolOutput).jobs?.some((job) => job.job_id === jobId)).toBe(
+				true,
+			);
+		},
+	);
 
-	it.skipIf(process.platform === "win32")("times out without claiming success, then cancels the original process", async () => {
-		const cwd = process.cwd();
-		const jobId = await start(cwd, 'setInterval(() => {}, 1000)');
-		const tool = createBackgroundJobTool(cwd);
-		const waiting = await tool.execute("wait", { action: "wait", job_id: jobId, timeout_ms: 20 });
-		const pending = waiting.structuredContent as BackgroundJobToolOutput;
-		expect(pending.status).toBe("running");
-		expect(pending.timed_out).toBe(true);
-		await tool.execute("cancel", { action: "stop", job_id: jobId });
-		const ended = await tool.execute("done", { action: "wait", job_id: jobId, timeout_ms: 10_000 });
-		expect((ended.structuredContent as BackgroundJobToolOutput).status).toBe("canceled");
-		const again = await tool.execute("again", { action: "stop", job_id: jobId });
-		expect((again.structuredContent as BackgroundJobToolOutput).status).toBe("canceled");
-	});
+	it.skipIf(process.platform === "win32")(
+		"times out without claiming success, then cancels the original process",
+		async () => {
+			const cwd = process.cwd();
+			const jobId = await start(cwd, "setInterval(() => {}, 1000)");
+			const tool = createBackgroundJobTool(cwd);
+			const waiting = await tool.execute("wait", { action: "wait", job_id: jobId, timeout_ms: 20 });
+			const pending = waiting.structuredContent as BackgroundJobToolOutput;
+			expect(pending.status).toBe("running");
+			expect(pending.timed_out).toBe(true);
+			await tool.execute("cancel", { action: "stop", job_id: jobId });
+			const ended = await tool.execute("done", { action: "wait", job_id: jobId, timeout_ms: 10_000 });
+			expect((ended.structuredContent as BackgroundJobToolOutput).status).toBe("canceled");
+			const again = await tool.execute("again", { action: "stop", job_id: jobId });
+			expect((again.structuredContent as BackgroundJobToolOutput).status).toBe("canceled");
+		},
+	);
 
 	it.skipIf(process.platform === "win32")("tails bounded chunks using a stable byte cursor", async () => {
 		const cwd = process.cwd();

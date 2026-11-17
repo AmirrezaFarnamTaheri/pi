@@ -1,5 +1,5 @@
 /** Inspect and control ordinary local shell jobs without trusting caller-supplied paths or PIDs. */
-import { lstat, open, readFile, readdir, writeFile } from "node:fs/promises";
+import { lstat, open, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonValue } from "@earendil-works/pi-ai";
@@ -66,7 +66,8 @@ async function inspect(jobId: string, cwd: string): Promise<{ folder: string; in
 	const folder = join(tmpdir(), jobId);
 	const directory = await lstat(folder);
 	if (!directory.isDirectory() || (directory.mode & 0o077) !== 0) throw new Error("Unsafe background job directory");
-	if (process.getuid && directory.uid !== process.getuid()) throw new Error("Background job not found in this workspace");
+	if (process.getuid && directory.uid !== process.getuid())
+		throw new Error("Background job not found in this workspace");
 	const file = join(folder, "state.json");
 	const checkpoint = await lstat(file);
 	if (!checkpoint.isFile()) throw new Error("Unsafe background job state file");
@@ -110,7 +111,11 @@ async function list(cwd: string, limit: number): Promise<BackgroundJobStatus[]> 
 	return jobs.toSorted((a, b) => b.created_at - a.created_at).slice(0, limit);
 }
 
-async function tail(folder: string, cursor: number | undefined, maxBytes: number): Promise<{ output: string; cursor: number }> {
+async function tail(
+	folder: string,
+	cursor: number | undefined,
+	maxBytes: number,
+): Promise<{ output: string; cursor: number }> {
 	const file = join(folder, "output.log");
 	const fileInfo = await lstat(file);
 	if (!fileInfo.isFile()) throw new Error("Unsafe background output log");
@@ -179,12 +184,16 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					const { info } = await inspect(jobId, currentCwd);
 					if (TERMINAL.has(info.status)) {
 						return reply(`${jobId}: ${info.status} (exit ${info.exit_code ?? "unknown"})`, {
-							job_id: jobId, status: info.status, exit_code: info.exit_code ?? null,
+							job_id: jobId,
+							status: info.status,
+							exit_code: info.exit_code ?? null,
 						});
 					}
 					if (Date.now() - startedAt >= timeout) {
 						return reply(`${jobId}: still running; wait timed out, not completed`, {
-							job_id: jobId, status: info.status, timed_out: true,
+							job_id: jobId,
+							status: info.status,
+							timed_out: true,
 						});
 					}
 					await new Promise<void>((resolve) =>
@@ -202,8 +211,11 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					throw new Error("Invalid background log cursor");
 				const result = await tail(folder, cursor, maxBytes);
 				return reply(result.output || "(no new output)", {
-					job_id: jobId, status: info.status, output: result.output,
-					next_cursor: result.cursor, output_truncated: info.output_truncated,
+					job_id: jobId,
+					status: info.status,
+					output: result.output,
+					next_cursor: result.cursor,
+					output_truncated: info.output_truncated,
 				});
 			}
 			if (params.action === "stop") {
@@ -214,18 +226,18 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 						if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 					}
 				}
-				return reply(
-					TERMINAL.has(info.status) ? `${jobId}: ${info.status}` : `${jobId}: cancellation requested`,
-					{ job_id: jobId, status: info.status, cancel_requested: !TERMINAL.has(info.status) },
-				);
+				return reply(TERMINAL.has(info.status) ? `${jobId}: ${info.status}` : `${jobId}: cancellation requested`, {
+					job_id: jobId,
+					status: info.status,
+					cancel_requested: !TERMINAL.has(info.status),
+				});
 			}
-			return reply(
-				`${jobId}: ${info.status}${info.exit_code === undefined ? "" : ` (exit ${info.exit_code})`}`,
-				{
-					job_id: jobId, status: info.status,
-					exit_code: info.exit_code ?? null, output_truncated: info.output_truncated,
-				},
-			);
+			return reply(`${jobId}: ${info.status}${info.exit_code === undefined ? "" : ` (exit ${info.exit_code})`}`, {
+				job_id: jobId,
+				status: info.status,
+				exit_code: info.exit_code ?? null,
+				output_truncated: info.output_truncated,
+			});
 		},
 	};
 }
