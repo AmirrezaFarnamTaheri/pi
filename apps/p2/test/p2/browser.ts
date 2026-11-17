@@ -214,9 +214,22 @@ export class Browser {
 		});
 	}
 	async open(url: string): Promise<void> {
+		const before = (await this.call("Page.getFrameTree")) as { frameTree: { frame: { loaderId: string } } };
 		const result = (await this.call("Page.navigate", { url })) as { loaderId?: string; errorText?: string };
 		if (result.errorText) throw new Error(result.errorText);
-		if (result.loaderId) await poll(() => this.loaded.has(result.loaderId!), 30_000, "new document loaded");
+		if (result.loaderId)
+			await poll(
+				async () => {
+					if (this.loaded.has(result.loaderId!)) return true;
+					// A one-time sign-in page can redirect before its DOMContentLoaded event.
+					// Accept the redirected document's load, never the previously open page's.
+					const current = (await this.call("Page.getFrameTree")) as { frameTree: { frame: { loaderId: string } } };
+					const loader = current.frameTree.frame.loaderId;
+					return loader !== before.frameTree.frame.loaderId && this.loaded.has(loader);
+				},
+				30_000,
+				"new document loaded",
+			);
 	}
 	/**
 	 * Runs a browser-only component fixture (`test/fixtures/<name>`) in the open page, compiled like the web bundle
