@@ -35,7 +35,9 @@ export default defineFacet((host) => {
 				if (!selected) throw new Error("Unknown model");
 				const supported = getSupportedThinkingLevels(selected);
 				if (!supported.some((level) => level === thinkingLevel))
-					throw new Error(`Thinking level ${thinkingLevel} is unsupported by ${provider}/${modelId}; choose ${supported.join(", ")}`);
+					throw new Error(
+						`Thinking level ${thinkingLevel} is unsupported by ${provider}/${modelId}; choose ${supported.join(", ")}`,
+					);
 				await opened.saveSettings({ ...opened.settings, defaultModel: { provider, modelId }, thinkingLevel });
 				return null;
 			},

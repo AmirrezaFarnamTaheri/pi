@@ -68,7 +68,11 @@ import {
 	imageErrorResult,
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
-import { classifyCredentialFailure, RotationPool, sharedRotationThinkingLevels } from "../extensions/account-rotation-policy.ts";
+import {
+	classifyCredentialFailure,
+	RotationPool,
+	sharedRotationThinkingLevels,
+} from "../extensions/account-rotation-policy.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { createStoredAccountAlias } from "./account-aliases.ts";
 import {

@@ -4,7 +4,7 @@
  * CortexKit's account selector, and realagy's quota-reset notices.
  * All state is per credential alias. No tokens or secrets are stored here.
  */
-import { getSupportedThinkingLevels, type Api, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { type Api, getSupportedThinkingLevels, type Model, type ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 export interface RotationTarget {
 	provider: string;

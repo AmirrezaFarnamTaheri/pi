@@ -4,6 +4,7 @@
 // `Chat.configure` are owner-only, so guests get a read-only line. Without a session, a choice sets the default for
 // new sessions.
 
+import { clampThinkingLevelFromLevels } from "@earendil-works/pi-ai/models";
 import type { Held } from "@p2/app/v1";
 import { BACKGROUND_CONTEXT, contribute, defineFacet, type HeldIn, liveIn } from "@p2/app/v1";
 import type { TuiContext } from "@p2/app/v1/tui";
@@ -21,7 +22,6 @@ import {
 	TuiSlots,
 	type TuiSurface,
 } from "@p2/app/v1/tui";
-import { clampThinkingLevelFromLevels } from "@earendil-works/pi-ai/models";
 import { Chat, type ModelMeta } from "../chat/contract.ts";
 import { type ModelChoice, type ModelInfo, Models } from "./contract.ts";
 
@@ -343,7 +343,9 @@ function cycleThinking(ctx: TuiContext): void {
 	const selected = state.model ?? state.defaultModel;
 	const levels =
 		state.catalog.find((model) => model.provider === selected?.provider && model.modelId === selected?.modelId)
-			?.thinkingLevels ?? state.model?.thinkingLevels ?? [];
+			?.thinkingLevels ??
+		state.model?.thinkingLevels ??
+		[];
 	if (levels.length <= 1) {
 		ctx.notify("This model has no thinking levels to cycle");
 		return;
