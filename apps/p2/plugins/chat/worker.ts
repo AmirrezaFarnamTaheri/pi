@@ -404,6 +404,12 @@ export default defineFacet((host) => {
 				configure: async ({ model, thinkingLevel }, ctx) => {
 					if (model && !models()?.getModel(model.provider, model.modelId)) throw new Error("Unknown model");
 					const current = target().conversation;
+					const selected = model ?? (await current.agent(ctx)).model;
+					if (thinkingLevel && selected) {
+						const physical = models()?.getModel(selected.provider, selected.modelId);
+						if (!physical || !getSupportedThinkingLevels(physical).some((level) => level === thinkingLevel))
+							throw new Error(`Thinking level ${thinkingLevel} is unsupported by the selected model`);
+					}
 					await current.configure(
 						{ ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}) },
 						ctx,

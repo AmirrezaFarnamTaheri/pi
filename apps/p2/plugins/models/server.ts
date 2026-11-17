@@ -1,3 +1,4 @@
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { defineFacet, deriveTyped, followNative, forbidden, isOwner } from "@p2/app/v1";
 import { Server, serverOf } from "@p2/app/v1/server";
 import { openResources, resourceState } from "./config.ts";
@@ -30,7 +31,11 @@ export default defineFacet((host) => {
 			snapshot: deriveTyped(self, [state], ([value]) => value.snapshot),
 			setDefault: async ({ provider, modelId, thinkingLevel }) => {
 				const opened = resources.value;
-				if (!opened.models.getModel(provider, modelId)) throw new Error("Unknown model");
+				const selected = opened.models.getModel(provider, modelId);
+				if (!selected) throw new Error("Unknown model");
+				const supported = getSupportedThinkingLevels(selected);
+				if (!supported.some((level) => level === thinkingLevel))
+					throw new Error(`Thinking level ${thinkingLevel} is unsupported by ${provider}/${modelId}; choose ${supported.join(", ")}`);
 				await opened.saveSettings({ ...opened.settings, defaultModel: { provider, modelId }, thinkingLevel });
 				return null;
 			},

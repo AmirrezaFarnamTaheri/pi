@@ -21,6 +21,7 @@ import {
 	TuiSlots,
 	type TuiSurface,
 } from "@p2/app/v1/tui";
+import { clampThinkingLevelFromLevels } from "@earendil-works/pi-ai/models";
 import { Chat, type ModelMeta } from "../chat/contract.ts";
 import { type ModelChoice, type ModelInfo, Models } from "./contract.ts";
 
@@ -185,9 +186,15 @@ function choose(ctx: TuiContext, state: ModelState, change: Change, done: string
 			ctx.notify("This conversation is not connected or read-only", "error");
 			return;
 		}
+		const selected = change.model ? metaOf(state, change.model) : state.model;
+		const requested = change.thinkingLevel ?? state.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off";
+		const level = selected?.thinkingLevels.length
+			? clampThinkingLevelFromLevels(selected.thinkingLevels, requested)
+			: requested;
+		const changingLevel = change.model !== undefined || change.thinkingLevel !== undefined;
 		const guess = {
-			...(change.model ? { model: metaOf(state, change.model) } : {}),
-			...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+			...(change.model ? { model: selected } : {}),
+			...(changingLevel ? { thinkingLevel: level } : {}),
 		};
 		ctx.notify(done);
 		ctx.perform(
@@ -198,7 +205,7 @@ function choose(ctx: TuiContext, state: ModelState, change: Change, done: string
 						...(change.model
 							? { model: { provider: change.model.provider, modelId: change.model.modelId } }
 							: {}),
-						...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+						...(changingLevel ? { thinkingLevel: level } : {}),
 					},
 					BACKGROUND_CONTEXT,
 				),
@@ -222,10 +229,14 @@ function setDefault(
 		ctx.notify("Models are not available", "error");
 		return;
 	}
+	const requested = choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off";
+	const supported = state.catalog.find(
+		(model) => model.provider === choice.provider && model.modelId === choice.modelId,
+	)?.thinkingLevels;
 	const defaultModel = {
 		provider: choice.provider,
 		modelId: choice.modelId,
-		thinkingLevel: choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off",
+		thinkingLevel: supported?.length ? clampThinkingLevelFromLevels(supported, requested) : requested,
 	};
 	ctx.notify(done);
 	ctx.perform(state.choosing({ defaultModel }, service.setDefault(defaultModel, BACKGROUND_CONTEXT)));
@@ -276,7 +287,10 @@ function openModelSelector(ctx: TuiContext, initialSearch?: string): void {
 function openThinkingSelector(ctx: TuiContext): void {
 	const state = stateOf(ctx);
 	if (!state || readOnly(ctx, state)) return;
-	const levels = state.model?.thinkingLevels.length ? state.model.thinkingLevels : ["off"];
+	const selected = state.model ?? state.defaultModel;
+	const levels =
+		state.catalog.find((model) => model.provider === selected?.provider && model.modelId === selected?.modelId)
+			?.thinkingLevels ?? (state.model?.thinkingLevels.length ? state.model.thinkingLevels : ["off"]);
 	const current = state.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off";
 	const handle = ctx.overlay(
 		"thinking",
@@ -326,7 +340,10 @@ function cycleModel(ctx: TuiContext, direction: 1 | -1): void {
 function cycleThinking(ctx: TuiContext): void {
 	const state = stateOf(ctx);
 	if (!state || readOnly(ctx, state)) return;
-	const levels = state.model?.thinkingLevels ?? [];
+	const selected = state.model ?? state.defaultModel;
+	const levels =
+		state.catalog.find((model) => model.provider === selected?.provider && model.modelId === selected?.modelId)
+			?.thinkingLevels ?? state.model?.thinkingLevels ?? [];
 	if (levels.length <= 1) {
 		ctx.notify("This model has no thinking levels to cycle");
 		return;
