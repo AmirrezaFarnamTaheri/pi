@@ -13,6 +13,9 @@ interface SupervisorRequest {
 	cwd: string;
 	shellConfig: ShellConfig;
 	maxLogBytes: number;
+	jobId: string;
+	scope: string;
+	createdAt: number;
 	captureForegroundOutput?: boolean;
 }
 
@@ -22,6 +25,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	rmSync(requestPath, { force: true });
 	const statePath = join(folder, "state.json");
 	const detachedPath = join(folder, "detached");
+	const stopPath = join(folder, "stop");
 	const foregroundPath = join(folder, "foreground.log");
 	let fd: number | undefined;
 	let foregroundFd: number | undefined;
@@ -29,10 +33,15 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	let used = 0;
 	let truncated = false;
 	let done = false;
+	let stopRequested = false;
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
 
 	const save = (patch: Record<string, unknown>) => {
 		const state = {
-			version: 1,
+			version: 2,
+			jobId: request.jobId,
+			scope: request.scope,
+			createdAt: request.createdAt,
 			workerPid: process.pid,
 			childPid: child?.pid ?? null,
 			outputTruncated: truncated,
@@ -51,13 +60,14 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		}
 	};
 	const finish = (
-		status: "completed" | "failed",
+		status: "completed" | "failed" | "canceled",
 		exitCode: number | null,
 		signal: string | null,
 		error: string | null,
 	) => {
 		if (done) return;
 		done = true;
+		if (heartbeat !== undefined) clearInterval(heartbeat);
 		try {
 			if (fd !== undefined) closeSync(fd);
 			fd = undefined;
@@ -136,6 +146,18 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		started.once("spawn", () => {
 			try {
 				save({ status: "running", exitCode: null });
+				heartbeat = setInterval(() => {
+					if (done) return;
+					try {
+						if (!stopRequested && existsSync(stopPath)) {
+							stopRequested = true;
+							stopChildTree();
+						}
+						save({ status: "running", exitCode: null });
+					} catch (error) {
+						fail(error);
+					}
+				}, 250);
 			} catch (error) {
 				fail(error);
 			}
@@ -163,7 +185,9 @@ export function runBackgroundShellSupervisor(folder: string): void {
 			}, 1000);
 			guard.unref();
 		});
-		started.once("close", (code, signal) => finish(code === 0 ? "completed" : "failed", code, signal, null));
+		started.once("close", (code, signal) =>
+			finish(stopRequested ? "canceled" : code === 0 ? "completed" : "failed", code, signal, null),
+		);
 	} catch (error) {
 		fail(error);
 	}

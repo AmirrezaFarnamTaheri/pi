@@ -75,6 +75,7 @@ const bashOutputSchema = Type.Object({
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
 	exit_code: Type.Optional(Type.Number()),
 	background_pid: Type.Optional(Type.Number()),
+	background_job_id: Type.Optional(Type.String()),
 	background_output_path: Type.Optional(Type.String()),
 	wall_time_seconds: Type.Number(),
 });
@@ -438,14 +439,14 @@ export function createShellToolDefinition(
 				}
 				if (signal?.aborted) throw new Error("aborted");
 				const startedAt = performance.now();
-				const { pid, outputPath } = await startBackgroundShell(
+				const { pid, jobId, outputPath } = await startBackgroundShell(
 					options?.backgroundCommandTransform?.(spawnContext.command) ?? spawnContext.command,
 					spawnContext.cwd,
 					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
-				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The supervisor caps captured output at ${BACKGROUND_LOG_MAX_BYTES} bytes. Monitor and stop the process explicitly when needed.`;
+				const text = `Started background job ${jobId} (PID ${pid}). Output log: ${outputPath}. Use background_job to inspect, wait, tail, or stop. Started does not mean completed; retained output is capped at ${BACKGROUND_LOG_MAX_BYTES} bytes.`;
 				return {
 					content: [{ type: "text", text }],
 					details: undefined,
@@ -454,6 +455,7 @@ export function createShellToolDefinition(
 						truncated: false,
 						wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
 						background_pid: pid,
+						background_job_id: jobId,
 						background_output_path: outputPath,
 					},
 				};
@@ -554,9 +556,9 @@ export function createShellToolDefinition(
 						env: spawnContext.env,
 					});
 					if (result.background) {
-						const { pid, outputPath } = result.background;
+						const { pid, jobId, outputPath } = result.background;
 						const snapshot = await finishOutput();
-						const text = `Background command running (PID ${pid}). Output log: ${outputPath}. This is the same process that was already executing, not a restarted command.`;
+						const text = `Detached background job ${jobId} (PID ${pid}). Output log: ${outputPath}. This is the original process, not a restarted command. Use background_job to check its final status.`;
 						return {
 							content: [{ type: "text", text }],
 							details: snapshot.truncation.truncated
@@ -566,6 +568,7 @@ export function createShellToolDefinition(
 								output: snapshot.content,
 								truncated: snapshot.truncation.truncated,
 								background_pid: pid,
+								background_job_id: jobId,
 								background_output_path: outputPath,
 								wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
 							},
