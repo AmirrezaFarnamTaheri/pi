@@ -226,7 +226,6 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 					exit_code: info.exit_code ?? null, output_truncated: info.output_truncated,
 				},
 			);
-		}
 		},
 	};
 }
