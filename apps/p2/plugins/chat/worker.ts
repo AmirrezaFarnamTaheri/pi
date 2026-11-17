@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { clampThinkingLevelFromLevels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import {
 	type AgentState,
 	type ConversationId,
@@ -404,14 +404,20 @@ export default defineFacet((host) => {
 				configure: async ({ model, thinkingLevel }, ctx) => {
 					if (model && !models()?.getModel(model.provider, model.modelId)) throw new Error("Unknown model");
 					const current = target().conversation;
-					const selected = model ?? (await current.agent(ctx)).model;
-					if (thinkingLevel && selected) {
+					const previous = await current.agent(ctx);
+					const selected = model ?? previous.model;
+					let effective = thinkingLevel;
+					if (selected) {
 						const physical = models()?.getModel(selected.provider, selected.modelId);
-						if (!physical || !getSupportedThinkingLevels(physical).some((level) => level === thinkingLevel))
+						if (!physical) throw new Error("Unknown model");
+						const supported = getSupportedThinkingLevels(physical);
+						if (thinkingLevel && !supported.some((level) => level === thinkingLevel))
 							throw new Error(`Thinking level ${thinkingLevel} is unsupported by the selected model`);
+						if (model && thinkingLevel === undefined)
+							effective = clampThinkingLevelFromLevels(supported, previous.thinkingLevel ?? "off");
 					}
 					await current.configure(
-						{ ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}) },
+						{ ...(model ? { model } : {}), ...(effective ? { thinkingLevel: effective as never } : {}) },
 						ctx,
 					);
 					for (const after of configured.value.values()) await after(current, ctx);
@@ -543,6 +549,9 @@ export default defineFacet((host) => {
 						if (principal.kind !== "owner") throw forbidden("only the owner configures the model");
 						await writable(ctx);
 						await chat.configure(change, ctx);
+						const effective = change.model
+							? (await (await harness().durable.conversation(conversation, ctx))?.agent(ctx))?.thinkingLevel
+							: change.thinkingLevel;
 						// The main conversation's model is the session's: the sidebar and the next worker start use it. Either
 						// field alone updates it (Pi Mobile's configure).
 						if (
@@ -552,7 +561,7 @@ export default defineFacet((host) => {
 							await expectVariant(await ctx.get(Sessions, {}), "worker").configureSelf(
 								{
 									...(change.model ? { model: change.model } : {}),
-									...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+									...(effective ? { thinkingLevel: effective } : {}),
 								},
 								ctx,
 							);

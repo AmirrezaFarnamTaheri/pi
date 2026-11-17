@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { clampThinkingLevelFromLevels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import { arr, bool, nul, obj, str, union, unknown } from "@earendil-works/pi-schema";
 import {
 	type AcceptsTable,
@@ -672,10 +673,13 @@ export default defineFacet((host) => {
 				const fallback = models.summary.value.defaultModel;
 				const chosen = model ?? fallback;
 				if (!chosen) throw new Error("Select a model or configure P2_PROVIDER and P2_MODEL");
-				// As Pi Mobile and setDefault: a model the configuration does not know never reaches a worker.
-				if (!resources().resources.models.getModel(chosen.provider, chosen.modelId))
-					throw new Error("Unknown model");
-				const level = thinkingLevel ?? fallback?.thinkingLevel;
+				// Validate the actual chosen model before persisting a session effort.
+				const physical = resources().resources.models.getModel(chosen.provider, chosen.modelId);
+				if (!physical) throw new Error("Unknown model");
+				const supported = getSupportedThinkingLevels(physical);
+				if (thinkingLevel !== undefined && !supported.some((level) => level === thinkingLevel))
+					throw new Error(`Thinking level ${thinkingLevel} is unsupported by the selected model`);
+				const level = clampThinkingLevelFromLevels(supported, thinkingLevel ?? fallback?.thinkingLevel ?? "off");
 				return catalog.create(
 					{
 						...(id === undefined ? {} : { id }),
