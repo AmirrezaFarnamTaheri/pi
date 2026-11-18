@@ -20,7 +20,7 @@ function authorizationCode(input: string): string | undefined {
 	try {
 		return new URL(value).searchParams.get("code") ?? undefined;
 	} catch {
-		return value.includes("code=") ? new URLSearchParams(value).get("code") ?? undefined : value;
+		return value.includes("code=") ? (new URLSearchParams(value).get("code") ?? undefined) : value;
 	}
 }
 
