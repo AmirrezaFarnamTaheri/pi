@@ -109,11 +109,11 @@ describe("Antigravity file analysis workspace boundary", () => {
 			const bridge = new AgyBridge(
 				{ preferredModels: ["Gemini 3 Flash"] },
 				{
-				exec: async (req) => {
-					seen.push(req);
-					if (req.args[0] === "models") return ok(available);
-					return ok("should never run");
-				},
+					exec: async (req) => {
+						seen.push(req);
+						if (req.args[0] === "models") return ok(available);
+						return ok("should never run");
+					},
 				},
 			);
 			createAntigravityExtension(bridge)({
@@ -141,11 +141,11 @@ describe("Antigravity file analysis workspace boundary", () => {
 			const bridge = new AgyBridge(
 				{ preferredModels: ["Gemini 3 Flash"] },
 				{
-				exec: async (req) => {
-					seen.push(req);
-					if (req.args[0] === "models") return ok(available);
-					return ok("analysis complete");
-				},
+					exec: async (req) => {
+						seen.push(req);
+						if (req.args[0] === "models") return ok(available);
+						return ok("analysis complete");
+					},
 				},
 			);
 			createAntigravityExtension(bridge)({

@@ -20,12 +20,7 @@ function validModelName(name: string): boolean {
 }
 
 function validExpiry(value: unknown, now: number): value is number {
-	return (
-		typeof value === "number" &&
-		Number.isSafeInteger(value) &&
-		value > now &&
-		value - now <= MAX_AGY_COOLDOWN_MS
-	);
+	return typeof value === "number" && Number.isSafeInteger(value) && value > now && value - now <= MAX_AGY_COOLDOWN_MS;
 }
 
 export class AgyCooldownStore {

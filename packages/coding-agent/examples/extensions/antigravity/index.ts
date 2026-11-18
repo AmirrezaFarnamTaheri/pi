@@ -87,7 +87,8 @@ export function createAntigravityExtension(
 	bridge: AgyBridge = new AgyBridge({
 		binary: process.env.AGY_BIN || "agy",
 		sandbox: true,
-		cooldownFile: process.env.AGY_COOLDOWN_FILE?.trim() || join(homedir(), ".pi", "agent", "agy-model-cooldowns.json"),
+		cooldownFile:
+			process.env.AGY_COOLDOWN_FILE?.trim() || join(homedir(), ".pi", "agent", "agy-model-cooldowns.json"),
 		outputLimit:
 			Number(process.env.AGY_OUTPUT_LIMIT) > 0 ? Math.min(Number(process.env.AGY_OUTPUT_LIMIT), 64_000) : 16_000,
 	}),
