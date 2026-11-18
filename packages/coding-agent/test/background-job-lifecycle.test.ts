@@ -9,7 +9,8 @@ import {
 	stopBackgroundJob,
 	waitForBackgroundJob,
 } from "../src/core/tools/background-jobs.ts";
-import { createBashTool } from "../src/core/tools/bash.ts";
+import { createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
+import { ManualBackgroundController } from "../src/core/tools/manual-background.ts";
 
 const dirs: string[] = [];
 
@@ -67,6 +68,18 @@ describe("managed local shell background jobs", () => {
 		const terminal = await waitForBackgroundJob(background_job_id, cwd, 10000);
 		expect(terminal.status).toBe("canceled");
 		expect((await stopBackgroundJob(background_job_id, cwd)).status).toBe("canceled");
+	});
+
+	it.skipIf(process.platform === "win32")("does not retain normal foreground runs", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "pi-job-foreground-"));
+		dirs.push(cwd);
+		const controller = new ManualBackgroundController();
+		controller.enable();
+		const operations = createLocalBashOperations({ backgroundController: controller });
+		const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify('process.stdout.write("ok")')}`;
+		const outcome = await operations.exec(command, cwd, { onData: () => {} });
+		expect(outcome.exitCode).toBe(0);
+		expect(await listBackgroundJobs(cwd)).toEqual([]);
 	});
 
 	it("rejects forged or unknown handles without reading or killing a PID", async () => {
