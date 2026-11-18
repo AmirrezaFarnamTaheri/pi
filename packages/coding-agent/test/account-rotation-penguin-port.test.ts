@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyCredentialFailure,
 	quotaResetDelayMs,
+	summarizeRotationHealth,
 	RotationPool,
 } from "../src/extensions/account-rotation-policy.ts";
 
@@ -142,6 +143,47 @@ describe("Penguin per-model credential health in Pi rotation", () => {
 				failed: { target: claude, errorMessage: "HTTP 429", hasOutput: false },
 			}),
 		).toThrow(/pinned account/i);
+	});
+
+	it("summarizes fleet readiness without exposing credentials or miscounting blocked states", () => {
+		const pool = new RotationPool([claude, backup], 1000);
+		expect(summarizeRotationHealth(pool.status(0))).toEqual({
+			total: 2,
+			ready: 2,
+			cooling: 0,
+			quotaBlocked: 0,
+			authRejected: 0,
+			disabled: 0,
+			unavailable: 0,
+		});
+		pool.reportQuota(claude, 0);
+		pool.setEnabled(backup, false);
+		expect(summarizeRotationHealth(pool.status(1))).toEqual({
+			total: 2,
+			ready: 0,
+			cooling: 0,
+			quotaBlocked: 1,
+			authRejected: 0,
+			disabled: 1,
+			unavailable: 0,
+		});
+	});
+
+	it("reauthentication clears cooldowns across every model of the same account", () => {
+		const health = new Map();
+		const claudePool = new RotationPool([claude, backup], 1000, "round-robin", Math.random, health);
+		const geminiPool = new RotationPool([gemini, backup], 1000, "round-robin", Math.random, health);
+		for (const [pool, target] of [[claudePool, claude], [geminiPool, gemini]] as const) {
+			pool.choose({
+				reason: "retry",
+				now: 0,
+				failed: { target, errorMessage: "429 rate limit", hasOutput: false },
+			});
+			expect(pool.status(1)[0]?.readyInMs).toBe(999);
+		}
+		claudePool.markReauthenticated(claude);
+		expect(claudePool.status(2)[0]?.readyInMs).toBe(0);
+		expect(geminiPool.status(2)[0]?.readyInMs).toBe(0);
 	});
 
 	it("records successful and failed requests as nonsecret health counters", () => {
