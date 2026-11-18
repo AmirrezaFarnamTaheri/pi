@@ -6,7 +6,7 @@ import { getAgentDir } from "../../config.ts";
 
 export type BackgroundJobState = "starting" | "running" | "completed" | "failed" | "canceled" | "lost";
 
-export interface BackgroundJob {
+export type BackgroundJob = {
 	id: string;
 	cwd: string;
 	createdAt: number;
@@ -18,13 +18,13 @@ export interface BackgroundJob {
 	outputTruncated: boolean;
 	updatedAt?: number;
 	finishedAt?: number;
-}
+};
 
-export interface BackgroundJobOutput {
+export type BackgroundJobOutput = {
 	output: string;
 	nextCursor: number;
 	outputTruncated: boolean;
-}
+};
 
 interface JobMetadata {
 	version: 1;
