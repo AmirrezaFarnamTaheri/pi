@@ -50,23 +50,43 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 			switch (args.action) {
 				case "list": {
 					const jobs = await listBackgroundJobs(scope, args.limit);
-					return { details: undefined, content: [{ type: "text", text: JSON.stringify(jobs) }], structuredContent: { jobs } };
+					return {
+						details: undefined,
+						content: [{ type: "text", text: JSON.stringify(jobs) }],
+						structuredContent: { jobs },
+					};
 				}
 				case "status": {
 					const job = await readBackgroundJob(requireId(), scope);
-					return { details: undefined, content: [{ type: "text", text: JSON.stringify(job) }], structuredContent: job };
+					return {
+						details: undefined,
+						content: [{ type: "text", text: JSON.stringify(job) }],
+						structuredContent: job,
+					};
 				}
 				case "tail": {
 					const output = await readBackgroundJobOutput(requireId(), scope, args.cursor, args.maxBytes);
-					return { details: undefined, content: [{ type: "text", text: output.output || "(no new output)" }], structuredContent: output };
+					return {
+						details: undefined,
+						content: [{ type: "text", text: output.output || "(no new output)" }],
+						structuredContent: output,
+					};
 				}
 				case "wait": {
 					const job = await waitForBackgroundJob(requireId(), scope, args.timeoutMs, signal);
-					return { details: undefined, content: [{ type: "text", text: JSON.stringify(job) }], structuredContent: job };
+					return {
+						details: undefined,
+						content: [{ type: "text", text: JSON.stringify(job) }],
+						structuredContent: job,
+					};
 				}
 				case "stop": {
 					const job = await stopBackgroundJob(requireId(), scope);
-					return { details: undefined, content: [{ type: "text", text: JSON.stringify(job) }], structuredContent: job };
+					return {
+						details: undefined,
+						content: [{ type: "text", text: JSON.stringify(job) }],
+						structuredContent: job,
+					};
 				}
 			}
 		},

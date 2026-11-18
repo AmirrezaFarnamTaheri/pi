@@ -1,8 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBashTool } from "../src/core/tools/bash.ts";
+import { afterEach, describe, expect, it } from "vitest";
 import {
 	listBackgroundJobs,
 	readBackgroundJob,
@@ -10,6 +9,7 @@ import {
 	stopBackgroundJob,
 	waitForBackgroundJob,
 } from "../src/core/tools/background-jobs.ts";
+import { createBashTool } from "../src/core/tools/bash.ts";
 
 const dirs: string[] = [];
 
@@ -18,12 +18,16 @@ afterEach(async () => {
 });
 
 describe("managed local shell background jobs", () => {
-	it.skipIf(process.platform === "win32")("records a successful command and allows inspection after completion", async () => {
+	it.skipIf(process.platform === "win32")("inspects a completed job", async () => {
 		const cwd = await mkdtemp(join(tmpdir(), "pi-job-done-"));
 		dirs.push(cwd);
 		const cmd = `${JSON.stringify(process.execPath)} -e ${JSON.stringify('process.stdout.write("hello\\n")')}`;
 		const result = await createBashTool(cwd).execute("job-success", { command: cmd, background: true });
-		const data = result.structuredContent as { background_job_id: string; background_pid: number; exit_code?: number };
+		const data = result.structuredContent as {
+			background_job_id: string;
+			background_pid: number;
+			exit_code?: number;
+		};
 		expect(data.background_job_id).toMatch(/^[0-9a-f-]{36}$/);
 		expect(data.exit_code).toBeUndefined();
 		const finished = await waitForBackgroundJob(data.background_job_id, cwd, 10000);
@@ -46,7 +50,9 @@ describe("managed local shell background jobs", () => {
 		const terminal = await waitForBackgroundJob(background_job_id, cwd, 10000);
 		expect(terminal.status).toBe("failed");
 		expect(terminal.exitCode).toBe(13);
-		await expect(readBackgroundJob(background_job_id, join(cwd, "unrelated"))).rejects.toThrow(/Unknown background job/);
+		await expect(readBackgroundJob(background_job_id, join(cwd, "unrelated"))).rejects.toThrow(
+			/Unknown background job/,
+		);
 	});
 
 	it.skipIf(process.platform === "win32")("cancels through the original supervisor and stays canceled", async () => {
@@ -65,6 +71,8 @@ describe("managed local shell background jobs", () => {
 
 	it("rejects forged or unknown handles without reading or killing a PID", async () => {
 		await expect(readBackgroundJob("../../etc/passwd", process.cwd())).rejects.toThrow(/Unknown background job/);
-		await expect(stopBackgroundJob("00000000-0000-4000-8000-000000000000", process.cwd())).rejects.toThrow(/Unknown background job/);
+		await expect(stopBackgroundJob("00000000-0000-4000-8000-000000000000", process.cwd())).rejects.toThrow(
+			/Unknown background job/,
+		);
 	});
 });

@@ -157,7 +157,7 @@ export async function startBackgroundShell(
 	cwd: string,
 	shellConfig: ShellConfig,
 	env: NodeJS.ProcessEnv,
-	tempFilePrefix: string,
+	_tempFilePrefix: string,
 	options?: { captureForegroundOutput?: boolean },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);

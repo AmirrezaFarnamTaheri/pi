@@ -1,6 +1,6 @@
 /** Persisted, workspace-scoped identities for detached local shell runs. */
 import type { Dirent } from "node:fs";
-import { open, readFile, readdir, writeFile } from "node:fs/promises";
+import { open, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getAgentDir } from "../../config.ts";
 
