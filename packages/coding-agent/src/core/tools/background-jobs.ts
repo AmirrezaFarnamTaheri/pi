@@ -84,9 +84,9 @@ export async function backgroundJobStatus(jobId: string, cwd: string): Promise<B
 	}
 	const status: BackgroundJobStatus = state.status
 		? state.status === "running" &&
-				(!state.workerPid ||
-					!alive(state.workerPid) ||
-					Date.now() - (state.updatedAt ?? owner.createdAt) >= SUPERVISOR_HEARTBEAT_STALE_MS)
+			(!state.workerPid ||
+				!alive(state.workerPid) ||
+				Date.now() - (state.updatedAt ?? owner.createdAt) >= SUPERVISOR_HEARTBEAT_STALE_MS)
 			? "lost"
 			: state.status
 		: Date.now() - owner.createdAt >= 10_000

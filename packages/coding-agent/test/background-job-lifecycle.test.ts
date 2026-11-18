@@ -147,7 +147,6 @@ describe("background_job", () => {
 	);
 });
 
-
 describe("background supervisor restart recovery", () => {
 	it("does not mistake a reused supervisor PID for a running job", async () => {
 		const cwd = await workspace();
@@ -156,12 +155,22 @@ describe("background supervisor restart recovery", () => {
 		await mkdir(dirname(folder), { recursive: true, mode: 0o700 });
 		await mkdir(folder, { mode: 0o700 });
 		const staleAt = Date.now() - 60_000;
-		await writeFile(join(folder, "owner.json"), JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: staleAt }), {
-			mode: 0o600,
-		});
+		await writeFile(
+			join(folder, "owner.json"),
+			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: staleAt }),
+			{
+				mode: 0o600,
+			},
+		);
 		await writeFile(
 			join(folder, "state.json"),
-			JSON.stringify({ version: 1, workerPid: process.pid, childPid: process.pid, status: "running", updatedAt: staleAt }),
+			JSON.stringify({
+				version: 1,
+				workerPid: process.pid,
+				childPid: process.pid,
+				status: "running",
+				updatedAt: staleAt,
+			}),
 			{ mode: 0o600 },
 		);
 		jobs.push({ jobId, cwd });
