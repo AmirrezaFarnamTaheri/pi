@@ -651,6 +651,7 @@ describe("SettingsManager", () => {
 			expect(SettingsManager.inMemory({ defaultTools: ["+codemode", "-write"] }).getDefaultTools()).toEqual([
 				"read",
 				"bash",
+				"background_job",
 				"edit",
 				"codemode",
 			]);
@@ -683,6 +684,7 @@ describe("SettingsManager", () => {
 			expect(SettingsManager.create(projectDir, agentDir).getDefaultTools()).toEqual([
 				"read",
 				"bash",
+				"background_job",
 				"edit",
 				"write",
 				"codemode",

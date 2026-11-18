@@ -195,6 +195,7 @@ describe("defaultTools setting", () => {
 		const session = await createSession(["+grep"], { tools: ["+inactive_tool", "-write"] }, [inactiveTool]);
 		expect(session.getActiveToolNames().sort()).toEqual([
 			"active_tool",
+			"background_job",
 			"bash",
 			"edit",
 			"grep",
