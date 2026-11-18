@@ -4,6 +4,7 @@
 // `Chat.configure` are owner-only, so guests get a read-only line. Without a session, a choice sets the default for
 // new sessions.
 
+import { clampThinkingLevelToSupported } from "@earendil-works/pi-ai/models";
 import type { Held } from "@p2/app/v1";
 import { BACKGROUND_CONTEXT, contribute, defineFacet, type HeldIn, liveIn } from "@p2/app/v1";
 import type { TuiContext } from "@p2/app/v1/tui";
@@ -185,9 +186,17 @@ function choose(ctx: TuiContext, state: ModelState, change: Change, done: string
 			ctx.notify("This conversation is not connected or read-only", "error");
 			return;
 		}
+		const model = change.model ? metaOf(state, change.model) : state.model;
+		const chosenLevel =
+			change.model || change.thinkingLevel
+				? clampThinkingLevelToSupported(
+						model?.thinkingLevels ?? ["off"],
+						change.thinkingLevel ?? state.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off",
+					)
+				: undefined;
 		const guess = {
-			...(change.model ? { model: metaOf(state, change.model) } : {}),
-			...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+			...(change.model ? { model } : {}),
+			...(chosenLevel ? { thinkingLevel: chosenLevel } : {}),
 		};
 		ctx.notify(done);
 		ctx.perform(
@@ -198,7 +207,7 @@ function choose(ctx: TuiContext, state: ModelState, change: Change, done: string
 						...(change.model
 							? { model: { provider: change.model.provider, modelId: change.model.modelId } }
 							: {}),
-						...(change.thinkingLevel ? { thinkingLevel: change.thinkingLevel } : {}),
+						...(chosenLevel ? { thinkingLevel: chosenLevel } : {}),
 					},
 					BACKGROUND_CONTEXT,
 				),
@@ -222,10 +231,14 @@ function setDefault(
 		ctx.notify("Models are not available", "error");
 		return;
 	}
+	const info = state.catalog.find((model) => model.provider === choice.provider && model.modelId === choice.modelId);
 	const defaultModel = {
 		provider: choice.provider,
 		modelId: choice.modelId,
-		thinkingLevel: choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off",
+		thinkingLevel: clampThinkingLevelToSupported(
+			info?.thinkingLevels ?? ["off"],
+			choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off",
+		),
 	};
 	ctx.notify(done);
 	ctx.perform(state.choosing({ defaultModel }, service.setDefault(defaultModel, BACKGROUND_CONTEXT)));

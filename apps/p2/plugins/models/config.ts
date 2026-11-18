@@ -1,5 +1,6 @@
 // Shared by the server and worker facets: p2's resource observer (settings.json, models.json, auth.json).
 
+import { clampThinkingLevelToSupported } from "@earendil-works/pi-ai/models";
 import { envDefaultModel } from "@p2/app/v1/node";
 import type { ModelChoice, ModelInfo } from "./contract.ts";
 import { type ResourceOptions, type ResourceSnapshot, Resources } from "./resources.ts";
@@ -32,7 +33,7 @@ export function summarize(resources: Resources, fake: boolean): ModelSummary {
 	// The settings' level, clamped to the model's levels; a default model that is not listed keeps the settings' level
 	// (as Pi Mobile's create falls back to it) rather than becoming "off".
 	const level = (thinkingLevels: readonly string[] | undefined): string =>
-		!thinkingLevels?.length || thinkingLevels.includes(wanted) ? wanted : (thinkingLevels.at(-1) ?? wanted);
+		thinkingLevels?.length ? clampThinkingLevelToSupported(thinkingLevels, wanted) : wanted;
 	const fallback = configured
 		? snapshot.models.find((model) => model.provider === configured.provider && model.modelId === configured.modelId)
 		: models[0];
