@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { listBackgroundJobs } from "../src/core/tools/background-jobs.ts";
+import { createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { ManualBackgroundController } from "../src/core/tools/manual-background.ts";
 import { killProcessTree } from "../src/utils/shell.ts";
 
@@ -142,23 +142,26 @@ describe("Ctrl+B running-command backgrounding", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")("does not retain job records for an ordinary foreground command", async () => {
-		const cwd = await mkdtemp(join(tmpdir(), "pi-foreground-jobs-"));
-		const controller = new ManualBackgroundController();
-		controller.enable();
-		try {
-			const result = await createLocalBashOperations({ backgroundController: controller }).exec(
-				"printf 'foreground\\n'",
-				cwd,
-				{ onData: () => {} },
-			);
-			expect(result.exitCode).toBe(0);
-			expect(result.background).toBeUndefined();
-			expect(await listBackgroundJobs(cwd)).toEqual([]);
-		} finally {
-			await rm(cwd, { recursive: true, force: true });
-		}
-	});
+	it.skipIf(process.platform === "win32")(
+		"does not retain job records for an ordinary foreground command",
+		async () => {
+			const cwd = await mkdtemp(join(tmpdir(), "pi-foreground-jobs-"));
+			const controller = new ManualBackgroundController();
+			controller.enable();
+			try {
+				const result = await createLocalBashOperations({ backgroundController: controller }).exec(
+					"printf 'foreground\\n'",
+					cwd,
+					{ onData: () => {} },
+				);
+				expect(result.exitCode).toBe(0);
+				expect(result.background).toBeUndefined();
+				expect(await listBackgroundJobs(cwd)).toEqual([]);
+			} finally {
+				await rm(cwd, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("does not enable detachment for a noninteractive command", async () => {
 		const controller = new ManualBackgroundController();
