@@ -26,6 +26,7 @@ import {
 	type DeferredFetchOptions,
 	type DeferredHandle,
 	getOpenCodeSessionHeaders,
+	getSharedThinkingLevels,
 	type ImageApi,
 	type ImageModel,
 	type ImagesContext,
@@ -769,7 +770,9 @@ export class ModelRuntime implements Models {
 				provider: "account-profiles",
 				id: groupId,
 				name: `Rotate ${groupId} (${memberIds.length} accounts)`,
-				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+				thinkingLevels: getSharedThinkingLevels(
+					memberIds.flatMap((provider) => this.getModels(provider).filter((model) => !isVirtualModel(model))),
+				),
 				shouldRetry: (message) =>
 					message.stopReason === "error" &&
 					memberSet.has(message.provider) &&

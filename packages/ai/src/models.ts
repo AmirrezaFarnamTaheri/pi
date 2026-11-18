@@ -1312,16 +1312,10 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
 	});
 }
 
-export function clampThinkingLevel<TApi extends Api>(
-	model: Model<TApi>,
-	level: ModelThinkingLevel,
-): ModelThinkingLevel {
-	const availableLevels = getSupportedThinkingLevels(model);
-	if (availableLevels.includes(level)) return level;
-
-	const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level);
-	if (requestedIndex === -1) return availableLevels[0] ?? "off";
-
+/** Resolve an effort requested by a user against model-specific levels in the catalog. */
+export function resolveThinkingLevel(availableLevels: readonly string[], level: string): ModelThinkingLevel {
+	const requestedIndex = EXTENDED_THINKING_LEVELS.findIndex((candidate) => candidate === level);
+	if (requestedIndex < 0) return EXTENDED_THINKING_LEVELS.find((candidate) => availableLevels.includes(candidate)) ?? "off";
 	for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
 		const candidate = EXTENDED_THINKING_LEVELS[i];
 		if (availableLevels.includes(candidate)) return candidate;
@@ -1330,7 +1324,21 @@ export function clampThinkingLevel<TApi extends Api>(
 		const candidate = EXTENDED_THINKING_LEVELS[i];
 		if (availableLevels.includes(candidate)) return candidate;
 	}
-	return availableLevels[0] ?? "off";
+	return "off";
+}
+
+/** Offer only the reasoning levels supported by every possible physical target. */
+export function getSharedThinkingLevels(models: readonly Model<Api>[]): ModelThinkingLevel[] {
+	if (models.length === 0) return ["off"];
+	const levels = getSupportedThinkingLevels(models[0]!);
+	return levels.filter((level) => models.every((model) => getSupportedThinkingLevels(model).includes(level)));
+}
+
+export function clampThinkingLevel<TApi extends Api>(
+	model: Model<TApi>,
+	level: ModelThinkingLevel,
+): ModelThinkingLevel {
+	return resolveThinkingLevel(getSupportedThinkingLevels(model), level);
 }
 
 /**

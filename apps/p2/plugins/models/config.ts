@@ -1,5 +1,6 @@
 // Shared by the server and worker facets: p2's resource observer (settings.json, models.json, auth.json).
 
+import { resolveThinkingLevel } from "@earendil-works/pi-ai/models";
 import { envDefaultModel } from "@p2/app/v1/node";
 import type { ModelChoice, ModelInfo } from "./contract.ts";
 import { type ResourceOptions, type ResourceSnapshot, Resources } from "./resources.ts";
@@ -29,10 +30,10 @@ export function summarize(resources: Resources, fake: boolean): ModelSummary {
 	// settings.json's default, then the environment's (Pi Mobile's order), then the first signed-in model.
 	const configured = snapshot.settings.defaultModel ?? envDefaultModel();
 	const wanted = snapshot.settings.thinkingLevel ?? "high";
-	// The settings' level, clamped to the model's levels; a default model that is not listed keeps the settings' level
-	// (as Pi Mobile's create falls back to it) rather than becoming "off".
+	// Keep the stored preference unchanged; resolve a supported level only for the current model.
+	// A default model not in the catalog retains its requested level until the catalog loads.
 	const level = (thinkingLevels: readonly string[] | undefined): string =>
-		!thinkingLevels?.length || thinkingLevels.includes(wanted) ? wanted : (thinkingLevels.at(-1) ?? wanted);
+		!thinkingLevels?.length ? wanted : resolveThinkingLevel(thinkingLevels, wanted);
 	const fallback = configured
 		? snapshot.models.find((model) => model.provider === configured.provider && model.modelId === configured.modelId)
 		: models[0];

@@ -1,6 +1,6 @@
 // The page's model helpers, shared by the chat's footer and its command menu pages (plugins/chat): a model choice,
 // a model's name and thinking levels from the owner's catalog, and the signed-in models the pages list.
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { resolveThinkingLevel, type ModelThinkingLevel } from "@earendil-works/pi-ai/models";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { ResourceSnapshot } from "../../plugins/models/contract.ts";
 
@@ -26,7 +26,7 @@ export function thinkingLevels(resources: ResourceSnapshot | undefined, model: M
 export function modelChoice(model: Summary, thinking: ModelThinkingLevel | undefined): ModelChoice {
 	return {
 		model: { provider: model.provider, modelId: model.modelId },
-		thinkingLevel: thinking !== undefined && model.thinkingLevels.includes(thinking) ? thinking : "off",
+		thinkingLevel: resolveThinkingLevel(model.thinkingLevels, thinking ?? "off"),
 	};
 }
 
