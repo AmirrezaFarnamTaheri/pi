@@ -184,7 +184,7 @@ export class AgyAdmissionQueue {
 		}
 		if (this.pending.length >= this.maxQueued) return Promise.reject(new Error("Antigravity admission queue is full"));
 		return new Promise((resolve, reject) => {
-			const waiter = {
+			const waiter: (typeof this.pending)[number] = {
 				resolve,
 				reject,
 				signal,
@@ -421,6 +421,9 @@ export class AgyBridge {
 		if (explicit) {
 			models = catalog ? resolveAgyModelChain(catalog, [], explicit) : [explicit];
 			if (models.length === 0) throw new Error("Antigravity model is not available. Inspect /agy models.");
+		} else if (request.conversationId) {
+			// Existing agy sessions retain their own model; never silently switch it.
+			models = [undefined];
 		} else {
 			models = catalog
 				? resolveAgyModelChain(catalog, this.options.preferredModels ?? DEFAULT_PREFERRED_MODELS)
