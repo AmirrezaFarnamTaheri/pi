@@ -26,6 +26,7 @@ import {
 } from "./settings-manager.ts";
 import { time } from "./timings.ts";
 import {
+	createBackgroundJobTool,
 	createBashTool,
 	createCodingTools,
 	createEditTool,
@@ -138,6 +139,7 @@ export {
 	createCodingTools,
 	createReadOnlyTools,
 	createReadTool,
+	createBackgroundJobTool,
 	createBashTool,
 	createEditTool,
 	createWriteTool,

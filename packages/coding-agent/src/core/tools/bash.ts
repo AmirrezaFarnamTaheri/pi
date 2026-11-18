@@ -48,7 +48,7 @@ const bashSchema = Type.Object({
 	background: Type.Optional(
 		Type.Boolean({
 			description:
-				"Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
+				"Start an independent local command detached; returns a job ID to inspect with background_job, not a completed exit code",
 		}),
 	),
 });
@@ -59,7 +59,7 @@ export const bashToolSystemPromptContribution = {
 		"You can inspect PI_* environment variables for current model and session details.",
 		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
 		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
-		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+		"A background job ID only means started, never passed. Use background_job status, tail, or wait and confirm a completed status and exit code before relying on it. Use background_job stop to cancel it.",
 	],
 } as const;
 
@@ -408,7 +408,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a managed job ID and private output log (capped at 2 MB); use background_job to list, tail, await completion, or stop. Commands needed for your next decision belong in the foreground.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,

@@ -4592,7 +4592,7 @@ export class InteractiveMode {
 			this.showWarning("No running local shell command to send to background");
 			return;
 		}
-		this.showStatus("Running command detached; PID and output log will appear in its shell result");
+		this.showStatus("Running command detached; background job ID and log will appear in its shell result");
 	}
 
 	private async handleFollowUp(): Promise<void> {
