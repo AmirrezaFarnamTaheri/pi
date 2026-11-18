@@ -159,7 +159,7 @@ describe("Antigravity file analysis workspace boundary", () => {
 				.get("agy_analyze_files")!
 				.execute("valid", { files: ["real-file.ts"], question: "inspect" }, undefined, undefined, ctx);
 			expect(valid.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("analysis complete") });
-			expect(seen.some((req) => req.args.includes("real-file.ts"))).toBe(true);
+			expect(seen.some((req) => req.args.some((arg) => arg.includes(join(directory, "real-file.ts"))))).toBe(true);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
