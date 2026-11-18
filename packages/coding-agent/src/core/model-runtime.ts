@@ -26,6 +26,7 @@ import {
 	type DeferredFetchOptions,
 	type DeferredHandle,
 	getOpenCodeSessionHeaders,
+	getSupportedThinkingLevels,
 	type ImageApi,
 	type ImageModel,
 	type ImagesContext,
@@ -108,6 +109,14 @@ import {
 	type VirtualModelDefinition,
 	withVirtualModels,
 } from "./virtual-models.ts";
+
+/** The safe effort choices shared by every physical model a rotation can actually route to. */
+export function intersectSupportedThinkingLevels(models: readonly Model<Api>[]): ModelThinkingLevel[] {
+	if (models.length === 0) return ["off"];
+	return getSupportedThinkingLevels(models[0]!).filter((level) =>
+		models.every((model) => getSupportedThinkingLevels(model).includes(level)),
+	);
+}
 
 interface RegisteredVirtualModel {
 	model: Model<Api>;
@@ -738,6 +747,18 @@ export class ModelRuntime implements Models {
 		this.configureAutomaticAccountRotation(groupId);
 	}
 
+	/** Available thinking levels for the first routable model ID, across authenticated pool members. */
+	private rotationThinkingLevels(memberIds: readonly string[]): ModelThinkingLevel[] {
+		const primaryId = memberIds
+			.flatMap((id) => this.getModels(id))
+			.find((model) => !isVirtualModel(model))?.id;
+		if (!primaryId) return ["off"];
+		const eligible = memberIds
+			.filter((id) => this.hasConfiguredAuth(id))
+			.flatMap((id) => this.getPhysicalModel(id, primaryId) ?? []);
+		return intersectSupportedThinkingLevels(eligible);
+	}
+
 	/** Keep a virtual model for each provider with multiple distinct identities. */
 	private configureAutomaticAccountRotation(sourceFilter?: string): void {
 		const sources = new Set(
@@ -769,7 +790,7 @@ export class ModelRuntime implements Models {
 				provider: "account-profiles",
 				id: groupId,
 				name: `Rotate ${groupId} (${memberIds.length} accounts)`,
-				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+				thinkingLevels: this.rotationThinkingLevels(memberIds),
 				shouldRetry: (message) =>
 					message.stopReason === "error" &&
 					memberSet.has(message.provider) &&
@@ -844,7 +865,7 @@ export class ModelRuntime implements Models {
 					});
 					const model = this.getPhysicalModel(result.target.provider, result.target.model);
 					if (!model) throw new Error("Selected account model is no longer available");
-					return { model, thinkingLevel: request.thinkingLevel, state: { active: result.target } };
+					return { model, thinkingLevel: clampThinkingLevel(model, request.thinkingLevel), state: { active: result.target } };
 				},
 			});
 		}
@@ -936,6 +957,8 @@ export class ModelRuntime implements Models {
 			if (refreshError) throw refreshError;
 			this.updateModelSnapshot();
 			await this.refreshProviderAvailability(providerId, signal);
+			const source = this.accountProfiles.get(providerId)?.sourceProviderId ?? providerId;
+			this.configureAutomaticAccountRotation(this.rotationGroupId(source));
 		} catch (cause) {
 			throw new CredentialSynchronizationError(providerId, operation, credential, { cause });
 		}
@@ -1248,6 +1271,16 @@ export class ModelRuntime implements Models {
 			} catch {
 				// Availability errors are recorded by the latest pass; refreshed models remain usable.
 			}
+		}
+		// Catalog/auth refreshes can change the eligible physical models. Only re-register when the
+		// exposed choices changed; an unconditional re-registration would schedule another refresh.
+		for (const [groupId, entry] of this.virtualModels.get("account-profiles") ?? []) {
+			const preference = this.getAccountRotationPreferences(groupId);
+			const memberIds = this.getRotationMemberIds(groupId).filter((id) => preference.memberIds.includes(id));
+			const levels = this.rotationThinkingLevels(memberIds);
+			const previous = getSupportedThinkingLevels(entry.model);
+			if (levels.length !== previous.length || levels.some((level, i) => level !== previous[i]))
+				this.configureAutomaticAccountRotation(groupId);
 		}
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
