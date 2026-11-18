@@ -127,7 +127,9 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					if (req.args.includes("Gemini 3 Pro")) return successful("Recovered");
 					const logfile = req.args[req.args.indexOf("--log-file") + 1];
 					await writeFile(logfile, "RESOURCE_EXHAUSTED (code 429) Resets in 2m");
-					await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+					await new Promise<void>((resolve) =>
+						req.signal?.addEventListener("abort", () => resolve(), { once: true }),
+					);
 					aborted = true;
 					return { stdout: "", stderr: "", exitCode: null, aborted: true };
 				},
