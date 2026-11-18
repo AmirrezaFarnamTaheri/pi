@@ -61,6 +61,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		if (done) return;
 		done = true;
 		clearInterval(cancelTimer);
+		clearInterval(heartbeatTimer);
 		try {
 			if (fd !== undefined) closeSync(fd);
 			fd = undefined;
@@ -99,6 +100,15 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		stopChildTree();
 	}, 100);
 	cancelTimer.unref();
+	const heartbeatTimer = setInterval(() => {
+		if (done || !child?.pid) return;
+		try {
+			save({ status: "running", exitCode: null });
+		} catch (error) {
+			fail(error);
+		}
+	}, 5_000);
+	heartbeatTimer.unref();
 	const writeFully = (target: number, buffer: Buffer, count: number) => {
 		let offset = 0;
 		while (offset < count) {

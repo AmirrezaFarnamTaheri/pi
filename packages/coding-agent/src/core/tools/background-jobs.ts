@@ -40,6 +40,8 @@ export type BackgroundJobState = {
 const JOB_ID = /^job_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 const FINISHED = new Set<BackgroundJobStatus>(["completed", "failed", "canceled", "lost"]);
 const RETAIN_FINISHED_MS = 7 * 24 * 60 * 60 * 1000;
+/** A reused PID never proves that a stopped supervisor is still running. */
+const SUPERVISOR_HEARTBEAT_STALE_MS = 30_000;
 
 /** Resolve only registry-owned IDs; arbitrary log paths and PIDs are never accepted. */
 export function backgroundJobFolder(jobId: string): string {
@@ -81,7 +83,10 @@ export async function backgroundJobStatus(jobId: string, cwd: string): Promise<B
 		state = {};
 	}
 	const status: BackgroundJobStatus = state.status
-		? state.status === "running" && state.workerPid && !alive(state.workerPid)
+		? state.status === "running" &&
+				(!state.workerPid ||
+					!alive(state.workerPid) ||
+					Date.now() - (state.updatedAt ?? owner.createdAt) >= SUPERVISOR_HEARTBEAT_STALE_MS)
 			? "lost"
 			: state.status
 		: Date.now() - owner.createdAt >= 10_000

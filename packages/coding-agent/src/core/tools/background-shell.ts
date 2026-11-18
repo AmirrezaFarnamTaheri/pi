@@ -73,6 +73,7 @@ const finish=(status,exitCode,signal,error)=>{
   if(done)return;
   done=true;
   clearInterval(cancelTimer);
+  clearInterval(heartbeatTimer);
   try{if(fd!==null){fs.closeSync(fd);fd=null;}closeForeground();}catch{}
   try{save({status,exitCode,signal:signal||null,error:error||null,finishedAt:Date.now()});}
   catch{process.exitCode=1;}
@@ -98,6 +99,11 @@ const cancelTimer=setInterval(()=>{
   stopChildTree();
 },100);
 cancelTimer.unref();
+const heartbeatTimer=setInterval(()=>{
+  if(done||!child?.pid)return;
+  try{save({status:"running",exitCode:null});}catch(e){fail(e);}
+},5000);
+heartbeatTimer.unref();
 const writeFully=(target,buf,count)=>{
   let pos=0;
   while(pos<count){
