@@ -23,7 +23,7 @@ interface SupervisorState {
 	outputTruncated?: boolean;
 }
 
-export interface BackgroundJobState {
+export type BackgroundJobState = {
 	jobId: string;
 	status: BackgroundJobStatus;
 	pid: number | null;
@@ -34,7 +34,7 @@ export interface BackgroundJobState {
 	updatedAt: number;
 	finishedAt: number | null;
 	outputTruncated: boolean;
-}
+};
 
 const JOB_ID = /^job_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u;
 const FINISHED = new Set<BackgroundJobStatus>(["completed", "failed", "canceled", "lost"]);
