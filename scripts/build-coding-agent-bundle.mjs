@@ -188,6 +188,7 @@ const lazyEntryPoints = {
 	"openai-chatgpt": join(aiDistDir, "auth", "oauth", "openai-chatgpt.js"),
 	"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
 	openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
+	tokendance: join(aiDistDir, "auth", "oauth", "tokendance.js"),
 	radius: join(aiDistDir, "auth", "oauth", "radius.js"),
 	xai: join(aiDistDir, "auth", "oauth", "xai.js"),
 };
