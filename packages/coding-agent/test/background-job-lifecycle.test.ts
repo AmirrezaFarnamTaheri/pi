@@ -145,5 +145,4 @@ describe("background_job", () => {
 			expect((await listBackgroundJobs(cwd)).map((job) => job.jobId)).toContain(detached.background!.jobId);
 		},
 	);
-
 });
