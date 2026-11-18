@@ -350,7 +350,7 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 											: [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
 										...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
 											? ["quota exhausted (reset unknown)"]
-											: entry.readyInMs
+											: entry.readyInMs > 0 && Number.isFinite(entry.readyInMs)
 												? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`]
 												: []),
 										...(entry.available ? [] : ["login or model unavailable"]),
