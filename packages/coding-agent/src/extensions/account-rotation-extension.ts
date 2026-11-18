@@ -315,7 +315,10 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			const match = status.find(
 				(candidate) => candidate.target.provider === message.provider && candidate.target.model === message.model,
 			);
-			if (match) entry.pool.markSuccess(match.target);
+			if (match) {
+				entry.pool.markSuccess(match.target);
+				break;
+			}
 		}
 	});
 
