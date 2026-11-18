@@ -46,7 +46,9 @@ Models come from `agy models`, with support for current two-column ID/name listi
 - Delegation has a FIFO, per-Pi-process admission queue to avoid overlapping CLI invocations; this is **not** the cross-process, durable admission controller used by Paseo.
 - Errors shown to Pi are generic, not raw credential-bearing stderr. No prompt is automatically replayed following partial stdout, a timeout, an unclassified failure, or a cancellation.
 - The CLI currently receives its `-p` prompt as an argv value, so operating-system process listings may expose prompt text. Never place tokens, passwords, or secrets in delegated prompts.
-- Per-model cooldowns and conversation bindings have local/per-process semantics; no promise of accurate, account-wide 5-hour or weekly quota across independently running Pi processes.
+- Model cooldowns persist as model IDs and bounded reset timestamps in `~/.pi/agent/agy-model-cooldowns.json` by default; set `AGY_COOLDOWN_FILE` to change the location. The file contains **no prompts, tokens, credential data, or CLI logs**. This is best-effort persistence, **not** a cross-process lock, distributed scheduler, or account-wide quota measurement.
+- Selected workspace files are checked against both lexical paths and resolved symlinks before delegation. This is a preflight guard, not an operating-system sandbox: the CLI retains its own file access and may follow links after validation.
+- Conversation bindings remain CLI-owned, and no accurate account-wide 5-hour or weekly quota is inferred across independently running Pi processes.
 
 ## Alternative: use Pi's existing MCP client
 

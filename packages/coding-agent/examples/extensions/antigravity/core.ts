@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { AgyCooldownStore, MAX_AGY_COOLDOWN_MS } from "./state.ts";
 
 export interface AgyModel {
 	id?: string;
@@ -47,6 +48,8 @@ export interface AgyBridgeOptions {
 	now?: () => number;
 	maxConcurrent?: number;
 	maxQueued?: number;
+	/** Optional local file containing only model names and bounded quota-reset times. */
+	cooldownFile?: string;
 }
 
 export interface AgyBridgeDeps {
@@ -73,7 +76,7 @@ export interface AgyDelegationResult {
 const DEFAULT_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_LIMIT = 16_000;
 const DEFAULT_COOLDOWN_MS = 15 * 60_000;
-const MAX_QUOTA_WINDOW_MS = 30 * 24 * 60 * 60_000;
+const MAX_QUOTA_WINDOW_MS = MAX_AGY_COOLDOWN_MS;
 const DEFAULT_PREFERRED_MODELS = ["Gemini * Flash (High)", "Gemini * Pro (Low)"];
 
 export function parseAgyModels(output: string): AgyModel[] {
@@ -427,6 +430,8 @@ export class AgyBridge {
 	private readonly readSessionId: (cwd: string) => Promise<string | undefined>;
 	private readonly queue: AgyAdmissionQueue;
 	private readonly cooldowns = new Map<string, number>();
+	private readonly cooldownStore?: AgyCooldownStore;
+	private cooldownLoad?: Promise<void>;
 	private modelCache?: Promise<AgyModel[] | null>;
 	private readonly now: () => number;
 
@@ -438,6 +443,25 @@ export class AgyBridge {
 		this.readSessionId = dependencies.readSessionId ?? readAgySessionId;
 		this.queue = new AgyAdmissionQueue(options.maxConcurrent ?? 1, options.maxQueued ?? 8);
 		this.now = options.now ?? Date.now;
+		if (options.cooldownFile) this.cooldownStore = new AgyCooldownStore(options.cooldownFile, this.now);
+	}
+
+	private async loadCooldowns(): Promise<void> {
+		if (!this.cooldownStore) return;
+		this.cooldownLoad ??= (async () => {
+			const stored = await this.cooldownStore!.load();
+			for (const [model, until] of stored) {
+				this.cooldowns.set(model, Math.max(this.cooldowns.get(model) ?? 0, until));
+			}
+		})();
+		await this.cooldownLoad;
+	}
+
+	private async recordCooldown(model: string | undefined, delayMs: number): Promise<void> {
+		const key = model ?? "(default)";
+		const until = this.now() + delayMs;
+		this.cooldowns.set(key, Math.max(this.cooldowns.get(key) ?? 0, until));
+		if (this.cooldownStore) await this.cooldownStore.save(this.cooldowns).catch(() => undefined);
 	}
 
 	private get binary(): string {
@@ -526,6 +550,7 @@ export class AgyBridge {
 	}
 
 	private async delegateAdmitted(request: AgyDelegationRequest): Promise<AgyDelegationResult> {
+		await this.loadCooldowns();
 		const catalog = await this.listModels();
 		const explicit = request.model;
 		let models: (string | undefined)[];
@@ -561,7 +586,7 @@ export class AgyBridge {
 			const output = result.stdout.trim();
 			if (quota.detected) {
 				if (output) throw new Error("Antigravity emitted partial output before quota exhaustion; no replay");
-				this.cooldowns.set(model ?? "(default)", this.now() + (quota.resetMs ?? DEFAULT_COOLDOWN_MS));
+				await this.recordCooldown(model, quota.resetMs ?? DEFAULT_COOLDOWN_MS);
 				if (!explicit && !request.conversationId) continue;
 				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
 			}
@@ -578,7 +603,7 @@ export class AgyBridge {
 			const failure = classifyAgyFailure(result.stderr);
 			if (failure === "quota") {
 				const cooldown = parseQuotaResetMs(result.stderr) ?? DEFAULT_COOLDOWN_MS;
-				this.cooldowns.set(model ?? "(default)", this.now() + cooldown);
+				await this.recordCooldown(model, cooldown);
 				if (!explicit && !request.conversationId) continue;
 				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
 			}

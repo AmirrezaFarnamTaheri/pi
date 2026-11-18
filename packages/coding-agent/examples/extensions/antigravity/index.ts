@@ -8,7 +8,9 @@
  * Load with: pi --extension packages/coding-agent/examples/extensions/antigravity/index.ts
  */
 
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { AgyBridge, type AgyDelegationRequest } from "./core.ts";
@@ -22,19 +24,38 @@ const commonDescription =
 	"Uses an independently installed Antigravity CLI (agy), with its own authentication and service terms. " +
 	"Do not include API keys or secrets in prompts. May use the CLI's local tools; request a sandboxed, permission-respecting operation.";
 
-function withinWorkspace(file: string, cwd: string): string {
-	const root = resolve(cwd);
-	const path = resolve(root, file);
-	const rel = relative(root, path);
-	if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
-		throw new Error("Antigravity file path is outside the current workspace");
-	}
-	return path;
+function isWithin(root: string, target: string): boolean {
+	const rel = relative(root, target);
+	return rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel);
 }
 
-function formatFiles(files: string[], cwd: string): string {
+async function withinWorkspace(file: string, cwd: string): Promise<string> {
+	const root = resolve(cwd);
+	const candidate = resolve(root, file);
+	if (!isWithin(root, candidate)) throw new Error("Antigravity file path is outside the current workspace");
+	let resolvedRoot: string;
+	let resolvedFile: string;
+	try {
+		resolvedRoot = await realpath(root);
+		resolvedFile = await realpath(candidate);
+	} catch {
+		throw new Error("Antigravity selected file does not exist or cannot be read");
+	}
+	if (!isWithin(resolvedRoot, resolvedFile)) {
+		throw new Error("Antigravity file path is outside the current workspace");
+	}
+	try {
+		if (!(await stat(resolvedFile)).isFile()) throw new Error("Antigravity selected file must be a regular file");
+	} catch {
+		throw new Error("Antigravity selected file does not exist or cannot be read");
+	}
+	return resolvedFile;
+}
+
+async function formatFiles(files: string[], cwd: string): Promise<string> {
 	if (files.length === 0 || files.length > 32) throw new Error("Select 1 to 32 files for Antigravity analysis");
-	return files.map((file) => "- " + withinWorkspace(file, cwd)).join("\n");
+	const canonical = await Promise.all(files.map((file) => withinWorkspace(file, cwd)));
+	return canonical.map((file) => "- " + file).join("\n");
 }
 
 async function delegate(
@@ -66,6 +87,7 @@ export function createAntigravityExtension(
 	bridge: AgyBridge = new AgyBridge({
 		binary: process.env.AGY_BIN || "agy",
 		sandbox: true,
+		cooldownFile: process.env.AGY_COOLDOWN_FILE?.trim() || join(homedir(), ".pi", "agent", "agy-model-cooldowns.json"),
 		outputLimit:
 			Number(process.env.AGY_OUTPUT_LIMIT) > 0 ? Math.min(Number(process.env.AGY_OUTPUT_LIMIT), 64_000) : 16_000,
 	}),
@@ -83,7 +105,7 @@ export function createAntigravityExtension(
 				model: optionalModel,
 			}),
 			async execute(_id, params, signal, _onUpdate, ctx) {
-				const names = formatFiles(params.files, ctx.cwd);
+				const names = await formatFiles(params.files, ctx.cwd);
 				return delegate(
 					bridge,
 					"Read and analyze these files:\n" + names + "\n\nQuestion: " + params.question + "\n\n" + outputGuidance,
@@ -156,7 +178,7 @@ export function createAntigravityExtension(
 				if (!params.content?.trim() && !params.files?.length) {
 					throw new Error("Antigravity review needs content or workspace files");
 				}
-				const files = params.files?.length ? "\nFiles:\n" + formatFiles(params.files, ctx.cwd) : "";
+				const files = params.files?.length ? "\nFiles:\n" + (await formatFiles(params.files, ctx.cwd)) : "";
 				const prompt =
 					"Act as a critical code reviewer. Rank concrete problems by severity; avoid speculation and praise.\n" +
 					(params.content ? "\nContent:\n" + params.content : "") +

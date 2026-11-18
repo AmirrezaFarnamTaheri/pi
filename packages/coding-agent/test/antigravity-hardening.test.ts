@@ -28,7 +28,11 @@ describe("Antigravity cooldown persistence (no credentials)", () => {
 				exec: async (req) => {
 					if (req.args[0] === "models") return ok(available);
 					if (req.args.includes("Gemini 3 Flash")) {
-						return { stdout: "", stderr: "RESOURCE_EXHAUSTED (code 429) Resets in 5m secret-credential", exitCode: 1 };
+						return {
+							stdout: "",
+							stderr: "RESOURCE_EXHAUSTED (code 429) Resets in 5m secret-credential",
+							exitCode: 1,
+						};
 					}
 					return ok("successful analysis");
 				},
@@ -102,13 +106,16 @@ describe("Antigravity file analysis workspace boundary", () => {
 			await symlink(secret, join(workspace, "apparently-local.txt"));
 			const seen: AgyProcessRequest[] = [];
 			const tools = new Map<string, ToolDefinition>();
-			const bridge = new AgyBridge({ preferredModels: ["Gemini 3 Flash"] }, {
+			const bridge = new AgyBridge(
+				{ preferredModels: ["Gemini 3 Flash"] },
+				{
 				exec: async (req) => {
 					seen.push(req);
 					if (req.args[0] === "models") return ok(available);
 					return ok("should never run");
 				},
-			});
+				},
+			);
 			createAntigravityExtension(bridge)({
 				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
 				registerCommand: () => undefined,
@@ -117,13 +124,7 @@ describe("Antigravity file analysis workspace boundary", () => {
 			await expect(
 				tools
 					.get("agy_analyze_files")!
-					.execute(
-						"call",
-						{ files: ["apparently-local.txt"], question: "inspect it" },
-						undefined,
-						undefined,
-						ctx,
-					),
+					.execute("call", { files: ["apparently-local.txt"], question: "inspect it" }, undefined, undefined, ctx),
 			).rejects.toThrow(/outside the current workspace/i);
 			expect(seen).toHaveLength(0);
 		} finally {
@@ -137,13 +138,16 @@ describe("Antigravity file analysis workspace boundary", () => {
 			await writeFile(join(directory, "real-file.ts"), "export const ok = true;\n");
 			const seen: AgyProcessRequest[] = [];
 			const tools = new Map<string, ToolDefinition>();
-			const bridge = new AgyBridge({ preferredModels: ["Gemini 3 Flash"] }, {
+			const bridge = new AgyBridge(
+				{ preferredModels: ["Gemini 3 Flash"] },
+				{
 				exec: async (req) => {
 					seen.push(req);
 					if (req.args[0] === "models") return ok(available);
 					return ok("analysis complete");
 				},
-			});
+				},
+			);
 			createAntigravityExtension(bridge)({
 				registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
 				registerCommand: () => undefined,
