@@ -28,9 +28,7 @@ const backgroundJobSchema = Type.Object({
 export type BackgroundJobInput = Static<typeof backgroundJobSchema>;
 
 /** Managed status, bounded logs, waiting and cancellation for local background shell jobs. */
-export function createBackgroundJobToolDefinition(
-	cwd: string,
-): ToolDefinition<typeof backgroundJobSchema, undefined> {
+export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<typeof backgroundJobSchema, undefined> {
 	return {
 		name: "background_job",
 		label: "background_job",
@@ -52,7 +50,12 @@ export function createBackgroundJobToolDefinition(
 			if (action === "list") {
 				const jobs = await listBackgroundJobs(scope, limit);
 				return {
-					content: [{ type: "text", text: jobs.length ? jobs.map((j) => j.jobId + " " + j.status).join("\n") : "(no background jobs)" }],
+					content: [
+						{
+							type: "text",
+							text: jobs.length ? jobs.map((j) => `${j.jobId} ${j.status}`).join("\n") : "(no background jobs)",
+						},
+					],
 					details: undefined,
 					structuredContent: { jobs },
 				};

@@ -172,7 +172,9 @@ export function runBackgroundShellSupervisor(folder: string): void {
 			}, 1000);
 			guard.unref();
 		});
-		started.once("close", (code, signal) => finish(cancelRequested ? "canceled" : code === 0 ? "completed" : "failed", code, signal, null));
+		started.once("close", (code, signal) =>
+			finish(cancelRequested ? "canceled" : code === 0 ? "completed" : "failed", code, signal, null),
+		);
 	} catch (error) {
 		fail(error);
 	}

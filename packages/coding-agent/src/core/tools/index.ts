@@ -1,3 +1,4 @@
+export { type BackgroundJobInput, createBackgroundJobTool, createBackgroundJobToolDefinition } from "./background-job.ts";
 export {
 	type BashOperations,
 	type BashSpawnContext,
@@ -18,7 +19,6 @@ export {
 	type EditToolOptions,
 } from "./edit.ts";
 export { withFileMutationQueue } from "./file-mutation-queue.ts";
-export { createBackgroundJobTool, createBackgroundJobToolDefinition, type BackgroundJobInput } from "./background-job.ts";
 export {
 	createFindTool,
 	createFindToolDefinition,
@@ -82,8 +82,8 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
-import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import { createBackgroundJobTool, createBackgroundJobToolDefinition } from "./background-job.ts";
+import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";

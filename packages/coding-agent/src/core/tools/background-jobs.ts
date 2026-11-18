@@ -1,5 +1,5 @@
 /** Workspace-scoped records for detached local shell commands. No command or credentials are persisted. */
-import { open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { backgroundJobsRoot } from "./background-shell.ts";
 
@@ -52,11 +52,11 @@ async function ownerOf(jobId: string, cwd: string): Promise<{ folder: string; ow
 	try {
 		owner = JSON.parse(await readFile(join(folder, "owner.json"), "utf8")) as JobOwner;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Background job not found or access denied");
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			throw new Error("Background job not found or access denied");
 		throw error;
 	}
-	if (owner.version !== 1 || owner.cwd !== resolve(cwd))
-		throw new Error("Background job not found or access denied");
+	if (owner.version !== 1 || owner.cwd !== resolve(cwd)) throw new Error("Background job not found or access denied");
 	return { folder, owner };
 }
 
