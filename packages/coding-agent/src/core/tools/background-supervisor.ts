@@ -55,7 +55,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		}
 	};
 	const finish = (
-		status: "completed" | "failed",
+		status: "completed" | "failed" | "canceled",
 		exitCode: number | null,
 		signal: string | null,
 		error: string | null,
