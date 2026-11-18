@@ -187,7 +187,9 @@ function choose(ctx: TuiContext, state: ModelState, change: Change, done: string
 			return;
 		}
 		const selected = change.model ? metaOf(state, change.model) : state.model;
-		const requested = change.thinkingLevel ?? (change.model ? state.thinkingLevel ?? state.defaultModel?.thinkingLevel : undefined);
+		const requested =
+			change.thinkingLevel ??
+			(change.model ? (state.thinkingLevel ?? state.defaultModel?.thinkingLevel) : undefined);
 		const effective = selected && requested ? resolveThinkingLevel(selected.thinkingLevels, requested) : undefined;
 		const guess = {
 			...(change.model ? { model: selected } : {}),

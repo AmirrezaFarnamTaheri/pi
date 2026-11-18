@@ -1315,7 +1315,8 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
 /** Resolve an effort requested by a user against model-specific levels in the catalog. */
 export function resolveThinkingLevel(availableLevels: readonly string[], level: string): ModelThinkingLevel {
 	const requestedIndex = EXTENDED_THINKING_LEVELS.findIndex((candidate) => candidate === level);
-	if (requestedIndex < 0) return EXTENDED_THINKING_LEVELS.find((candidate) => availableLevels.includes(candidate)) ?? "off";
+	if (requestedIndex < 0)
+		return EXTENDED_THINKING_LEVELS.find((candidate) => availableLevels.includes(candidate)) ?? "off";
 	for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
 		const candidate = EXTENDED_THINKING_LEVELS[i];
 		if (availableLevels.includes(candidate)) return candidate;
