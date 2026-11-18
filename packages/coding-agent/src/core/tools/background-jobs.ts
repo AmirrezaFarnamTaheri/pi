@@ -1,5 +1,5 @@
 /** Workspace-scoped records for detached local shell commands. No command or credentials are persisted. */
-import { open, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { backgroundJobsRoot } from "./background-shell.ts";
 
@@ -9,6 +9,7 @@ interface JobOwner {
 	version: 1;
 	cwd: string;
 	createdAt: number;
+	captureForegroundOutput?: boolean;
 }
 
 interface SupervisorState {
@@ -83,7 +84,9 @@ export async function backgroundJobStatus(jobId: string, cwd: string): Promise<B
 		? state.status === "running" && state.workerPid && !alive(state.workerPid)
 			? "lost"
 			: state.status
-		: "starting";
+		: Date.now() - owner.createdAt >= 10_000
+			? "lost"
+			: "starting";
 	return {
 		jobId,
 		status,
@@ -112,6 +115,16 @@ export async function listBackgroundJobs(cwd: string, limit = 25): Promise<Backg
 	for (const name of names) {
 		if (!JOB_ID.test(name)) continue;
 		try {
+			const { folder, owner } = await ownerOf(name, cwd);
+			// Foreground commands are only managed jobs after Ctrl+B creates the detach marker.
+			if (owner.captureForegroundOutput) {
+				try {
+					await access(join(folder, "detached"));
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+					throw error;
+				}
+			}
 			const job = await backgroundJobStatus(name, cwd);
 			if (FINISHED.has(job.status) && Date.now() - (job.finishedAt ?? job.updatedAt) > RETAIN_FINISHED_MS) {
 				await rm(join(root, name), { recursive: true, force: true });

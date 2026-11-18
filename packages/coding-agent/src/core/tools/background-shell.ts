@@ -171,7 +171,13 @@ export async function startBackgroundShell(
 	try {
 		await writeFile(
 			join(folder, "owner.json"),
-			JSON.stringify({ version: 1, cwd: resolve(cwd), kind: tempFilePrefix, createdAt: Date.now() }),
+			JSON.stringify({
+				version: 1,
+				cwd: resolve(cwd),
+				kind: tempFilePrefix,
+				createdAt: Date.now(),
+				captureForegroundOutput: options?.captureForegroundOutput === true,
+			}),
 			{ flag: "wx", mode: 0o600 },
 		);
 		await writeFile(

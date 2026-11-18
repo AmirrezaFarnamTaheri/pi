@@ -1,10 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundJobTool } from "../src/core/tools/background-job.ts";
-import { backgroundJobFolder } from "../src/core/tools/background-jobs.ts";
-import { type BashToolOutput, createBashTool } from "../src/core/tools/bash.ts";
+import { backgroundJobFolder, backgroundJobStatus, listBackgroundJobs } from "../src/core/tools/background-jobs.ts";
+import { type BashToolOutput, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
+import { ManualBackgroundController } from "../src/core/tools/manual-background.ts";
 
 const dirs: string[] = [];
 const jobs: Array<{ jobId: string; cwd: string }> = [];
@@ -108,4 +110,40 @@ describe("background_job", () => {
 			expect(listed.content[0]).toEqual({ type: "text", text: expect.stringContaining(output.background_job_id!) });
 		},
 	);
+
+	it("marks a stale startup without supervisor state as lost, never completed", async () => {
+		const cwd = await workspace();
+		const jobId = `job_${randomUUID()}`;
+		const folder = backgroundJobFolder(jobId);
+		await mkdir(dirname(folder), { recursive: true, mode: 0o700 });
+		await mkdir(folder, { mode: 0o700 });
+		await writeFile(
+			join(folder, "owner.json"),
+			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 20_000 }),
+			{ mode: 0o600 },
+		);
+		jobs.push({ jobId, cwd });
+		expect(await backgroundJobStatus(jobId, cwd)).toMatchObject({ status: "lost" });
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"excludes live foreground commands from the job list until Ctrl+B detaches them",
+		async () => {
+			const cwd = await workspace();
+			const controller = new ManualBackgroundController();
+			controller.enable();
+			const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify("setTimeout(() => {}, 2000)")}`;
+			const running = createLocalBashOperations({ backgroundController: controller }).exec(command, cwd, {
+				onData: () => {},
+			});
+			await vi.waitFor(() => expect(controller.hasActiveCommand).toBe(true), { timeout: 5_000 });
+			expect(await listBackgroundJobs(cwd)).toEqual([]);
+			expect(controller.backgroundCurrentCommand()).toBe(true);
+			const detached = await running;
+			expect(detached.background?.jobId).toMatch(/^job_[a-f0-9-]{36}$/u);
+			jobs.push({ jobId: detached.background!.jobId, cwd });
+			expect((await listBackgroundJobs(cwd)).map((job) => job.jobId)).toContain(detached.background!.jobId);
+		},
+	);
+
 });
