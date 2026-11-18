@@ -14,8 +14,8 @@ const jobs: Array<{ jobId: string; cwd: string }> = [];
 afterEach(async () => {
 	for (const job of jobs.splice(0)) {
 		try {
-			const result = await createBackgroundJobTool(job.cwd).execute("cleanup", { action: "stop", jobId: job.jobId });
-			if (result.structuredContent?.status !== "running") {
+			await createBackgroundJobTool(job.cwd).execute("cleanup", { action: "stop", jobId: job.jobId });
+			if ((await backgroundJobStatus(job.jobId, job.cwd)).status !== "running") {
 				await rm(backgroundJobFolder(job.jobId), { recursive: true, force: true });
 			}
 		} catch {
