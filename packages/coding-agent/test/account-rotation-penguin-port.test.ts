@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyCredentialFailure,
 	quotaResetDelayMs,
-	summarizeRotationHealth,
 	RotationPool,
+	summarizeRotationHealth,
 } from "../src/extensions/account-rotation-policy.ts";
 
 const claude = { provider: "account-one", model: "claude" };
@@ -173,7 +173,10 @@ describe("Penguin per-model credential health in Pi rotation", () => {
 		const health = new Map();
 		const claudePool = new RotationPool([claude, backup], 1000, "round-robin", Math.random, health);
 		const geminiPool = new RotationPool([gemini, backup], 1000, "round-robin", Math.random, health);
-		for (const [pool, target] of [[claudePool, claude], [geminiPool, gemini]] as const) {
+		for (const [pool, target] of [
+			[claudePool, claude],
+			[geminiPool, gemini],
+		] as const) {
 			pool.choose({
 				reason: "retry",
 				now: 0,
