@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
 	AgyAdmissionQueue,
@@ -87,6 +88,54 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 		expect(calls[2]?.args).not.toContain("--dangerously-skip-permissions");
 		const second = await bridge.delegate({ prompt: "Another", cwd });
 		expect(second.attempts).toEqual(["Gemini 3 Pro"]);
+	});
+
+	it("reads the CLI-only 429 log even after exit code 0 and skips the cooled model", async () => {
+		const observed: string[] = [];
+		const bridge = new AgyBridge(
+			{ preferredModels: ["Gemini 3 Flash", "Gemini 3 Pro"], now: () => 20_000 },
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Gemini 3 Flash\nGemini 3 Pro\n");
+					const model = req.args[req.args.indexOf("--model") + 1];
+					observed.push(model);
+					if (model === "Gemini 3 Flash") {
+						const logfile = req.args[req.args.indexOf("--log-file") + 1];
+						expect(logfile).toContain("pi-agy-log-");
+						await writeFile(logfile, "RESOURCE_EXHAUSTED (code 429) Resets in 3m");
+						return successful("");
+					}
+					return successful("Pro answer");
+				},
+			},
+		);
+		const first = await bridge.delegate({ prompt: "one", cwd });
+		expect(first.attempts).toEqual(["Gemini 3 Flash", "Gemini 3 Pro"]);
+		expect(first.text).toBe("Pro answer");
+		const next = await bridge.delegate({ prompt: "two", cwd });
+		expect(next.attempts).toEqual(["Gemini 3 Pro"]);
+		expect(observed).toEqual(["Gemini 3 Flash", "Gemini 3 Pro", "Gemini 3 Pro"]);
+	});
+
+	it("interrupts an agy invocation when its log reports 429 before print timeout", async () => {
+		let aborted = false;
+		const bridge = new AgyBridge(
+			{ preferredModels: ["Gemini 3 Flash", "Gemini 3 Pro"] },
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Gemini 3 Flash\nGemini 3 Pro\n");
+					if (req.args.includes("Gemini 3 Pro")) return successful("Recovered");
+					const logfile = req.args[req.args.indexOf("--log-file") + 1];
+					await writeFile(logfile, "RESOURCE_EXHAUSTED (code 429) Resets in 2m");
+					await new Promise<void>((resolve) => req.signal?.addEventListener("abort", () => resolve(), { once: true }));
+					aborted = true;
+					return { stdout: "", stderr: "", exitCode: null, aborted: true };
+				},
+			},
+		);
+		const result = await bridge.delegate({ prompt: "search", cwd });
+		expect(aborted).toBe(true);
+		expect(result.text).toBe("Recovered");
 	});
 
 	it("does not switch models for explicitly pinned model or replay partial output", async () => {

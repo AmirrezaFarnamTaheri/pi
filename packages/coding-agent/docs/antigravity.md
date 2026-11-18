@@ -37,7 +37,7 @@ Optional environment variables: `AGY_BIN` specifies a preinstalled CLI binary (d
 
 Responses are capped before reaching Pi's context and include a continuation ID when the CLI cache supplies one. Pi reads only the CLI's **nonsecret conversation-to-directory map** to identify a session; Pi does not maintain a separate Google account database or need access to CLI credentials.
 
-Models come from `agy models`, with support for current two-column ID/name listings, legacy name-only listings, version-pattern preferences, and exact user-pinned models. A known quota failure can cool down **the failed model**, then optionally try another already available model when no output has been emitted. Explicit pins and existing conversations do not switch models. **No 429 account swapping or identity rotation.**
+Models come from `agy models`, with support for current two-column ID/name listings, legacy name-only listings, version-pattern preferences, and exact user-pinned models. A known quota failure, including a `RESOURCE_EXHAUSTED (code 429)` line in the CLI-only log, can cool down **the failed model**, then optionally try another already available model when no output has been emitted. Every invocation writes an isolated temporary log and removes it afterward; Pi never displays that log content. Explicit pins and existing conversations do not switch models. **No 429 account swapping or identity rotation.**
 
 ## Execution safeguards and limits
 

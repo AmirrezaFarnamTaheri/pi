@@ -10,8 +10,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdtemp, open, readFile, rm, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 export interface AgyModel {
@@ -396,6 +396,32 @@ export async function readAgySessionId(cwd: string): Promise<string | undefined>
 	}
 }
 
+interface AgyLogQuota {
+	detected: boolean;
+	resetMs?: number;
+}
+
+/** Read only the tail of an isolated CLI log, without exposing log text or credentials to Pi. */
+async function readAgyLogQuota(filename: string): Promise<AgyLogQuota> {
+	try {
+		const handle = await open(filename, "r");
+		try {
+			const metadata = await handle.stat();
+			const length = Math.min(metadata.size, 256 * 1024);
+			if (length === 0) return { detected: false };
+			const buffer = Buffer.alloc(length);
+			const { bytesRead } = await handle.read(buffer, 0, length, metadata.size - length);
+			const tail = buffer.toString("utf8", 0, bytesRead);
+			if (!/RESOURCE_EXHAUSTED\s*\(code\s*429\)/i.test(tail)) return { detected: false };
+			return { detected: true, resetMs: parseQuotaResetMs(tail) };
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		return { detected: false };
+	}
+}
+
 export class AgyBridge {
 	private readonly exec: (request: AgyProcessRequest) => Promise<AgyProcessResult>;
 	private readonly readSessionId: (cwd: string) => Promise<string | undefined>;
@@ -448,6 +474,57 @@ export class AgyBridge {
 		return this.queue.run(() => this.delegateAdmitted(request), request.signal);
 	}
 
+	private async executeWithQuotaLog(
+		request: AgyDelegationRequest,
+		args: string[],
+		timeoutMs: number,
+	): Promise<{ result: AgyProcessResult; quota: AgyLogQuota }> {
+		const directory = await mkdtemp(join(tmpdir(), "pi-agy-log-"));
+		const logPath = join(directory, "invocation.log");
+		const controller = new AbortController();
+		const onAbort = () => controller.abort();
+		if (request.signal?.aborted) controller.abort();
+		else request.signal?.addEventListener("abort", onAbort, { once: true });
+		let quota: AgyLogQuota = { detected: false };
+		let scanning: Promise<void> | undefined;
+		const scan = (): Promise<void> => {
+			if (scanning) return scanning;
+			scanning = (async () => {
+				const observed = await readAgyLogQuota(logPath);
+				if (observed.detected) {
+					quota = observed;
+					controller.abort();
+				}
+			})().finally(() => {
+				scanning = undefined;
+			});
+			return scanning;
+		};
+		const poll = setInterval(() => {
+			if (!quota.detected) void scan();
+		}, 250);
+		poll.unref?.();
+		try {
+			const result = await this.exec({
+				binary: this.binary,
+				args: ["--log-file", logPath, ...args],
+				cwd: resolve(request.cwd),
+				timeoutMs,
+				signal: controller.signal,
+			});
+			// The CLI sometimes exits 0 with no stdout after quota exhaustion.
+			// Check once more even if a short-lived invocation escaped the poller.
+			if (scanning) await scanning;
+			if (!quota.detected) await scan();
+			return { result, quota };
+		} finally {
+			clearInterval(poll);
+			request.signal?.removeEventListener("abort", onAbort);
+			if (scanning) await scanning;
+			await rm(directory, { recursive: true, force: true });
+		}
+	}
+
 	private async delegateAdmitted(request: AgyDelegationRequest): Promise<AgyDelegationResult> {
 		const catalog = await this.listModels();
 		const explicit = request.model;
@@ -476,19 +553,20 @@ export class AgyBridge {
 			if (request.conversationId) args.push("--conversation", request.conversationId);
 			if (model) args.push("--model", model);
 			args.push("--print-timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))) + "s", "-p", request.prompt);
-			const result = await this.exec({
-				binary: this.binary,
-				args,
-				cwd: resolve(request.cwd),
-				timeoutMs,
-				signal: request.signal,
-			});
-			if (result.aborted || request.signal?.aborted) throw new Error("Antigravity delegation cancelled");
-			if (result.timedOut) throw new Error("Antigravity CLI timed out; no automatic replay");
+			const { result, quota } = await this.executeWithQuotaLog(request, args, timeoutMs);
+			if (request.signal?.aborted) throw new Error("Antigravity delegation cancelled");
 			if (result.outputOverflow) throw new Error("Antigravity CLI exceeded its output capture limit; no replay");
 			if (result.spawnError)
 				throw new Error("Antigravity CLI could not start (" + result.spawnError + "); install agy or set AGY_BIN");
 			const output = result.stdout.trim();
+			if (quota.detected) {
+				if (output) throw new Error("Antigravity emitted partial output before quota exhaustion; no replay");
+				this.cooldowns.set(model ?? "(default)", this.now() + (quota.resetMs ?? DEFAULT_COOLDOWN_MS));
+				if (!explicit && !request.conversationId) continue;
+				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
+			}
+			if (result.aborted) throw new Error("Antigravity delegation cancelled");
+			if (result.timedOut) throw new Error("Antigravity CLI timed out; no automatic replay");
 			if (result.exitCode === 0 && output) {
 				const limited = truncateAgyOutput(output, this.options.outputLimit ?? DEFAULT_OUTPUT_LIMIT);
 				const sessionId = request.conversationId ?? (await this.readSessionId(resolve(request.cwd)));
@@ -501,7 +579,7 @@ export class AgyBridge {
 			if (failure === "quota") {
 				const cooldown = parseQuotaResetMs(result.stderr) ?? DEFAULT_COOLDOWN_MS;
 				this.cooldowns.set(model ?? "(default)", this.now() + cooldown);
-				if (!explicit) continue;
+				if (!explicit && !request.conversationId) continue;
 				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
 			}
 			if (failure === "overloaded" && !explicit) continue;
