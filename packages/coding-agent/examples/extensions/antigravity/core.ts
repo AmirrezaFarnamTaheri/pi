@@ -182,10 +182,10 @@ export class AgyAdmissionQueue {
 		onAbort: () => void;
 	}> = [];
 
-	constructor(
-		private readonly maxConcurrent = 1,
-		private readonly maxQueued = 8,
-	) {
+	private readonly maxConcurrent: number;
+	private readonly maxQueued: number;
+
+	constructor(maxConcurrent = 1, maxQueued = 8) {
 		if (
 			!Number.isSafeInteger(maxConcurrent) ||
 			maxConcurrent < 1 ||
@@ -194,6 +194,8 @@ export class AgyAdmissionQueue {
 		) {
 			throw new Error("Invalid Antigravity admission limits");
 		}
+		this.maxConcurrent = maxConcurrent;
+		this.maxQueued = maxQueued;
 	}
 
 	private acquire(signal?: AbortSignal): Promise<void> {
@@ -402,10 +404,10 @@ export class AgyBridge {
 	private modelCache?: Promise<AgyModel[] | null>;
 	private readonly now: () => number;
 
-	constructor(
-		private readonly options: AgyBridgeOptions = {},
-		dependencies: AgyBridgeDeps = {},
-	) {
+	private readonly options: AgyBridgeOptions;
+
+	constructor(options: AgyBridgeOptions = {}, dependencies: AgyBridgeDeps = {}) {
+		this.options = options;
 		this.exec = dependencies.exec ?? runAgyProcess;
 		this.readSessionId = dependencies.readSessionId ?? readAgySessionId;
 		this.queue = new AgyAdmissionQueue(options.maxConcurrent ?? 1, options.maxQueued ?? 8);
