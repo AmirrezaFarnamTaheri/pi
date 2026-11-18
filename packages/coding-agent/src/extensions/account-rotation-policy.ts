@@ -64,7 +64,6 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 	return undefined;
 }
 
-
 const MAX_COOLDOWN_MS = 86_400_000;
 const UNITS: Record<string, number> = {
 	second: 1_000,
@@ -102,7 +101,6 @@ export function quotaResetDelayMs(error: string): number | undefined {
 	}
 	return delay > 0 ? withinLimit(delay) : undefined;
 }
-
 
 export interface RotationChoice {
 	index: number;
@@ -143,6 +141,39 @@ export interface RotationHealth {
 	lastFailureAt?: number;
 	lastUsedAt?: number;
 	quota?: { remaining: number; resetAt?: number };
+}
+
+/** Health summary for one account rotation fleet; never includes credentials. */
+export interface RotationFleetHealth {
+	total: number;
+	ready: number;
+	cooling: number;
+	quotaBlocked: number;
+	authRejected: number;
+	disabled: number;
+	unavailable: number;
+}
+
+/** Partition accounts by their immediate availability, avoiding double-counting. */
+export function summarizeRotationHealth(statuses: readonly RotationStatus[]): RotationFleetHealth {
+	const summary: RotationFleetHealth = {
+		total: statuses.length,
+		ready: 0,
+		cooling: 0,
+		quotaBlocked: 0,
+		authRejected: 0,
+		disabled: 0,
+		unavailable: 0,
+	};
+	for (const status of statuses) {
+		if (!status.available) summary.unavailable++;
+		else if (!status.enabled) summary.disabled++;
+		else if (status.authRejected) summary.authRejected++;
+		else if (status.quotaBlocked) summary.quotaBlocked++;
+		else if (status.readyInMs > 0) summary.cooling++;
+		else summary.ready++;
+	}
+	return summary;
 }
 
 export class RotationPool {
@@ -279,7 +310,7 @@ export class RotationPool {
 		const credential = this.#credential(index);
 		delete credential.authRejected;
 		delete credential.failures;
-		const prefix = "[" + JSON.stringify(provider) + ",";
+		const prefix = `[${JSON.stringify(provider)},`;
 		for (const [key, slot] of this.#health) {
 			if (!key.startsWith(prefix)) continue;
 			delete slot.failures;
