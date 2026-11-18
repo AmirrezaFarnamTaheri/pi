@@ -109,8 +109,8 @@ function chooseModel(pattern: string, names: string[]): string | undefined {
 	if (!pattern.includes("*")) return names.find((name) => name === pattern);
 	if (pattern.indexOf("*") !== pattern.lastIndexOf("*")) return undefined;
 	const [before, after = ""] = pattern.split("*");
-	const escape = (part: string) => part.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
-	const matcher = new RegExp("^" + escape(before) + "(\\d+(?:\\.\\d+)*)" + escape(after) + "$");
+	const escapePattern = (part: string) => part.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
+	const matcher = new RegExp("^" + escapePattern(before) + "(\\d+(?:\\.\\d+)*)" + escapePattern(after) + "$");
 	let best: { name: string; version: number[] } | undefined;
 	for (const name of names) {
 		const found = matcher.exec(name);
@@ -126,7 +126,9 @@ export function resolveAgyModelChain(entries: AgyModel[], preferences: string[],
 	const available = entries.map((entry) => entry.name);
 	const normalize = (name: string) => entries.find((entry) => entry.id === name)?.name ?? name;
 	const selected = explicit ? [explicit] : preferences;
-	const found = selected.map((pattern) => chooseModel(normalize(pattern), available)).filter((name): name is string => !!name);
+	const found = selected
+		.map((pattern) => chooseModel(normalize(pattern), available))
+		.filter((name): name is string => !!name);
 	return [...new Set(found)];
 }
 
@@ -150,8 +152,11 @@ export function parseQuotaResetMs(message: string): number | undefined {
 	if (!value) return undefined;
 	const parts = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(value);
 	if (!parts || !parts.slice(1).some(Boolean)) return undefined;
-	const ms = ((Number(parts[1] ?? 0) * 24 + Number(parts[2] ?? 0)) * 3600 +
-		Number(parts[3] ?? 0) * 60 + Number(parts[4] ?? 0)) * 1000;
+	const ms =
+		((Number(parts[1] ?? 0) * 24 + Number(parts[2] ?? 0)) * 3600 +
+			Number(parts[3] ?? 0) * 60 +
+			Number(parts[4] ?? 0)) *
+		1000;
 	return Number.isSafeInteger(ms) && ms > 0 && ms <= MAX_QUOTA_WINDOW_MS ? ms : undefined;
 }
 
@@ -160,7 +165,9 @@ export function truncateAgyOutput(output: string, maxChars: number): { text: str
 	const chars = Array.from(output);
 	if (chars.length <= cap) return { text: output, truncated: false };
 	return {
-		text: chars.slice(0, cap).join("") + "\n\n[Antigravity output truncated; request a narrower result or raise AGY_OUTPUT_LIMIT.]",
+		text:
+			chars.slice(0, cap).join("") +
+			"\n\n[Antigravity output truncated; request a narrower result or raise AGY_OUTPUT_LIMIT.]",
 		truncated: true,
 	};
 }
@@ -168,10 +175,23 @@ export function truncateAgyOutput(output: string, maxChars: number): { text: str
 /** One FIFO admission gate per bridge. A queued cancellation never starts a CLI process. */
 export class AgyAdmissionQueue {
 	private active = 0;
-	private readonly pending: Array<{ resolve: () => void; reject: (error: Error) => void; signal?: AbortSignal; onAbort: () => void }> = [];
+	private readonly pending: Array<{
+		resolve: () => void;
+		reject: (error: Error) => void;
+		signal?: AbortSignal;
+		onAbort: () => void;
+	}> = [];
 
-	constructor(private readonly maxConcurrent = 1, private readonly maxQueued = 8) {
-		if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || !Number.isSafeInteger(maxQueued) || maxQueued < 0) {
+	constructor(
+		private readonly maxConcurrent = 1,
+		private readonly maxQueued = 8,
+	) {
+		if (
+			!Number.isSafeInteger(maxConcurrent) ||
+			maxConcurrent < 1 ||
+			!Number.isSafeInteger(maxQueued) ||
+			maxQueued < 0
+		) {
 			throw new Error("Invalid Antigravity admission limits");
 		}
 	}
@@ -182,7 +202,8 @@ export class AgyAdmissionQueue {
 			this.active++;
 			return Promise.resolve();
 		}
-		if (this.pending.length >= this.maxQueued) return Promise.reject(new Error("Antigravity admission queue is full"));
+		if (this.pending.length >= this.maxQueued)
+			return Promise.reject(new Error("Antigravity admission queue is full"));
 		return new Promise((resolve, reject) => {
 			const waiter: (typeof this.pending)[number] = {
 				resolve,
@@ -257,7 +278,12 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 		} catch (error) {
-			resolvePromise({ stdout: "", stderr: "", exitCode: null, spawnError: error instanceof Error ? error.name : "spawn" });
+			resolvePromise({
+				stdout: "",
+				stderr: "",
+				exitCode: null,
+				spawnError: error instanceof Error ? error.name : "spawn",
+			});
 			return;
 		}
 		const result = (exitCode: number | null): AgyProcessResult => ({
@@ -376,7 +402,10 @@ export class AgyBridge {
 	private modelCache?: Promise<AgyModel[] | null>;
 	private readonly now: () => number;
 
-	constructor(private readonly options: AgyBridgeOptions = {}, dependencies: AgyBridgeDeps = {}) {
+	constructor(
+		private readonly options: AgyBridgeOptions = {},
+		dependencies: AgyBridgeDeps = {},
+	) {
 		this.exec = dependencies.exec ?? runAgyProcess;
 		this.readSessionId = dependencies.readSessionId ?? readAgySessionId;
 		this.queue = new AgyAdmissionQueue(options.maxConcurrent ?? 1, options.maxQueued ?? 8);
@@ -393,17 +422,20 @@ export class AgyBridge {
 			args: ["models"],
 			cwd: process.cwd(),
 			timeoutMs: 10_000,
-		}).then((result) => {
-			if (result.exitCode !== 0 || result.timedOut || result.outputOverflow) return null;
-			return parseAgyModels(result.stdout);
-		}).catch(() => null);
+		})
+			.then((result) => {
+				if (result.exitCode !== 0 || result.timedOut || result.outputOverflow) return null;
+				return parseAgyModels(result.stdout);
+			})
+			.catch(() => null);
 		const models = await this.modelCache;
 		if (models === null) this.modelCache = undefined;
 		return models;
 	}
 
 	async delegate(request: AgyDelegationRequest): Promise<AgyDelegationResult> {
-		if (!request.prompt.trim() || request.prompt.length > 65_536) throw new Error("Antigravity prompt must be 1 to 65536 characters");
+		if (!request.prompt.trim() || request.prompt.length > 65_536)
+			throw new Error("Antigravity prompt must be 1 to 65536 characters");
 		if (!request.cwd.trim()) throw new Error("Antigravity cwd must be specified");
 		if (request.model && (request.model.length > 200 || request.model.startsWith("-"))) {
 			throw new Error("Invalid Antigravity model selection");
@@ -442,11 +474,18 @@ export class AgyBridge {
 			if (request.conversationId) args.push("--conversation", request.conversationId);
 			if (model) args.push("--model", model);
 			args.push("--print-timeout", String(Math.max(1, Math.ceil(timeoutMs / 1000))) + "s", "-p", request.prompt);
-			const result = await this.exec({ binary: this.binary, args, cwd: resolve(request.cwd), timeoutMs, signal: request.signal });
+			const result = await this.exec({
+				binary: this.binary,
+				args,
+				cwd: resolve(request.cwd),
+				timeoutMs,
+				signal: request.signal,
+			});
 			if (result.aborted || request.signal?.aborted) throw new Error("Antigravity delegation cancelled");
 			if (result.timedOut) throw new Error("Antigravity CLI timed out; no automatic replay");
 			if (result.outputOverflow) throw new Error("Antigravity CLI exceeded its output capture limit; no replay");
-			if (result.spawnError) throw new Error("Antigravity CLI could not start (" + result.spawnError + "); install agy or set AGY_BIN");
+			if (result.spawnError)
+				throw new Error("Antigravity CLI could not start (" + result.spawnError + "); install agy or set AGY_BIN");
 			const output = result.stdout.trim();
 			if (result.exitCode === 0 && output) {
 				const limited = truncateAgyOutput(output, this.options.outputLimit ?? DEFAULT_OUTPUT_LIMIT);

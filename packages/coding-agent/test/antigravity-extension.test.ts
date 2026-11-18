@@ -2,19 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
 	AgyAdmissionQueue,
 	AgyBridge,
+	type AgyProcessRequest,
+	type AgyProcessResult,
 	classifyAgyFailure,
 	parseAgyModels,
 	parseQuotaResetMs,
 	resolveAgyModelChain,
 	runAgyProcess,
 	truncateAgyOutput,
-	type AgyProcessRequest,
-	type AgyProcessResult,
 } from "../examples/extensions/antigravity/core.ts";
 
 describe("Antigravity CLI bridge: reusable parsing and model routing", () => {
 	it("parses the old and two-column model list without status chatter", () => {
-		expect(parseAgyModels("Fetching available models...\ngemini-3.7-flash\tGemini 3.7 Flash (High) (current)\nclaude-4\tClaude 4\n")).toEqual([
+		expect(
+			parseAgyModels(
+				"Fetching available models...\ngemini-3.7-flash\tGemini 3.7 Flash (High) (current)\nclaude-4\tClaude 4\n",
+			),
+		).toEqual([
 			{ id: "gemini-3.7-flash", name: "Gemini 3.7 Flash (High)" },
 			{ id: "claude-4", name: "Claude 4" },
 		]);
@@ -25,11 +29,12 @@ describe("Antigravity CLI bridge: reusable parsing and model routing", () => {
 	});
 
 	it("resolves wildcard versions numerically, deduplicates, and accepts a model ID", () => {
-		const entries = parseAgyModels("gemini-3\tGemini 3 Flash (High)\ngemini-3.12\tGemini 3.12 Flash (High)\ngemini-3.9\tGemini 3.9 Flash (High)\n");
-		expect(resolveAgyModelChain(entries, ["Gemini * Flash (High)", "Gemini 3.9 Flash (High)", "Gemini * Flash (High)"])).toEqual([
-			"Gemini 3.12 Flash (High)",
-			"Gemini 3.9 Flash (High)",
-		]);
+		const entries = parseAgyModels(
+			"gemini-3\tGemini 3 Flash (High)\ngemini-3.12\tGemini 3.12 Flash (High)\ngemini-3.9\tGemini 3.9 Flash (High)\n",
+		);
+		expect(
+			resolveAgyModelChain(entries, ["Gemini * Flash (High)", "Gemini 3.9 Flash (High)", "Gemini * Flash (High)"]),
+		).toEqual(["Gemini 3.12 Flash (High)", "Gemini 3.9 Flash (High)"]);
 		expect(resolveAgyModelChain(entries, [], "gemini-3")).toEqual(["Gemini 3 Flash (High)"]);
 		expect(resolveAgyModelChain(entries, [], "not-on-list")).toEqual([]);
 	});
@@ -120,13 +125,16 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 
 	it("continues existing sessions and does not silently invent an id", async () => {
 		const calls: AgyProcessRequest[] = [];
-		const bridge = new AgyBridge({}, {
-			exec: async (r) => {
-				calls.push(r);
-				return successful("done");
+		const bridge = new AgyBridge(
+			{},
+			{
+				exec: async (r) => {
+					calls.push(r);
+					return successful("done");
+				},
+				readSessionId: async () => undefined,
 			},
-			readSessionId: async () => undefined,
-		});
+		);
 		const result = await bridge.delegate({ prompt: "follow-up", cwd, conversationId: "saved-conversation" });
 		expect(calls[1]?.args).toContain("saved-conversation");
 		expect(result.sessionId).toBe("saved-conversation");
@@ -159,7 +167,12 @@ describe("Antigravity CLI admission", () => {
 	it("serializes calls and cancels queued work before it starts", async () => {
 		const queue = new AgyAdmissionQueue(1, 1);
 		let release: (() => void) | undefined;
-		const first = queue.run(() => new Promise<void>((resolve) => { release = resolve; }));
+		const first = queue.run(
+			() =>
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+		);
 		const signal = new AbortController();
 		const queued = queue.run(async () => "should not run", signal.signal);
 		await expect(queue.run(async () => "overflow")).rejects.toThrow(/queue is full/i);

@@ -13,8 +13,11 @@ import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-codi
 import { Type } from "typebox";
 import { AgyBridge, type AgyDelegationRequest } from "./core.ts";
 
-const optionalModel = Type.Optional(Type.String({ description: "Exact name or ID from /agy models. An explicit model disables automatic fallback." }));
-const outputGuidance = "Respond directly; give file:line references for code findings, identify uncertainty, and avoid unnecessary context.";
+const optionalModel = Type.Optional(
+	Type.String({ description: "Exact name or ID from /agy models. An explicit model disables automatic fallback." }),
+);
+const outputGuidance =
+	"Respond directly; give file:line references for code findings, identify uncertainty, and avoid unnecessary context.";
 const commonDescription =
 	"Uses an independently installed Antigravity CLI (agy), with its own authentication and service terms. " +
 	"Do not include API keys or secrets in prompts. May use the CLI's local tools; request a sandboxed, permission-respecting operation.";
@@ -59,16 +62,21 @@ async function delegate(
 	};
 }
 
-export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
-	binary: process.env.AGY_BIN || "agy",
-	sandbox: true,
-	outputLimit: Number(process.env.AGY_OUTPUT_LIMIT) > 0 ? Math.min(Number(process.env.AGY_OUTPUT_LIMIT), 64_000) : 16_000,
-})) {
+export function createAntigravityExtension(
+	bridge: AgyBridge = new AgyBridge({
+		binary: process.env.AGY_BIN || "agy",
+		sandbox: true,
+		outputLimit:
+			Number(process.env.AGY_OUTPUT_LIMIT) > 0 ? Math.min(Number(process.env.AGY_OUTPUT_LIMIT), 64_000) : 16_000,
+	}),
+) {
 	return (pi: ExtensionAPI): void => {
 		pi.registerTool({
 			name: "agy_analyze_files",
 			label: "Antigravity: analyze files",
-			description: "Delegate analysis of large files to the installed agy CLI and receive only a bounded answer. " + commonDescription,
+			description:
+				"Delegate analysis of large files to the installed agy CLI and receive only a bounded answer. " +
+				commonDescription,
 			parameters: Type.Object({
 				files: Type.Array(Type.String(), { minItems: 1, maxItems: 32 }),
 				question: Type.String({ description: "What to determine from these files" }),
@@ -76,14 +84,22 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 			}),
 			async execute(_id, params, signal, _onUpdate, ctx) {
 				const names = formatFiles(params.files, ctx.cwd);
-				return delegate(bridge, "Read and analyze these files:\n" + names + "\n\nQuestion: " + params.question + "\n\n" + outputGuidance, ctx, signal, params.model);
+				return delegate(
+					bridge,
+					"Read and analyze these files:\n" + names + "\n\nQuestion: " + params.question + "\n\n" + outputGuidance,
+					ctx,
+					signal,
+					params.model,
+				);
 			},
 		});
 
 		pi.registerTool({
 			name: "agy_deep_search",
 			label: "Antigravity: deep search",
-			description: "Delegate wide repository search, file history, git archaeology, and cross-file tracing to agy. " + commonDescription,
+			description:
+				"Delegate wide repository search, file history, git archaeology, and cross-file tracing to agy. " +
+				commonDescription,
 			parameters: Type.Object({
 				query: Type.String({ description: "Codebase question or search objective" }),
 				model: optionalModel,
@@ -91,7 +107,10 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 			async execute(_id, params, signal, _onUpdate, ctx) {
 				return delegate(
 					bridge,
-					"Search this repository using the tools available to you; use git history and source references when relevant.\n\nQuestion: " + params.query + "\n\n" + outputGuidance,
+					"Search this repository using the tools available to you; use git history and source references when relevant.\n\nQuestion: " +
+						params.query +
+						"\n\n" +
+						outputGuidance,
 					ctx,
 					signal,
 					params.model,
@@ -102,20 +121,31 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 		pi.registerTool({
 			name: "agy_web_lookup",
 			label: "Antigravity: web lookup",
-			description: "Delegate a documentation or web lookup to agy; responses should cite source URLs. " + commonDescription,
+			description:
+				"Delegate a documentation or web lookup to agy; responses should cite source URLs. " + commonDescription,
 			parameters: Type.Object({
 				query: Type.String({ description: "Documentation or public-web lookup objective" }),
 				model: optionalModel,
 			}),
 			async execute(_id, params, signal, _onUpdate, ctx) {
-				return delegate(bridge, "Look up the following and cite source URLs for material claims:\n\n" + params.query + "\n\n" + outputGuidance, ctx, signal, params.model);
+				return delegate(
+					bridge,
+					"Look up the following and cite source URLs for material claims:\n\n" +
+						params.query +
+						"\n\n" +
+						outputGuidance,
+					ctx,
+					signal,
+					params.model,
+				);
 			},
 		});
 
 		pi.registerTool({
 			name: "agy_review",
 			label: "Antigravity: adversarial review",
-			description: "Ask agy to review a design, code or selected workspace files for flaws and risks. " + commonDescription,
+			description:
+				"Ask agy to review a design, code or selected workspace files for flaws and risks. " + commonDescription,
 			parameters: Type.Object({
 				content: Type.Optional(Type.String({ description: "Inline code or proposal to review" })),
 				files: Type.Optional(Type.Array(Type.String(), { maxItems: 32 })),
@@ -131,7 +161,9 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 					"Act as a critical code reviewer. Rank concrete problems by severity; avoid speculation and praise.\n" +
 					(params.content ? "\nContent:\n" + params.content : "") +
 					files +
-					(params.focus ? "\nFocus: " + params.focus : "") + "\n\n" + outputGuidance;
+					(params.focus ? "\nFocus: " + params.focus : "") +
+					"\n\n" +
+					outputGuidance;
 				return delegate(bridge, prompt, ctx, signal, params.model);
 			},
 		});
@@ -152,7 +184,9 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 		pi.registerTool({
 			name: "agy_follow_up",
 			label: "Antigravity: continue session",
-			description: "Continue an agy session returned by an earlier delegation without resending its prior context. " + commonDescription,
+			description:
+				"Continue an agy session returned by an earlier delegation without resending its prior context. " +
+				commonDescription,
 			parameters: Type.Object({
 				session_id: Type.String({ description: "CLI session identifier returned by a previous agy tool result" }),
 				question: Type.String({ description: "Follow-up question or instruction" }),
@@ -168,8 +202,14 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 				switch (args.trim().toLowerCase()) {
 					case "models": {
 						const models = await bridge.listModels();
-						ctx.ui.notify(models === null ? "agy models unavailable: install and authenticate the agy CLI." :
-							"Antigravity CLI models:\n" + (models.map((model) => model.id ? model.id + " — " + model.name : model.name).join("\n") || "(none)"));
+						ctx.ui.notify(
+							models === null
+								? "agy models unavailable: install and authenticate the agy CLI."
+								: "Antigravity CLI models:\n" +
+										(models
+											.map((model) => (model.id ? model.id + " — " + model.name : model.name))
+											.join("\n") || "(none)"),
+						);
 						break;
 					}
 					case "":
@@ -177,8 +217,8 @@ export function createAntigravityExtension(bridge: AgyBridge = new AgyBridge({
 					case "status":
 						ctx.ui.notify(
 							"Optional agy CLI bridge is loaded. Use /agy models to inspect available models. " +
-							"Authentication is managed only by the agy CLI. No OAuth tokens or device fingerprints are read by Pi. " +
-							"Terms-of-service/account suspension risks may apply to third-party CLI use.",
+								"Authentication is managed only by the agy CLI. No OAuth tokens or device fingerprints are read by Pi. " +
+								"Terms-of-service/account suspension risks may apply to third-party CLI use.",
 						);
 						break;
 					default:
