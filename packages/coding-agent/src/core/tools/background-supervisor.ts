@@ -22,6 +22,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	rmSync(requestPath, { force: true });
 	const statePath = join(folder, "state.json");
 	const detachedPath = join(folder, "detached");
+	const cancelPath = join(folder, "cancel");
 	const foregroundPath = join(folder, "foreground.log");
 	let fd: number | undefined;
 	let foregroundFd: number | undefined;
@@ -29,6 +30,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	let used = 0;
 	let truncated = false;
 	let done = false;
+	let cancelRequested = false;
 
 	const save = (patch: Record<string, unknown>) => {
 		const state = {
@@ -51,13 +53,14 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		}
 	};
 	const finish = (
-		status: "completed" | "failed",
+		status: "completed" | "failed" | "canceled",
 		exitCode: number | null,
 		signal: string | null,
 		error: string | null,
 	) => {
 		if (done) return;
 		done = true;
+		clearInterval(cancelTimer);
 		try {
 			if (fd !== undefined) closeSync(fd);
 			fd = undefined;
@@ -90,6 +93,12 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		const message = error instanceof Error ? error.message : String(error);
 		finish("failed", null, null, message);
 	};
+	const cancelTimer = setInterval(() => {
+		if (done || cancelRequested || !existsSync(cancelPath)) return;
+		cancelRequested = true;
+		stopChildTree();
+	}, 100);
+	cancelTimer.unref();
 	const writeFully = (target: number, buffer: Buffer, count: number) => {
 		let offset = 0;
 		while (offset < count) {
@@ -163,7 +172,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 			}, 1000);
 			guard.unref();
 		});
-		started.once("close", (code, signal) => finish(code === 0 ? "completed" : "failed", code, signal, null));
+		started.once("close", (code, signal) => finish(cancelRequested ? "canceled" : code === 0 ? "completed" : "failed", code, signal, null));
 	} catch (error) {
 		fail(error);
 	}

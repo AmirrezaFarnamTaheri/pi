@@ -16,6 +16,7 @@ import {
 import { startBackgroundShell } from "./background-shell.ts";
 
 export interface BackgroundedProcess {
+	jobId: string;
 	pid: number;
 	outputPath: string;
 }
@@ -82,7 +83,7 @@ export async function executeDetachableShell(
 	if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1_000 > 2_147_483_647)) {
 		throw new Error("Invalid timeout: must be a finite number of seconds within the supported range");
 	}
-	const { pid, outputPath, foregroundOutputPath } = await startBackgroundShell(
+	const { jobId, pid, outputPath, foregroundOutputPath } = await startBackgroundShell(
 		command,
 		cwd,
 		shellConfig,
@@ -123,7 +124,7 @@ export async function executeDetachableShell(
 		for (;;) {
 			if (requested) {
 				await writeFile(join(dirname(outputPath), "detached"), "", { flag: "w", mode: 0o600 });
-				return { exitCode: null, background: { pid, outputPath } };
+				return { exitCode: null, background: { jobId, pid, outputPath } };
 			}
 			if (options.signal?.aborted) throw new Error("aborted");
 			const size = (await stream.stat()).size;
