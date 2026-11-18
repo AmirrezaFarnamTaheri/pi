@@ -116,6 +116,7 @@ export type KnownProvider =
 	| "huggingface"
 	| "fireworks"
 	| "together"
+	| "tokendance"
 	| "baseten"
 	| "opencode"
 	| "opencode-go"
