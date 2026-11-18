@@ -79,6 +79,7 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 				content: [{ type: "text", text: JSON.stringify(state) }],
 				details: undefined,
 				structuredContent: state,
+				isError: state.status === "failed" || state.status === "lost" || state.status === "canceled",
 			};
 		},
 	};

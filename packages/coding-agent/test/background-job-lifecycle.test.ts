@@ -54,6 +54,20 @@ describe("background_job", () => {
 		},
 	);
 
+	it.skipIf(process.platform === "win32")("reports nonzero exits as failed results rather than successful waits", async () => {
+		const cwd = await workspace();
+		const started = await createBashTool(cwd).execute("run", { command: "exit 7", background: true });
+		const output = started.structuredContent as BashToolOutput;
+		jobs.push({ jobId: output.background_job_id!, cwd });
+		const waited = await createBackgroundJobTool(cwd).execute("wait", {
+			action: "wait",
+			jobId: output.background_job_id,
+			timeoutMs: 10_000,
+		});
+		expect(waited.structuredContent).toMatchObject({ status: "failed", exitCode: 7 });
+		expect(waited.isError).toBe(true);
+	});
+
 	it.skipIf(process.platform === "win32")("stops a running job and preserves a terminal cancellation", async () => {
 		const cwd = await workspace();
 		const started = await createBashTool(cwd).execute("run", { command: "sleep 30", background: true });
