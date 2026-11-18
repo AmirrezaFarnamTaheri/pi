@@ -40,8 +40,7 @@ describe.sequential("TokenDance model login and API-key minting", () => {
 		let callbackResponse: Promise<Response> | undefined;
 		const credential = await tokenDanceOAuth.login({
 			signal,
-			prompt: (prompt) =>
-				prompt.type === "select" ? Promise.resolve("callback") : new Promise<string>(() => {}),
+			prompt: (prompt) => (prompt.type === "select" ? Promise.resolve("callback") : new Promise<string>(() => {})),
 			notify: (event) => {
 				if (event.type !== "auth_url") return;
 				authorization = new URL(event.url);
@@ -104,7 +103,10 @@ describe.sequential("TokenDance model login and API-key minting", () => {
 	});
 
 	it("stores a minted key with Pi's normal credential store and resolves it for requests", async () => {
-		vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ key: "tk-stored-secret" })));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ key: "tk-stored-secret" })),
+		);
 		const store = new InMemoryCredentialStore();
 		const models = createModels({ credentials: store });
 		models.setProvider(tokendanceProvider());
@@ -121,7 +123,10 @@ describe.sequential("TokenDance model login and API-key minting", () => {
 	});
 
 	it("does not save credentials if the exchange rejects a one-time code", async () => {
-		vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: "invalid code" }, 403)));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ error: "invalid code" }, 403)),
+		);
 		const store = new InMemoryCredentialStore();
 		const models = createModels({ credentials: store });
 		models.setProvider(tokendanceProvider());
@@ -136,7 +141,10 @@ describe.sequential("TokenDance model login and API-key minting", () => {
 	});
 
 	it("rejects an exchange response without a key without persisting one", async () => {
-		vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ user_id: "no-key" })));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ user_id: "no-key" })),
+		);
 		await expect(
 			tokenDanceOAuth.login({
 				signal,
