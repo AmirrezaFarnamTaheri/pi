@@ -1,4 +1,8 @@
-export { type BackgroundJobInput, createBackgroundJobTool, createBackgroundJobToolDefinition } from "./background-job.ts";
+export {
+	type BackgroundJobInput,
+	createBackgroundJobTool,
+	createBackgroundJobToolDefinition,
+} from "./background-job.ts";
 export {
 	type BashOperations,
 	type BashSpawnContext,

@@ -301,7 +301,14 @@ describe("defaultTools setting", () => {
 			const excluded = await createFileSession({ excludeTools: ["grep"] });
 			writeSettings({ defaultTools: ["+grep", "+inactive_tool"] });
 			await excluded.reload();
-			expect(excluded.getActiveToolNames().sort()).toEqual(["background_job", "bash", "edit", "inactive_tool", "read", "write"]);
+			expect(excluded.getActiveToolNames().sort()).toEqual([
+				"background_job",
+				"bash",
+				"edit",
+				"inactive_tool",
+				"read",
+				"write",
+			]);
 			excluded.dispose();
 		});
 	});
@@ -467,7 +474,14 @@ describe("defaultTools setting", () => {
 			const sessionManager = SessionManager.inMemory(tempDir);
 			sessionManager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
 			const session = await resume(sessionManager);
-			expect(session.getActiveToolNames().sort()).toEqual(["active_tool", "background_job", "bash", "edit", "read", "write"]);
+			expect(session.getActiveToolNames().sort()).toEqual([
+				"active_tool",
+				"background_job",
+				"bash",
+				"edit",
+				"read",
+				"write",
+			]);
 			session.dispose();
 		});
 	});
