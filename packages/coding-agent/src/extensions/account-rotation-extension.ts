@@ -331,34 +331,34 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 					const accounts = status();
 					const fleet = summarizeRotationHealth(accounts);
 					const summary = [
-						fleet.ready + "/" + fleet.total + " ready",
-						fleet.cooling + " cooling",
-						fleet.quotaBlocked + " quota-blocked",
-						fleet.authRejected + " auth-rejected",
+						`${fleet.ready}/${fleet.total} ready`,
+						`${fleet.cooling} cooling`,
+						`${fleet.quotaBlocked} quota-blocked`,
+						`${fleet.authRejected} auth-rejected`,
 					].join(", ");
 					return [
-						group.id + " (" + (group.strategy ?? "round-robin") + "): " + summary,
+						`${group.id} (${group.strategy ?? "round-robin"}): ${summary}`,
 						...(accounts.length > 0
 							? accounts.map((entry) => {
 									const details = [
 										entry.enabled ? "enabled" : "disabled",
-										"health " + entry.healthScore,
-										"ok " + entry.successfulRequests + ", failed " + entry.failedRequests,
+										`health ${entry.healthScore}`,
+										`ok ${entry.successfulRequests}, failed ${entry.failedRequests}`,
 										...(entry.authRejected ? ["credentials rejected (re-login required)"] : []),
 										...(entry.quotaRemaining === undefined
 											? []
-											: ["quota " + Math.round(entry.quotaRemaining * 100) + "%"]),
+											: [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
 										...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
 											? ["quota exhausted (reset unknown)"]
 											: entry.readyInMs
-												? ["ready in " + Math.ceil(entry.readyInMs / 1_000) + "s"]
+												? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`]
 												: []),
 										...(entry.available ? [] : ["login or model unavailable"]),
 										...(entry.pinned ? ["pinned"] : []),
 									];
-									return "  " + entry.target.provider + ": " + details.join(", ");
+									return `  ${entry.target.provider}: ${details.join(", ")}`;
 								})
-							: ["  " + group.members.map((member) => member.provider).join(", ") + " (not yet selected)"]),
+							: [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
 					];
 				});
 				notify(lines.join("\n") || "No rotation pools configured");
