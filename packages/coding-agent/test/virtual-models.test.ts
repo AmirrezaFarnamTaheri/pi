@@ -211,7 +211,13 @@ describe("account rotation thinking capabilities", () => {
 		const reasoner = runtime.getModel("faux", "large")!;
 		const advanced = { ...reasoner, thinkingLevelMap: { xhigh: "high" as const, max: "high" as const } };
 		const limited = { ...reasoner, thinkingLevelMap: { xhigh: null, max: null } };
-		expect(intersectSupportedThinkingLevels([advanced, limited])).toEqual(["off", "minimal", "low", "medium", "high"]);
+		expect(intersectSupportedThinkingLevels([advanced, limited])).toEqual([
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+		]);
 		expect(intersectSupportedThinkingLevels([advanced, runtime.getModel("faux", "small")!])).toEqual(["off"]);
 		expect(intersectSupportedThinkingLevels([])).toEqual(["off"]);
 	});

@@ -1316,10 +1316,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
  * Resolve a requested thinking effort against the selected model's supported levels.
  * This is also used by UI metadata which contains level strings rather than full models.
  */
-export function clampThinkingLevelToSupported(
-	levels: readonly string[],
-	requested: string,
-): ModelThinkingLevel {
+export function clampThinkingLevelToSupported(levels: readonly string[], requested: string): ModelThinkingLevel {
 	const availableLevels = EXTENDED_THINKING_LEVELS.filter((level) => levels.includes(level));
 	if (availableLevels.includes(requested as ModelThinkingLevel)) return requested as ModelThinkingLevel;
 

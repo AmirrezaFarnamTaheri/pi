@@ -749,9 +749,7 @@ export class ModelRuntime implements Models {
 
 	/** Available thinking levels for the first routable model ID, across authenticated pool members. */
 	private rotationThinkingLevels(memberIds: readonly string[]): ModelThinkingLevel[] {
-		const primaryId = memberIds
-			.flatMap((id) => this.getModels(id))
-			.find((model) => !isVirtualModel(model))?.id;
+		const primaryId = memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
 		if (!primaryId) return ["off"];
 		const eligible = memberIds
 			.filter((id) => this.hasConfiguredAuth(id))
@@ -865,7 +863,11 @@ export class ModelRuntime implements Models {
 					});
 					const model = this.getPhysicalModel(result.target.provider, result.target.model);
 					if (!model) throw new Error("Selected account model is no longer available");
-					return { model, thinkingLevel: clampThinkingLevel(model, request.thinkingLevel), state: { active: result.target } };
+					return {
+						model,
+						thinkingLevel: clampThinkingLevel(model, request.thinkingLevel),
+						state: { active: result.target },
+					};
 				},
 			});
 		}
