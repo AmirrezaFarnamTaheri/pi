@@ -161,7 +161,7 @@ export async function startBackgroundShell(
 	options?: { captureForegroundOutput?: boolean },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
-	const jobId = "job_" + randomUUID();
+	const jobId = `job_${randomUUID()}`;
 	const root = backgroundJobsRoot();
 	await mkdir(root, { recursive: true, mode: 0o700 });
 	await chmod(root, 0o700);
