@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { getSupportedThinkingLevels, resolveThinkingLevel } from "@earendil-works/pi-ai/models";
 import {
 	type AgentState,
 	type ConversationId,
@@ -402,10 +402,21 @@ export default defineFacet((host) => {
 					return { mimeType: image.mimeType, data: image.data };
 				},
 				configure: async ({ model, thinkingLevel }, ctx) => {
-					if (model && !models()?.getModel(model.provider, model.modelId)) throw new Error("Unknown model");
 					const current = target().conversation;
+					const previous = await current.agent(ctx);
+					const chosen = model ?? previous.model;
+					const selected = chosen ? models()?.getModel(chosen.provider, chosen.modelId) : undefined;
+					if (model && !selected) throw new Error("Unknown model");
+					if (thinkingLevel && (!selected || !getSupportedThinkingLevels(selected).some((level) => level === thinkingLevel)))
+						throw new Error("Thinking level is not supported by the selected model");
+					// Keep the user's requested effort, but make this conversation's effective effort
+					// valid for a newly chosen model before the next request is issued.
+					const requested = thinkingLevel ?? (model ? previous.thinkingLevel : undefined);
+					const effective = selected && requested
+						? resolveThinkingLevel(getSupportedThinkingLevels(selected), requested)
+						: undefined;
 					await current.configure(
-						{ ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}) },
+						{ ...(model ? { model } : {}), ...(effective ? { thinkingLevel: effective } : {}) },
 						ctx,
 					);
 					for (const after of configured.value.values()) await after(current, ctx);
