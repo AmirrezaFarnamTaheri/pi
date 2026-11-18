@@ -179,5 +179,8 @@ export async function executeDetachableShell(
 		// or observes the detached marker and closes it before continuing.
 		await rm(foregroundOutputPath, { force: true }).catch(() => {});
 		untrackDetachedChildPid(pid);
+		// A normal foreground command must not pollute the detached-job registry.
+		// Only Ctrl+B makes this supervisor's log and status a retained background job.
+		if (!requested) await rm(dirname(outputPath), { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
