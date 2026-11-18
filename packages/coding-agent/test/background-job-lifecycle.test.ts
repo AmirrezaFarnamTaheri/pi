@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type BashToolOutput, createBashTool } from "../src/core/tools/bash.ts";
 import { createBackgroundJobTool } from "../src/core/tools/background-job.ts";

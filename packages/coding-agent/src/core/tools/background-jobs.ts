@@ -1,5 +1,5 @@
 /** Workspace-scoped records for detached local shell commands. No command or credentials are persisted. */
-import { open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { backgroundJobsRoot } from "./background-shell.ts";
 

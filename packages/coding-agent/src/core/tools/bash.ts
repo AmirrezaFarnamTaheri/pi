@@ -48,7 +48,7 @@ const bashSchema = Type.Object({
 	background: Type.Optional(
 		Type.Boolean({
 			description:
-				"Start the command detached only when its result is not needed for the next step; returns a PID and log path, not a completed exit code (local shell only)",
+				"Detach an independent local command, returning a job ID and running state, not its exit code (local shell only)",
 		}),
 	),
 });
@@ -59,7 +59,7 @@ export const bashToolSystemPromptContribution = {
 		"You can inspect PI_* environment variables for current model and session details.",
 		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
 		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
-		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+		"A background job ID means started, never passed. Use background_job status, tail or wait and check the completed status and exit code before relying on its results.",
 	],
 } as const;
 
@@ -75,6 +75,7 @@ const bashOutputSchema = Type.Object({
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
 	exit_code: Type.Optional(Type.Number()),
 	background_pid: Type.Optional(Type.Number()),
+	background_job_id: Type.Optional(Type.String()),
 	background_output_path: Type.Optional(Type.String()),
 	wall_time_seconds: Type.Number(),
 });
@@ -407,7 +408,7 @@ export function createShellToolDefinition(
 	return {
 		name: config.name,
 		label: config.label,
-		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. For managed lifecycle control use envelope_job.`,
+		description: `Execute a ${config.shellName} command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. For a supported local shell, background: true returns a PID and private output log (capped at 2 MB); inspect the log and stop the process explicitly when finished. Use background_job to inspect, await or cancel local background commands.`,
 		promptSnippet: config.promptSnippet,
 		promptGuidelines: exposeSessionEnvironment && config.promptGuidelines ? [...config.promptGuidelines] : undefined,
 		parameters: bashSchema,
@@ -438,14 +439,14 @@ export function createShellToolDefinition(
 				}
 				if (signal?.aborted) throw new Error("aborted");
 				const startedAt = performance.now();
-				const { pid, outputPath } = await startBackgroundShell(
+				const { jobId, pid, outputPath } = await startBackgroundShell(
 					options?.backgroundCommandTransform?.(spawnContext.command) ?? spawnContext.command,
 					spawnContext.cwd,
 					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
 					config.tempFilePrefix,
 				);
-				const text = `Started background command (PID ${pid}). Output log: ${outputPath}. This low-level process is not controlled by Envelope; prefer envelope_job for managed cancellation and status. The supervisor caps captured output at ${BACKGROUND_LOG_MAX_BYTES} bytes. Monitor and stop the process explicitly when needed.`;
+				const text = `Started background job ${jobId} (PID ${pid}, running). Use background_job status/tail/wait/stop. Output log: ${outputPath} (capped at ${BACKGROUND_LOG_MAX_BYTES} bytes).`;
 				return {
 					content: [{ type: "text", text }],
 					details: undefined,
@@ -454,6 +455,7 @@ export function createShellToolDefinition(
 						truncated: false,
 						wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
 						background_pid: pid,
+						background_job_id: jobId,
 						background_output_path: outputPath,
 					},
 				};
@@ -554,9 +556,9 @@ export function createShellToolDefinition(
 						env: spawnContext.env,
 					});
 					if (result.background) {
-						const { pid, outputPath } = result.background;
+						const { jobId, pid, outputPath } = result.background;
 						const snapshot = await finishOutput();
-						const text = `Background command running (PID ${pid}). Output log: ${outputPath}. This is the same process that was already executing, not a restarted command.`;
+						const text = `Background job ${jobId} running (PID ${pid}). Use background_job status/tail/wait/stop. This is the same command, not a restarted process. Output log: ${outputPath}.`;
 						return {
 							content: [{ type: "text", text }],
 							details: snapshot.truncation.truncated
@@ -566,6 +568,7 @@ export function createShellToolDefinition(
 								output: snapshot.content,
 								truncated: snapshot.truncation.truncated,
 								background_pid: pid,
+								background_job_id: jobId,
 								background_output_path: outputPath,
 								wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
 							},
