@@ -407,14 +407,18 @@ export default defineFacet((host) => {
 					const chosen = model ?? previous.model;
 					const selected = chosen ? models()?.getModel(chosen.provider, chosen.modelId) : undefined;
 					if (model && !selected) throw new Error("Unknown model");
-					if (thinkingLevel && (!selected || !getSupportedThinkingLevels(selected).some((level) => level === thinkingLevel)))
+					if (
+						thinkingLevel &&
+						(!selected || !getSupportedThinkingLevels(selected).some((level) => level === thinkingLevel))
+					)
 						throw new Error("Thinking level is not supported by the selected model");
 					// Keep the user's requested effort, but make this conversation's effective effort
 					// valid for a newly chosen model before the next request is issued.
 					const requested = thinkingLevel ?? (model ? previous.thinkingLevel : undefined);
-					const effective = selected && requested
-						? resolveThinkingLevel(getSupportedThinkingLevels(selected), requested)
-						: undefined;
+					const effective =
+						selected && requested
+							? resolveThinkingLevel(getSupportedThinkingLevels(selected), requested)
+							: undefined;
 					await current.configure(
 						{ ...(model ? { model } : {}), ...(effective ? { thinkingLevel: effective } : {}) },
 						ctx,
