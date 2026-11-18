@@ -178,6 +178,9 @@ export async function executeDetachableShell(
 		// The supervisor has stopped writing the foreground spool on completion,
 		// or observes the detached marker and closes it before continuing.
 		await rm(foregroundOutputPath, { force: true }).catch(() => {});
+		// Ordinary foreground commands are not background jobs. Their supervisor is
+		// finished before we remove its private registry directory.
+		if (completed) await rm(dirname(outputPath), { recursive: true, force: true });
 		untrackDetachedChildPid(pid);
 	}
 }
