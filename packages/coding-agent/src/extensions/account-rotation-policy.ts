@@ -87,7 +87,9 @@ export function quotaResetDelayMs(error: string): number | undefined {
 	if (compact?.[1]) {
 		const parsed = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i.exec(compact[1]);
 		if (parsed) {
-			return withinLimit((Number(parsed[1] ?? 0) * 3600 + Number(parsed[2] ?? 0) * 60 + Number(parsed[3] ?? 0)) * 1000);
+			return withinLimit(
+				(Number(parsed[1] ?? 0) * 3600 + Number(parsed[2] ?? 0) * 60 + Number(parsed[3] ?? 0)) * 1000,
+			);
 		}
 	}
 	const relative =
@@ -405,7 +407,14 @@ export class RotationPool {
 
 	#eligible(index: number, now: number): boolean {
 		const slot = this.#slot(index);
-		if (this.#unavailable.has(index) || slot.disabled || this.#credential(index).authRejected || (slot.cooldownUntil ?? 0) > now) return false;
+		if (
+			this.#unavailable.has(index) ||
+			slot.disabled ||
+			this.#credential(index).authRejected ||
+			(slot.cooldownUntil ?? 0) > now
+		) {
+			return false;
+		}
 		return (this.#quotaAt(index, now)?.remaining ?? 1) > 0;
 	}
 
