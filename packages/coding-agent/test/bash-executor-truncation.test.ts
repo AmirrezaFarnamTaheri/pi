@@ -50,10 +50,10 @@ describe("user bash output truncation (#10164)", () => {
 		const result = await executeBashWithOperations("long test", process.cwd(), {
 			exec: async (_command, _cwd, { onData }) => {
 				onData(Buffer.from("started\\n"));
-				return { exitCode: null, background: { pid: 4321, outputPath } };
+				return { exitCode: null, background: { jobId: "example-job-id", pid: 4321, outputPath } };
 			},
 		});
-		expect(result.background).toEqual({ pid: 4321, outputPath });
+		expect(result.background).toEqual({ jobId: "example-job-id", pid: 4321, outputPath });
 		expect(result.fullOutputPath).toBeUndefined();
 		expect(result.output).toContain(outputPath);
 	});
