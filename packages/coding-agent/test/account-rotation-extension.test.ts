@@ -93,6 +93,25 @@ function createHarness(configuration: unknown) {
 }
 
 describe("account rotation extension", () => {
+	it("records a completed account request once even when multiple rotation pools share its identity", async () => {
+		const app = createHarness({
+			pools: [
+				{ id: "first", members: [{ provider: "anthropic", model: "sonnet" }] },
+				{ id: "second", members: [{ provider: "anthropic", model: "sonnet" }] },
+			],
+		});
+		await app.handlers.get("message_end")!({
+			type: "message_end",
+			message: { role: "assistant", provider: "anthropic", model: "sonnet", stopReason: "stop" },
+		} as never);
+		const notices: string[] = [];
+		await app.commands.get("account-rotation")!.handler("status", {
+			hasUI: true,
+			ui: { notify: (message: string) => notices.push(message) },
+		});
+		expect(notices.join("\n").match(/ok 1, failed 0/g)).toHaveLength(2);
+	});
+
 	it("rejects literal key material and duplicate accounts", () => {
 		expect(() =>
 			parseRotationConfiguration({
