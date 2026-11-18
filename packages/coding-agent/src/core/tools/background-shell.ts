@@ -1,12 +1,15 @@
 /** Launch a local shell using a detached Node supervisor with capped output. */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { killProcessTree, type ShellConfig } from "../../utils/shell.ts";
+import { backgroundJobRoot } from "./background-jobs.ts";
 
 export interface BackgroundShellResult {
+	jobId: string;
 	pid: number;
 	outputPath: string;
 	/** Uncapped foreground spool; only requested for commands that Ctrl+B may detach. */
@@ -49,7 +52,9 @@ const request=JSON.parse(fs.readFileSync(requestPath,"utf8"));
 fs.rmSync(requestPath,{force:true});
 const statePath=join(folder,"state.json");
 const detachPath=join(folder,"detached");
-let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false;
+const cancelPath=join(folder,"cancel");
+let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false,cancelRequested=false;
+let heartbeat=null,cancelTimer=null;
 const save=(patch)=>{
   const state={version:1,workerPid:process.pid,childPid:child?.pid??null,
     outputTruncated:truncated,foregroundOutputTruncated:false,updatedAt:Date.now(),...patch};
@@ -63,6 +68,8 @@ const closeForeground=()=>{
 const finish=(status,exitCode,signal,error)=>{
   if(done)return;
   done=true;
+  if(heartbeat)clearInterval(heartbeat);
+  if(cancelTimer)clearInterval(cancelTimer);
   try{if(fd!==null){fs.closeSync(fd);fd=null;}closeForeground();}catch{}
   try{save({status,exitCode,signal:signal||null,error:error||null,finishedAt:Date.now()});}
   catch{process.exitCode=1;}
@@ -113,7 +120,16 @@ try{
     cwd:request.cwd,env:process.env,detached:process.platform!=="win32",
     stdio:[fromStdin?"pipe":"ignore","pipe","pipe"],windowsHide:true
   });
-  child.once("spawn",()=>{try{save({status:"running",exitCode:null});}catch(e){fail(e);}});
+  child.once("spawn",()=>{try{
+    save({status:"running",exitCode:null});
+    heartbeat=setInterval(()=>{try{if(!done)save({status:"running",exitCode:null});}catch(e){fail(e);}},2000);
+    heartbeat.unref();
+    cancelTimer=setInterval(()=>{
+      if(done||cancelRequested)return;
+      if(fs.existsSync(cancelPath)){cancelRequested=true;stopChildTree();}
+    },100);
+    cancelTimer.unref();
+  }catch(e){fail(e);}});
   child.once("error",fail);
   for(const stream of [child.stdout,child.stderr]){
     stream.on("data",buf=>{try{write(buf);}catch(e){fail(e);}});
@@ -127,7 +143,7 @@ try{
     const guard=setTimeout(()=>{child.stdout.destroy();child.stderr.destroy();},1000);
     guard.unref();
   });
-  child.once("close",(code,signal)=>finish(code===0?"completed":"failed",code,signal,null));
+  child.once("close",(code,signal)=>finish(cancelRequested?"canceled":code===0?"completed":"failed",code,signal,null));
 }catch(e){fail(e);}
 `;
 
@@ -145,9 +161,18 @@ export async function startBackgroundShell(
 	options?: { captureForegroundOutput?: boolean },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
-	const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
+	const jobId = randomUUID();
+	const root = backgroundJobRoot();
+	await mkdir(root, { recursive: true, mode: 0o700 });
+	const folder = join(root, jobId);
+	await mkdir(folder, { mode: 0o700 });
 	let worker: ReturnType<typeof spawn> | undefined;
 	try {
+		await writeFile(
+			join(folder, "job.json"),
+			JSON.stringify({ version: 1, id: jobId, cwd: resolve(cwd), createdAt: Date.now() }),
+			{ flag: "wx", mode: 0o600 },
+		);
 		await writeFile(
 			join(folder, "request.json"),
 			JSON.stringify({
@@ -183,6 +208,7 @@ export async function startBackgroundShell(
 				};
 				if (typeof state.childPid === "number" && state.childPid > 0) {
 					return {
+						jobId,
 						pid: state.childPid,
 						outputPath: join(folder, "output.log"),
 						...(options?.captureForegroundOutput ? { foregroundOutputPath: join(folder, "foreground.log") } : {}),

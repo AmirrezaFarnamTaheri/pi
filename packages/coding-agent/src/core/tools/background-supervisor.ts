@@ -22,6 +22,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	rmSync(requestPath, { force: true });
 	const statePath = join(folder, "state.json");
 	const detachedPath = join(folder, "detached");
+	const cancelPath = join(folder, "cancel");
 	const foregroundPath = join(folder, "foreground.log");
 	let fd: number | undefined;
 	let foregroundFd: number | undefined;
@@ -29,6 +30,9 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	let used = 0;
 	let truncated = false;
 	let done = false;
+	let cancelRequested = false;
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
+	let cancelTimer: ReturnType<typeof setInterval> | undefined;
 
 	const save = (patch: Record<string, unknown>) => {
 		const state = {
@@ -58,6 +62,8 @@ export function runBackgroundShellSupervisor(folder: string): void {
 	) => {
 		if (done) return;
 		done = true;
+		if (heartbeat) clearInterval(heartbeat);
+		if (cancelTimer) clearInterval(cancelTimer);
 		try {
 			if (fd !== undefined) closeSync(fd);
 			fd = undefined;
@@ -136,6 +142,20 @@ export function runBackgroundShellSupervisor(folder: string): void {
 		started.once("spawn", () => {
 			try {
 				save({ status: "running", exitCode: null });
+				heartbeat = setInterval(() => {
+					try {
+						if (!done) save({ status: "running", exitCode: null });
+					} catch (error) {
+						fail(error);
+					}
+				}, 2000);
+				heartbeat.unref();
+				cancelTimer = setInterval(() => {
+					if (done || cancelRequested || !existsSync(cancelPath)) return;
+					cancelRequested = true;
+					stopChildTree();
+				}, 100);
+				cancelTimer.unref();
 			} catch (error) {
 				fail(error);
 			}
@@ -163,7 +183,7 @@ export function runBackgroundShellSupervisor(folder: string): void {
 			}, 1000);
 			guard.unref();
 		});
-		started.once("close", (code, signal) => finish(code === 0 ? "completed" : "failed", code, signal, null));
+		started.once("close", (code, signal) => finish(cancelRequested ? "canceled" : code === 0 ? "completed" : "failed", code, signal, null));
 	} catch (error) {
 		fail(error);
 	}
