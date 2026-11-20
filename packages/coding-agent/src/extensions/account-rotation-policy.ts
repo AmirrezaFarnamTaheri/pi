@@ -38,10 +38,11 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 	if (/content[ -]?policy|safety|moderation|context[ _-]?(length|window)|invalid request/i.test(message)) {
 		return undefined;
 	}
+	// A number inside a rate/quota detail is not the response status.
+	const status = /(?:^|\bHTTP\s+|\bstatus(?:[ _-]?code)?\s*[:=]?\s*|\bcode\s*[:=]?\s*)(401|403|429|50[0-4]|529)\b/i.exec(message)?.[1];
 	if (
-		/\b401\b|invalid[ _-]?(api[ _-]?)?key|invalid_token|expired_token|token_expired|authentication_error|unauthorized|authentication (failed|error|invalid)/i.test(
-			message,
-		)
+		status === "401" ||
+		/invalid[ _-]?(api[ _-]?)?key|invalid_token|expired_token|token_expired|authentication_error|unauthorized|authentication (failed|error|invalid)/i.test(message)
 	) {
 		return "auth";
 	}
@@ -49,17 +50,19 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 		/insufficient[ _-]?(user[ _-]?)?quota|quota[ _-]?(exceeded|exhausted|reset)|billing[ _-]hard[ _-]limit[ _-]reached|exceeded[ _-]current[ _-]quota|daily quota|out of credits/i.test(
 			message,
 		);
-	if (/\b403\b/.test(message) && !quota) return undefined;
-	if (/\b50[0-4]\b|\b529\b|overload(?:ed|ing)?|server busy|service unavailable|capacity exceeded/i.test(message)) {
-		return "overload";
-	}
+	if (status === "403" && !quota) return undefined;
 	if (quota) return "quota";
 	if (
-		/\b429\b|rate[ -_]?limit|usage limit reached|resource[ _-]exhausted|too many requests|tokens per minute|requests per minute/i.test(
-			message,
-		)
+		status === "429" ||
+		/rate[ -_]?limit|usage limit reached|resource[ _-]exhausted|too many requests|tokens per minute|requests per minute/i.test(message)
 	) {
 		return "rate-limit";
+	}
+	if (
+		["500", "501", "502", "503", "504", "529"].includes(status ?? "") ||
+		/overload(?:ed|ing)?|server busy|service unavailable|capacity exceeded/i.test(message)
+	) {
+		return "overload";
 	}
 	return undefined;
 }
@@ -218,6 +221,17 @@ export class RotationPool {
 		const failed = input.failed;
 		const failedIndex = failed ? this.#indexOf(failed.target) : -1;
 		if (failed && failedIndex < 0) throw new Error("Failed account no longer belongs to this pool");
+		if (input.reason === "continuation" || input.reason === "retry") {
+			const previous = this.#indexOf(input.previous);
+			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
+			// Keep a continuation on its original credential, including when manually disabled;
+			// missing authentication must fail closed rather than expose the transcript to another account.
+			if (sticky >= 0) {
+				if (this.#unavailable.has(sticky)) throw new Error("Original account is unavailable during continuation");
+				return this.#choice(sticky);
+			}
+			if (input.previous || input.active) throw new Error("Original account is no longer in this pool");
+		}
 		if (input.reason === "retry" && failedIndex >= 0) {
 			const category = classifyCredentialFailure(failed!.errorMessage);
 			if (category && !failed!.hasOutput) {
@@ -228,10 +242,11 @@ export class RotationPool {
 					return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin", failedIndex);
 				}
 				const slot = category === "auth" ? this.#credential(failedIndex) : this.#slot(failedIndex);
+				const requestSlot = this.#slot(failedIndex);
 				const count = (slot.failures ?? 0) + 1;
 				slot.failures = count;
-				slot.failedRequests = (slot.failedRequests ?? 0) + 1;
-				slot.lastFailureAt = now;
+				requestSlot.failedRequests = (requestSlot.failedRequests ?? 0) + 1;
+				requestSlot.lastFailureAt = now;
 				if (category === "auth") {
 					// Revoked or invalid credentials do not recover on a timer.
 					slot.authRejected = true;
@@ -255,17 +270,6 @@ export class RotationPool {
 			return this.#choice(failedIndex);
 		}
 
-		if (input.reason === "continuation" || input.reason === "retry") {
-			const previous = this.#indexOf(input.previous);
-			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
-			// Keep a continuation on its original credential, including when manually disabled;
-			// missing authentication must fail closed rather than expose the transcript to another account.
-			if (sticky >= 0) {
-				if (this.#unavailable.has(sticky)) throw new Error("Original account is unavailable during continuation");
-				return this.#choice(sticky);
-			}
-			if (input.previous || input.active) throw new Error("Original account is no longer in this pool");
-		}
 		if (this.#pinned >= 0) {
 			if (!this.#eligible(this.#pinned, now)) throw new Error("Pinned account is unavailable; unpin it or wait");
 			return this.#choice(this.#pinned);
@@ -387,14 +391,12 @@ export class RotationPool {
 				pinned: this.#pinned === index,
 				failureCount: failures,
 				successfulRequests: slot.successfulRequests ?? 0,
-				failedRequests: (slot.failedRequests ?? 0) + (credential.failedRequests ?? 0),
+				failedRequests: slot.failedRequests ?? 0,
 				healthScore: Math.max(0, 100 - failures * 20),
 				...(quota ? { quotaRemaining: quota.remaining } : {}),
 				...(slot.lastUsedAt === undefined ? {} : { lastUsedAt: slot.lastUsedAt }),
 				...(slot.lastSuccessAt === undefined ? {} : { lastSuccessAt: slot.lastSuccessAt }),
-				...((slot.lastFailureAt ?? credential.lastFailureAt) === undefined
-					? {}
-					: { lastFailureAt: Math.max(slot.lastFailureAt ?? 0, credential.lastFailureAt ?? 0) }),
+				...(slot.lastFailureAt === undefined ? {} : { lastFailureAt: slot.lastFailureAt }),
 			};
 		});
 	}

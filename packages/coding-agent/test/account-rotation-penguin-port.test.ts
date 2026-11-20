@@ -30,6 +30,9 @@ describe("Penguin quota and credential failure classification in Pi", () => {
 		expect(classifyCredentialFailure("HTTP 422 invalid request")).toBeUndefined();
 		expect(classifyCredentialFailure("HTTP 429 content policy violation")).toBeUndefined();
 		expect(classifyCredentialFailure("HTTP 401 invalid_api_key")).toBe("auth");
+		expect(classifyCredentialFailure("HTTP 429 Too Many Requests: limit 401 requests per minute")).toBe("rate-limit");
+		expect(classifyCredentialFailure("HTTP 429 rate limit exceeded: 500 requests per minute")).toBe("rate-limit");
+		expect(classifyCredentialFailure("HTTP 429 quota_exceeded; reset in 500 seconds")).toBe("quota");
 		expect(classifyCredentialFailure("invalid_token")).toBe("auth");
 	});
 
@@ -79,6 +82,35 @@ describe("Penguin per-model credential health in Pi rotation", () => {
 		geminiPool.markReauthenticated(gemini);
 		expect(claudePool.status(11)[0]?.authRejected).toBe(false);
 		expect(geminiPool.choose({ reason: "user", now: 11 }).target).toEqual(gemini);
+	});
+
+	it("keeps authentication request metrics scoped to the failed model", () => {
+		const health = new Map();
+		const claudePool = new RotationPool([claude, backup], 1_000, "round-robin", Math.random, health);
+		const geminiPool = new RotationPool([gemini], 1_000, "round-robin", Math.random, health);
+		claudePool.choose({
+			reason: "retry",
+			now: 100,
+			failed: { target: claude, errorMessage: "HTTP 401 invalid_api_key", hasOutput: false },
+		});
+		expect(claudePool.status(101)[0]?.failedRequests).toBe(1);
+		expect(claudePool.status(101)[0]?.lastFailureAt).toBe(100);
+		expect(geminiPool.status(101)[0]?.authRejected).toBe(true);
+		expect(geminiPool.status(101)[0]?.failedRequests).toBe(0);
+		expect(geminiPool.status(101)[0]?.lastFailureAt).toBeUndefined();
+	});
+
+	it("holds a tool continuation on its original identity after an empty overload", () => {
+		const pool = new RotationPool([claude, backup], 1_000);
+		const result = pool.choose({
+			reason: "retry",
+			previous: claude,
+			active: claude,
+			now: 100,
+			failed: { target: claude, errorMessage: "HTTP 503 service unavailable", hasOutput: false },
+		});
+		expect(result.target).toEqual(claude);
+		expect(pool.status(101)[0]?.failureCount).toBe(0);
 	});
 
 	it("blocks spent quota without a reset hint until the user resets health or logs in again", () => {

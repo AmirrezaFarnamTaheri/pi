@@ -106,10 +106,31 @@ describe("account rotation extension", () => {
 		} as never);
 		const notices: string[] = [];
 		await app.commands.get("account-rotation")!.handler("status", {
+			...app.ctx,
 			hasUI: true,
 			ui: { notify: (message: string) => notices.push(message) },
 		});
 		expect(notices.join("\n").match(/ok 1, failed 0/g)).toHaveLength(2);
+	});
+
+	it("refreshes key availability for status before the first routing attempt", async () => {
+		const previousKey = process.env.PI_TEST_ALT_KEY;
+		delete process.env.PI_TEST_ALT_KEY;
+		try {
+			const app = createHarness(config);
+			await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+			const notices: string[] = [];
+			await app.commands.get("account-rotation")!.handler("status", {
+				...app.ctx,
+				hasUI: true,
+				ui: { notify: (message: string) => notices.push(message) },
+			});
+			expect(notices.join("\n")).toContain("1/2 ready");
+			expect(notices.join("\n")).toContain("login or model unavailable");
+		} finally {
+			if (previousKey === undefined) delete process.env.PI_TEST_ALT_KEY;
+			else process.env.PI_TEST_ALT_KEY = previousKey;
+		}
 	});
 
 	it("rejects literal key material and duplicate accounts", () => {

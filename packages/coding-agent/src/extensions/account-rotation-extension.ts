@@ -330,7 +330,18 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 				if (ctx.hasUI) ctx.ui.notify(message, level);
 			};
 			if (!command || command === "status") {
-				const lines = state.flatMap(({ group, status }) => {
+				const lines = state.flatMap(({ group, pool, status }) => {
+					// A status command can precede the first request; check authentication and catalog now.
+					for (const member of group.members) {
+						const model = ctx.modelRegistry.find(member.provider, member.model);
+						pool.setAvailable(
+							member,
+							model !== undefined &&
+								model.api !== "pi-virtual" &&
+								(!member.apiKeyEnv || !!process.env[member.apiKeyEnv]) &&
+								ctx.modelRegistry.hasConfiguredAuth(model),
+						);
+					}
 					const accounts = status();
 					const fleet = summarizeRotationHealth(accounts);
 					const summary = [

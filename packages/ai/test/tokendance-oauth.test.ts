@@ -174,7 +174,7 @@ describe.sequential("TokenDance model login and API-key minting", () => {
 				},
 				notify: () => {},
 			}),
-		).rejects.toThrow("Login cancelled");
+		).rejects.toThrow("This operation was aborted");
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });

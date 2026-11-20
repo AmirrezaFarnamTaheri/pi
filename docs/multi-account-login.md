@@ -47,7 +47,7 @@ The credential-health policy adopts the useful separation found in Penguin Harne
 - **Provider outages (503, overload):** may trigger a pre-output attempt through another eligible account, but do not damage any credential's health, rate-limit counters, or quota. An ordinary 403, invalid request or content-policy rejection does not trigger credential failover.
 - **Privacy and identity:** an account pin remains absolute, and continuations and responses with output are never replayed on a different account.
 
-The `/account-rotation status` command reports a per-pool readiness summary and nonsecret success/failure counters. `/account-rotation reset [pool]` clears in-memory health; `/account-rotation quota <pool> <account> <fraction> [reset-epoch-ms]` lets the user explicitly provide a quota observation. None of these commands reads or prints API keys.
+The `/account-rotation` commands operate only on extension-managed pools configured in `account-rotation.json`, not the `account-profiles/` pools managed by the account-manager UI. The `/account-rotation status` command reports a per-pool readiness summary and nonsecret success/failure counters. `/account-rotation reset [pool]` clears in-memory health; `/account-rotation quota <pool> <account> <fraction> [reset-epoch-ms]` lets the user explicitly provide a quota observation. None of these commands reads or prints API keys.
 
 **Privacy warning:** Rotation may send the active conversation and tool results to any included account. Do not mix identities that are not allowed to share that context, such as unrelated personal, client, or organizational accounts. Use separate sessions or a single account when isolation is required.
 
