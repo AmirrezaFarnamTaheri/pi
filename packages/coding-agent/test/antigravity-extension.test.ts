@@ -193,7 +193,7 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					if (req.args[0] === "models") return successful("Flash\nPro");
 					if (req.args.includes("Flash")) {
 						now += 100_000;
-					return { stdout: "", stderr: "HTTP 429 Resets in 3m", exitCode: 1 };
+						return { stdout: "", stderr: "HTTP 429 Resets in 3m", exitCode: 1 };
 					}
 					proCalls++;
 					return successful("ok");
