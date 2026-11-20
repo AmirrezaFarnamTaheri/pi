@@ -122,7 +122,10 @@ describe("background_job", () => {
 		const jobId = `job_${randomUUID()}`;
 		const folder = backgroundJobFolder(jobId);
 		await mkdir(folder, { recursive: true, mode: 0o700 });
-		await writeFile(join(folder, "owner.json"), JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() }));
+		await writeFile(
+			join(folder, "owner.json"),
+			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() }),
+		);
 		await writeFile(join(folder, "output.log"), "A€B");
 		jobs.push({ jobId, cwd });
 		const first = await tailBackgroundJob(jobId, cwd, 0, 2);
@@ -136,7 +139,10 @@ describe("background_job", () => {
 		const jobId = `job_${randomUUID()}`;
 		const folder = backgroundJobFolder(jobId);
 		await mkdir(folder, { recursive: true, mode: 0o700 });
-		await writeFile(join(folder, "owner.json"), JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 60_000 }));
+		await writeFile(
+			join(folder, "owner.json"),
+			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 60_000 }),
+		);
 		jobs.push({ jobId, cwd });
 		await stopBackgroundJob(jobId, cwd);
 		expect(await import("node:fs/promises").then((fs) => fs.readFile(join(folder, "cancel"), "utf8"))).toBe("");
