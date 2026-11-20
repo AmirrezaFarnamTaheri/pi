@@ -64,7 +64,12 @@ export function createBackgroundJobToolDefinition(cwd: string): ToolDefinition<t
 			if (action === "tail") {
 				const output = await tailBackgroundJob(jobId, scope, cursor, maxBytes);
 				return {
-					content: [{ type: "text", text: output.text }],
+					content: [
+						{
+							type: "text",
+							text: `${output.text}\n[Next byte cursor: ${output.cursor}; more: ${output.more}; truncated: ${output.truncated}]`,
+						},
+					],
 					details: undefined,
 					structuredContent: output,
 				};

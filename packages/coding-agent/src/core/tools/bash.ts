@@ -445,6 +445,7 @@ export function createShellToolDefinition(
 					options?.backgroundShellConfig?.() ?? getShellConfig(options?.shellPath),
 					spawnContext.env,
 					config.tempFilePrefix,
+					{ workspaceCwd: ctx?.cwd ?? cwd },
 				);
 				const text = `Started background job ${jobId} (PID ${pid}, running). Use background_job status/tail/wait/stop. Output log: ${outputPath} (capped at ${BACKGROUND_LOG_MAX_BYTES} bytes).`;
 				return {

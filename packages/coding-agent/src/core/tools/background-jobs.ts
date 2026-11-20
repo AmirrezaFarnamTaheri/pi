@@ -82,6 +82,15 @@ export async function backgroundJobStatus(jobId: string, cwd: string): Promise<B
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		state = {};
 	}
+	// Terminal output can race the first read when the supervisor exits between liveness checks.
+	if (state.status === "running" && state.workerPid && !alive(state.workerPid)) {
+		try {
+			const latest = JSON.parse(await readFile(join(folder, "state.json"), "utf8")) as SupervisorState;
+			if (latest.status && latest.status !== "running") state = latest;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
 	const status: BackgroundJobStatus = state.status
 		? state.status === "running" &&
 			(!state.workerPid ||
@@ -162,11 +171,24 @@ export async function tailBackgroundJob(
 		const bytes = Math.min(sizeLimit, size - start);
 		const buffer = Buffer.alloc(bytes);
 		const { bytesRead } = await handle.read(buffer, 0, bytes, start);
+		let safeBytes = bytesRead;
+		// A byte cursor must never advance past a partial UTF-8 code point.
+		if (start + bytesRead < size && safeBytes > 0) {
+			const last = buffer[safeBytes - 1]!;
+			if (last >= 0x80) {
+				let lead = safeBytes - 1;
+				while (lead > 0 && (buffer[lead]! & 0xc0) === 0x80) lead--;
+				const marker = buffer[lead]!;
+				const length = marker >= 0xf0 && marker <= 0xf4 ? 4 : marker >= 0xe0 && marker <= 0xef ? 3 : marker >= 0xc2 && marker <= 0xdf ? 2 : 1;
+				if (length > safeBytes - lead) safeBytes = lead;
+			}
+		}
+		if (safeBytes === 0 && bytesRead > 0) throw new Error("Background log maxBytes is too small for a UTF-8 character");
 		const state = await backgroundJobStatus(jobId, cwd);
 		return {
-			text: buffer.subarray(0, bytesRead).toString("utf8"),
-			cursor: start + bytesRead,
-			more: start + bytesRead < size,
+			text: buffer.subarray(0, safeBytes).toString("utf8"),
+			cursor: start + safeBytes,
+			more: start + safeBytes < size,
 			truncated: state.outputTruncated,
 		};
 	} finally {
@@ -196,7 +218,7 @@ export async function waitBackgroundJob(
 export async function stopBackgroundJob(jobId: string, cwd: string): Promise<BackgroundJobState> {
 	const { folder } = await ownerOf(jobId, cwd);
 	const current = await backgroundJobStatus(jobId, cwd);
-	if (FINISHED.has(current.status)) return current;
+	if (FINISHED.has(current.status) && current.status !== "lost") return current;
 	try {
 		await writeFile(join(folder, "cancel"), "", { flag: "wx", mode: 0o600 });
 	} catch (error) {

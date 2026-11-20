@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBackgroundJobTool } from "../src/core/tools/background-job.ts";
-import { backgroundJobFolder, backgroundJobStatus, listBackgroundJobs } from "../src/core/tools/background-jobs.ts";
+import {
+	backgroundJobFolder,
+	backgroundJobStatus,
+	listBackgroundJobs,
+	stopBackgroundJob,
+	tailBackgroundJob,
+} from "../src/core/tools/background-jobs.ts";
 import { type BashToolOutput, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
 import { ManualBackgroundController } from "../src/core/tools/manual-background.ts";
 
@@ -110,6 +116,31 @@ describe("background_job", () => {
 			expect(listed.content[0]).toEqual({ type: "text", text: expect.stringContaining(output.background_job_id!) });
 		},
 	);
+
+	it("tails multi-byte UTF-8 output without moving the cursor through a code point", async () => {
+		const cwd = await workspace();
+		const jobId = `job_${randomUUID()}`;
+		const folder = backgroundJobFolder(jobId);
+		await mkdir(folder, { recursive: true, mode: 0o700 });
+		await writeFile(join(folder, "owner.json"), JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() }));
+		await writeFile(join(folder, "output.log"), "A€B");
+		jobs.push({ jobId, cwd });
+		const first = await tailBackgroundJob(jobId, cwd, 0, 2);
+		expect(first).toMatchObject({ text: "A", cursor: 1, more: true });
+		const second = await tailBackgroundJob(jobId, cwd, first.cursor, 4);
+		expect(second).toMatchObject({ text: "€B", cursor: 5, more: false });
+	});
+
+	it("places a cancellation marker for inferred lost supervisors", async () => {
+		const cwd = await workspace();
+		const jobId = `job_${randomUUID()}`;
+		const folder = backgroundJobFolder(jobId);
+		await mkdir(folder, { recursive: true, mode: 0o700 });
+		await writeFile(join(folder, "owner.json"), JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 60_000 }));
+		jobs.push({ jobId, cwd });
+		await stopBackgroundJob(jobId, cwd);
+		expect(await import("node:fs/promises").then((fs) => fs.readFile(join(folder, "cancel"), "utf8"))).toBe("");
+	});
 
 	it("marks a stale startup without supervisor state as lost, never completed", async () => {
 		const cwd = await workspace();

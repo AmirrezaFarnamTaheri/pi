@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getAgentDir } from "../../config.ts";
@@ -84,6 +84,7 @@ const stopChildTree=()=>{
     if(process.platform==="win32"){
       spawnSync("taskkill",["/PID",String(child.pid),"/T","/F"],{windowsHide:true});
     }else{
+      if(process.platform==="darwin")try{process.kill(-child.pid,"SIGSTOP");}catch{}
       process.kill(-child.pid,"SIGKILL");
     }
   }catch{try{child.kill();}catch{}}
@@ -164,7 +165,7 @@ export async function startBackgroundShell(
 	shellConfig: ShellConfig,
 	env: NodeJS.ProcessEnv,
 	tempFilePrefix: string,
-	options?: { captureForegroundOutput?: boolean },
+	options?: { captureForegroundOutput?: boolean; workspaceCwd?: string },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
 	const jobId = `job_${randomUUID()}`;
@@ -176,16 +177,17 @@ export async function startBackgroundShell(
 	let worker: ReturnType<typeof spawn> | undefined;
 	try {
 		await writeFile(
-			join(folder, "owner.json"),
+			join(folder, "owner.json.tmp"),
 			JSON.stringify({
 				version: 1,
-				cwd: resolve(cwd),
+				cwd: resolve(options?.workspaceCwd ?? cwd),
 				kind: tempFilePrefix,
 				createdAt: Date.now(),
 				captureForegroundOutput: options?.captureForegroundOutput === true,
 			}),
 			{ flag: "wx", mode: 0o600 },
 		);
+		await rename(join(folder, "owner.json.tmp"), join(folder, "owner.json"));
 		await writeFile(
 			join(folder, "request.json"),
 			JSON.stringify({
