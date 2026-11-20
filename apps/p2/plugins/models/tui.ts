@@ -231,14 +231,14 @@ function setDefault(
 		ctx.notify("Models are not available", "error");
 		return;
 	}
-	const info = state.catalog.find((model) => model.provider === choice.provider && model.modelId === choice.modelId);
+	const info =
+		state.catalog.find((model) => model.provider === choice.provider && model.modelId === choice.modelId) ??
+		(state.model?.provider === choice.provider && state.model.modelId === choice.modelId ? state.model : undefined);
+	const requested = choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off";
 	const defaultModel = {
 		provider: choice.provider,
 		modelId: choice.modelId,
-		thinkingLevel: clampThinkingLevelToSupported(
-			info?.thinkingLevels ?? ["off"],
-			choice.thinkingLevel ?? state.defaultModel?.thinkingLevel ?? "off",
-		),
+		thinkingLevel: info?.thinkingLevels ? clampThinkingLevelToSupported(info.thinkingLevels, requested) : requested,
 	};
 	ctx.notify(done);
 	ctx.perform(state.choosing({ defaultModel }, service.setDefault(defaultModel, BACKGROUND_CONTEXT)));

@@ -747,14 +747,16 @@ export class ModelRuntime implements Models {
 		this.configureAutomaticAccountRotation(groupId);
 	}
 
-	/** Available thinking levels for the first routable model ID, across authenticated pool members. */
+	/** Advertise levels supported by any routable physical model. The route clamps to its actual model. */
 	private rotationThinkingLevels(memberIds: readonly string[]): ModelThinkingLevel[] {
-		const primaryId = memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
-		if (!primaryId) return ["off"];
 		const eligible = memberIds
 			.filter((id) => this.hasConfiguredAuth(id))
-			.flatMap((id) => this.getPhysicalModel(id, primaryId) ?? []);
-		return intersectSupportedThinkingLevels(eligible);
+			.flatMap((id) => this.getModels(id).filter((model) => !isVirtualModel(model)));
+		if (eligible.length === 0) return ["off"];
+		const supported = new Set(eligible.flatMap((model) => getSupportedThinkingLevels(model)));
+		return (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as ModelThinkingLevel[]).filter((level) =>
+			supported.has(level),
+		);
 	}
 
 	/** Keep a virtual model for each provider with multiple distinct identities. */
@@ -1280,8 +1282,9 @@ export class ModelRuntime implements Models {
 			const preference = this.getAccountRotationPreferences(groupId);
 			const memberIds = this.getRotationMemberIds(groupId).filter((id) => preference.memberIds.includes(id));
 			const levels = this.rotationThinkingLevels(memberIds);
+			const advertised = levels.length > 0 ? levels : (["off"] as ModelThinkingLevel[]);
 			const previous = getSupportedThinkingLevels(entry.model);
-			if (levels.length !== previous.length || levels.some((level, i) => level !== previous[i]))
+			if (advertised.length !== previous.length || advertised.some((level, i) => level !== previous[i]))
 				this.configureAutomaticAccountRotation(groupId);
 		}
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
