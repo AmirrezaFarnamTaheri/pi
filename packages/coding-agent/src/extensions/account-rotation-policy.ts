@@ -39,10 +39,15 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 		return undefined;
 	}
 	// A number inside a rate/quota detail is not the response status.
-	const status = /(?:^|\bHTTP\s+|\bstatus(?:[ _-]?code)?\s*[:=]?\s*|\bcode\s*[:=]?\s*)(401|403|429|50[0-4]|529)\b/i.exec(message)?.[1];
+	const status =
+		/(?:^|\bHTTP\s+|\bstatus(?:[ _-]?code)?\s*[:=]?\s*|\bcode\s*[:=]?\s*)(401|403|429|50[0-4]|529)\b/i.exec(
+			message,
+		)?.[1];
 	if (
 		status === "401" ||
-		/invalid[ _-]?(api[ _-]?)?key|invalid_token|expired_token|token_expired|authentication_error|unauthorized|authentication (failed|error|invalid)/i.test(message)
+		/invalid[ _-]?(api[ _-]?)?key|invalid_token|expired_token|token_expired|authentication_error|unauthorized|authentication (failed|error|invalid)/i.test(
+			message,
+		)
 	) {
 		return "auth";
 	}
@@ -54,7 +59,9 @@ export function classifyCredentialFailure(message: string): CredentialFailure | 
 	if (quota) return "quota";
 	if (
 		status === "429" ||
-		/rate[ -_]?limit|usage limit reached|resource[ _-]exhausted|too many requests|tokens per minute|requests per minute/i.test(message)
+		/rate[ -_]?limit|usage limit reached|resource[ _-]exhausted|too many requests|tokens per minute|requests per minute/i.test(
+			message,
+		)
 	) {
 		return "rate-limit";
 	}
