@@ -309,7 +309,7 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 			resolvePromise(result(exitCode));
 		};
 		const kill = (signal: NodeJS.Signals) => {
-			if (exited || !child.pid) return;
+			if (!child.pid) return;
 			if (process.platform !== "win32") {
 				try {
 					process.kill(-child.pid, signal);
@@ -318,6 +318,7 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 					// The process group may already be gone; attempt the child next.
 				}
 			}
+			if (exited) return;
 			try {
 				child.kill(signal);
 			} catch {
@@ -331,7 +332,13 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 				killEscalation.unref?.();
 			}
 			if (!fallback) {
-				fallback = setTimeout(() => finish(null), 3500);
+				fallback = setTimeout(() => {
+					// Escalate independently of the CLI leader: an inherited pipe can outlive it.
+					kill("SIGKILL");
+					child.stdout?.destroy();
+					child.stderr?.destroy();
+					finish(null);
+				}, 3500);
 				fallback.unref?.();
 			}
 		};
@@ -430,6 +437,8 @@ export class AgyBridge {
 	private readonly readSessionId: (cwd: string) => Promise<string | undefined>;
 	private readonly queue: AgyAdmissionQueue;
 	private readonly cooldowns = new Map<string, number>();
+	/** Unknown models in resumed conversations must not poison the shared default bucket or persistent state. */
+	private readonly conversationCooldowns = new Map<string, number>();
 	private readonly cooldownStore?: AgyCooldownStore;
 	private cooldownLoad?: Promise<void>;
 	private modelCache?: Promise<AgyModel[] | null>;
@@ -457,11 +466,21 @@ export class AgyBridge {
 		await this.cooldownLoad;
 	}
 
-	private async recordCooldown(model: string | undefined, delayMs: number): Promise<void> {
-		const key = model ?? "(default)";
+	private async recordCooldown(model: string | undefined, delayMs: number, conversationId?: string): Promise<void> {
 		const until = this.now() + delayMs;
+		if (model === undefined && conversationId) {
+			this.conversationCooldowns.set(conversationId, Math.max(this.conversationCooldowns.get(conversationId) ?? 0, until));
+			return;
+		}
+		const key = model ?? "(default)";
 		this.cooldowns.set(key, Math.max(this.cooldowns.get(key) ?? 0, until));
 		if (this.cooldownStore) await this.cooldownStore.save(this.cooldowns).catch(() => undefined);
+	}
+
+	private cooldownUntil(model: string | undefined, conversationId?: string): number {
+		return model === undefined && conversationId
+			? (this.conversationCooldowns.get(conversationId) ?? 0)
+			: (this.cooldowns.get(model ?? "(default)") ?? 0);
 	}
 
 	private get binary(): string {
@@ -566,11 +585,11 @@ export class AgyBridge {
 				: [];
 			if (models.length === 0) models = [undefined];
 		}
-		const ready = models.filter((model) => (this.cooldowns.get(model ?? "(default)") ?? 0) <= this.now());
-		if (ready.length === 0) throw new Error("Requested Antigravity models are cooling down after a quota limit");
 		const attempts: string[] = [];
-		for (const model of ready) {
+		for (const model of models) {
 			if (request.signal?.aborted) throw new Error("Antigravity delegation cancelled");
+			// Check at admission time: an earlier attempt may outlast another model's cooldown.
+			if (this.cooldownUntil(model, request.conversationId) > this.now()) continue;
 			attempts.push(model ?? "(default)");
 			const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 			const args = ["--add-dir", resolve(request.cwd)];
@@ -584,14 +603,14 @@ export class AgyBridge {
 			if (result.spawnError)
 				throw new Error("Antigravity CLI could not start (" + result.spawnError + "); install agy or set AGY_BIN");
 			const output = result.stdout.trim();
+			if (result.timedOut) throw new Error("Antigravity CLI timed out; no automatic replay");
 			if (quota.detected) {
+				await this.recordCooldown(model, quota.resetMs ?? DEFAULT_COOLDOWN_MS, request.conversationId);
 				if (output) throw new Error("Antigravity emitted partial output before quota exhaustion; no replay");
-				await this.recordCooldown(model, quota.resetMs ?? DEFAULT_COOLDOWN_MS);
 				if (!explicit && !request.conversationId) continue;
 				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
 			}
 			if (result.aborted) throw new Error("Antigravity delegation cancelled");
-			if (result.timedOut) throw new Error("Antigravity CLI timed out; no automatic replay");
 			if (result.exitCode === 0 && output) {
 				const limited = truncateAgyOutput(output, this.options.outputLimit ?? DEFAULT_OUTPUT_LIMIT);
 				const sessionId = request.conversationId ?? (await this.readSessionId(resolve(request.cwd)));
@@ -599,11 +618,13 @@ export class AgyBridge {
 			}
 			// Never replay a prompt after a partially visible response: side effects
 			// or tokens may already have been emitted by the previous execution.
-			if (output) throw new Error("Antigravity emitted partial output before failing; no automatic replay");
 			const failure = classifyAgyFailure(result.stderr);
 			if (failure === "quota") {
 				const cooldown = parseQuotaResetMs(result.stderr) ?? DEFAULT_COOLDOWN_MS;
-				await this.recordCooldown(model, cooldown);
+				await this.recordCooldown(model, cooldown, request.conversationId);
+			}
+			if (output) throw new Error("Antigravity emitted partial output before failing; no automatic replay");
+			if (failure === "quota") {
 				if (!explicit && !request.conversationId) continue;
 				throw new Error("Antigravity model quota exhausted; respect the provider reset window");
 			}
