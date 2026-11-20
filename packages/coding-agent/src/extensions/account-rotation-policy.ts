@@ -279,7 +279,8 @@ export class RotationPool {
 					slot.cooldownUntil = now + duration;
 				}
 				// A failed continuation is recorded, but must not move to another identity.
-				if (input.previous || input.active) throw new Error("Original account failed during continuation; no cross-account retry");
+				if (input.previous || input.active)
+					throw new Error("Original account failed during continuation; no cross-account retry");
 				// Manual pinning remains an identity boundary even when a key fails.
 				if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or wait for its cooldown");
 				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
