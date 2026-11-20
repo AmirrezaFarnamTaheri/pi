@@ -43,6 +43,7 @@ For isolation setup and limitations, see [Run Pi in an isolated environment](../
 | `truncated-tool.ts` | Wraps ripgrep with proper output truncation (50KB/2000 lines) |
 | `ssh.ts` | Delegate all tools to a remote machine via SSH using pluggable operations |
 | `subagent/` | Delegate tasks to specialized subagents with isolated context windows |
+| `antigravity/` | Opt-in local Antigravity CLI delegation, session continuation, bounded output and model discovery ([guide](../../docs/antigravity.md)) |
 
 ### Commands & UI
 
