@@ -269,6 +269,7 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 		let timedOut = false;
 		let aborted = false;
 		let outputOverflow = false;
+		let stopping = false;
 		let spawnError: string | undefined;
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		let fallback: ReturnType<typeof setTimeout> | undefined;
@@ -326,6 +327,7 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 			}
 		};
 		const stop = () => {
+			stopping = true;
 			kill("SIGTERM");
 			if (!killEscalation) {
 				killEscalation = setTimeout(() => kill("SIGKILL"), 1500);
@@ -376,6 +378,7 @@ export function runAgyProcess(request: AgyProcessRequest): Promise<AgyProcessRes
 		});
 		child.on("close", (code) => {
 			exited = true;
+			if (stopping) kill("SIGKILL");
 			finish(code);
 		});
 		try {
@@ -469,7 +472,10 @@ export class AgyBridge {
 	private async recordCooldown(model: string | undefined, delayMs: number, conversationId?: string): Promise<void> {
 		const until = this.now() + delayMs;
 		if (model === undefined && conversationId) {
-			this.conversationCooldowns.set(conversationId, Math.max(this.conversationCooldowns.get(conversationId) ?? 0, until));
+			this.conversationCooldowns.set(
+				conversationId,
+				Math.max(this.conversationCooldowns.get(conversationId) ?? 0, until),
+			);
 			return;
 		}
 		const key = model ?? "(default)";

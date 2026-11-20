@@ -126,12 +126,12 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					if (req.args[0] === "models") return successful("Gemini 3 Flash\nGemini 3 Pro\n");
 					if (req.args.includes("Gemini 3 Pro")) return successful("Recovered");
 					const logfile = req.args[req.args.indexOf("--log-file") + 1];
-					const aborted = new Promise<void>((resolve) => {
+					const abortWait = new Promise<void>((resolve) => {
 						if (req.signal?.aborted) resolve();
 						else req.signal?.addEventListener("abort", () => resolve(), { once: true });
 					});
 					await writeFile(logfile, "RESOURCE_EXHAUSTED (code 429) Resets in 2m");
-					await aborted;
+					await abortWait;
 					aborted = true;
 					return { stdout: "", stderr: "", exitCode: null, aborted: true };
 				},
@@ -162,17 +162,22 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 
 	it("keeps unknown-model cooldowns scoped to their own conversations", async () => {
 		const calls: string[] = [];
-		const bridge = new AgyBridge({}, {
-			exec: async (req) => {
-				if (req.args[0] === "models") return successful("Gemini 3 Flash\\nGemini 3 Pro");
-				const conversation = req.args[req.args.indexOf("--conversation") + 1];
-				calls.push(conversation);
-				return conversation === "flash-conversation"
-					? { stdout: "", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
-					: successful("healthy session");
+		const bridge = new AgyBridge(
+			{},
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Gemini 3 Flash\nGemini 3 Pro");
+					const conversation = req.args[req.args.indexOf("--conversation") + 1];
+					calls.push(conversation);
+					return conversation === "flash-conversation"
+						? { stdout: "", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
+						: successful("healthy session");
 			},
-		});
-		await expect(bridge.delegate({ prompt: "one", cwd, conversationId: "flash-conversation" })).rejects.toThrow(/quota/i);
+			},
+		);
+		await expect(bridge.delegate({ prompt: "one", cwd, conversationId: "flash-conversation" })).rejects.toThrow(
+			/quota/i,
+		);
 		const healthy = await bridge.delegate({ prompt: "two", cwd, conversationId: "pro-conversation" });
 		expect(healthy.text).toBe("healthy session");
 		expect(calls).toEqual(["flash-conversation", "pro-conversation"]);
@@ -181,17 +186,20 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 	it("checks cooldown expiry before each fallback attempt, not before the first", async () => {
 		let now = 1000;
 		let proCalls = 0;
-		const bridge = new AgyBridge({ preferredModels: ["Flash", "Pro"], now: () => now }, {
-			exec: async (req) => {
-				if (req.args[0] === "models") return successful("Flash\\nPro");
-				if (req.args.includes("Flash")) {
-					now += 100_000;
+		const bridge = new AgyBridge(
+			{ preferredModels: ["Flash", "Pro"], now: () => now },
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Flash\nPro");
+					if (req.args.includes("Flash")) {
+						now += 100_000;
 					return { stdout: "", stderr: "HTTP 429 Resets in 3m", exitCode: 1 };
 				}
 				proCalls++;
-				return successful("ok");
+					return successful("ok");
 			},
-		});
+			},
+		);
 		const result = await bridge.delegate({ prompt: "first", cwd });
 		expect(result.model).toBe("Pro");
 		expect(proCalls).toBe(1);
@@ -199,30 +207,36 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 
 	it("does not retry a timeout even if its log reports quota exhaustion", async () => {
 		let calls = 0;
-		const bridge = new AgyBridge({ preferredModels: ["Flash", "Pro"] }, {
-			exec: async (req) => {
-				if (req.args[0] === "models") return successful("Flash\\nPro");
+		const bridge = new AgyBridge(
+			{ preferredModels: ["Flash", "Pro"] },
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Flash\nPro");
 				calls++;
 				await writeFile(req.args[req.args.indexOf("--log-file") + 1]!, "RESOURCE_EXHAUSTED (code 429)");
-				return { stdout: "", stderr: "", exitCode: null, timedOut: true };
+					return { stdout: "", stderr: "", exitCode: null, timedOut: true };
 			},
-		});
+			},
+		);
 		await expect(bridge.delegate({ prompt: "timeout", cwd })).rejects.toThrow(/timed out/i);
 		expect(calls).toBe(1);
 	});
 
 	it("records a model quota cooldown despite partial output, without replay", async () => {
 		const calls: string[] = [];
-		const bridge = new AgyBridge({ preferredModels: ["Flash", "Pro"], now: () => 1000 }, {
-			exec: async (req) => {
-				if (req.args[0] === "models") return successful("Flash\\nPro");
-				const model = req.args[req.args.indexOf("--model") + 1]!;
-				calls.push(model);
-				return model === "Flash"
-					? { stdout: "partial", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
-					: successful("Pro answer");
+		const bridge = new AgyBridge(
+			{ preferredModels: ["Flash", "Pro"], now: () => 1000 },
+			{
+				exec: async (req) => {
+					if (req.args[0] === "models") return successful("Flash\nPro");
+					const model = req.args[req.args.indexOf("--model") + 1]!;
+					calls.push(model);
+					return model === "Flash"
+						? { stdout: "partial", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
+						: successful("Pro answer");
 			},
-		});
+			},
+		);
 		await expect(bridge.delegate({ prompt: "one", cwd })).rejects.toThrow(/partial output/i);
 		const result = await bridge.delegate({ prompt: "two", cwd });
 		expect(result.model).toBe("Pro");
