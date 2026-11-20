@@ -317,6 +317,7 @@ describe("account rotation extension", () => {
 			const command = app.commands.get("account-rotation")!;
 			const notices: string[] = [];
 			const ui = {
+				...app.ctx,
 				hasUI: true,
 				ui: {
 					notify: (message: string) => {
