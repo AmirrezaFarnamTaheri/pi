@@ -179,11 +179,19 @@ export async function tailBackgroundJob(
 				let lead = safeBytes - 1;
 				while (lead > 0 && (buffer[lead]! & 0xc0) === 0x80) lead--;
 				const marker = buffer[lead]!;
-				const length = marker >= 0xf0 && marker <= 0xf4 ? 4 : marker >= 0xe0 && marker <= 0xef ? 3 : marker >= 0xc2 && marker <= 0xdf ? 2 : 1;
+				const length =
+					marker >= 0xf0 && marker <= 0xf4
+						? 4
+						: marker >= 0xe0 && marker <= 0xef
+							? 3
+							: marker >= 0xc2 && marker <= 0xdf
+								? 2
+								: 1;
 				if (length > safeBytes - lead) safeBytes = lead;
 			}
 		}
-		if (safeBytes === 0 && bytesRead > 0) throw new Error("Background log maxBytes is too small for a UTF-8 character");
+		if (safeBytes === 0 && bytesRead > 0)
+			throw new Error("Background log maxBytes is too small for a UTF-8 character");
 		const state = await backgroundJobStatus(jobId, cwd);
 		return {
 			text: buffer.subarray(0, safeBytes).toString("utf8"),
