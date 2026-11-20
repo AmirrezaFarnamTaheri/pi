@@ -15,6 +15,7 @@ import {
 	RotationPool,
 	type RotationStrategy,
 	type RotationTarget,
+	summarizeRotationHealth,
 } from "./account-rotation-policy.ts";
 
 export interface RotationMember extends RotationTarget {
@@ -314,7 +315,10 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 			const match = status.find(
 				(candidate) => candidate.target.provider === message.provider && candidate.target.model === message.model,
 			);
-			if (match) entry.pool.markSuccess(match.target);
+			if (match) {
+				entry.pool.markSuccess(match.target);
+				break;
+			}
 		}
 	});
 
@@ -326,28 +330,51 @@ export function registerAccountRotation(pi: ExtensionAPI, configuration: Rotatio
 				if (ctx.hasUI) ctx.ui.notify(message, level);
 			};
 			if (!command || command === "status") {
-				const lines = state.flatMap(({ group, status }) => [
-					`${group.id} (${group.strategy ?? "round-robin"}):`,
-					...(status().length > 0
-						? status().map((entry) => {
-								const details = [
-									entry.enabled ? "enabled" : "disabled",
-									`health ${entry.healthScore}`,
-									...(entry.quotaRemaining === undefined
-										? []
-										: [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
-									...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
-										? ["quota exhausted (reset unknown)"]
-										: entry.readyInMs
-											? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`]
-											: []),
-									...(entry.available ? [] : ["login or model unavailable"]),
-									...(entry.pinned ? ["pinned"] : []),
-								];
-								return `  ${entry.target.provider}: ${details.join(", ")}`;
-							})
-						: [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
-				]);
+				const lines = state.flatMap(({ group, pool, status }) => {
+					// A status command can precede the first request; check authentication and catalog now.
+					for (const member of group.members) {
+						const model = ctx.modelRegistry.find(member.provider, member.model);
+						pool.setAvailable(
+							member,
+							model !== undefined &&
+								model.api !== "pi-virtual" &&
+								(!member.apiKeyEnv || !!process.env[member.apiKeyEnv]) &&
+								ctx.modelRegistry.hasConfiguredAuth(model),
+						);
+					}
+					const accounts = status();
+					const fleet = summarizeRotationHealth(accounts);
+					const summary = [
+						`${fleet.ready}/${fleet.total} ready`,
+						`${fleet.cooling} cooling`,
+						`${fleet.quotaBlocked} quota-blocked`,
+						`${fleet.authRejected} auth-rejected`,
+					].join(", ");
+					return [
+						`${group.id} (${group.strategy ?? "round-robin"}): ${summary}`,
+						...(accounts.length > 0
+							? accounts.map((entry) => {
+									const details = [
+										entry.enabled ? "enabled" : "disabled",
+										`health ${entry.healthScore}`,
+										`ok ${entry.successfulRequests}, failed ${entry.failedRequests}`,
+										...(entry.authRejected ? ["credentials rejected (re-login required)"] : []),
+										...(entry.quotaRemaining === undefined
+											? []
+											: [`quota ${Math.round(entry.quotaRemaining * 100)}%`]),
+										...(entry.quotaBlocked && !Number.isFinite(entry.readyInMs)
+											? ["quota exhausted (reset unknown)"]
+											: entry.readyInMs > 0 && Number.isFinite(entry.readyInMs)
+												? [`ready in ${Math.ceil(entry.readyInMs / 1_000)}s`]
+												: []),
+										...(entry.available ? [] : ["login or model unavailable"]),
+										...(entry.pinned ? ["pinned"] : []),
+									];
+									return `  ${entry.target.provider}: ${details.join(", ")}`;
+								})
+							: [`  ${group.members.map((member) => member.provider).join(", ")} (not yet selected)`]),
+					];
+				});
 				notify(lines.join("\n") || "No rotation pools configured");
 				return;
 			}

@@ -37,6 +37,18 @@ Four algorithms are available:
 
 A provider may have several identities but not every model available to all of them. The runtime skips identities lacking the model selected for that request, and failing accounts are cooled down. Tool continuations stay on their originating identity; a recognized failure before output begins may trigger an eligible failover. Output-producing requests are not silently replayed.
 
+### Key health, quota recovery and model-scoped rotation
+
+The credential-health policy adopts the useful separation found in Penguin Harness:
+
+- **Temporary HTTP 429 / rate limit:** an account+model combination receives exponential cooldown, honoring a provider's explicit reset/retry interval when available. Other models on the same account are not automatically cooled down.
+- **Exhausted quota:** the affected account+model stays unavailable until the reported reset time. When the provider reports no reset time, the slot remains quota-blocked until reauthentication or manual health reset; retrying it on a timer would waste requests.
+- **Invalid or revoked credential:** a recognized 401 or invalid credential code quarantines the entire account identity across its models. Signing in again restores all its model slots. A successful authenticated response also clears the account-wide rejection state.
+- **Provider outages (503, overload):** may trigger a pre-output attempt through another eligible account, but do not damage any credential's health, rate-limit counters, or quota. An ordinary 403, invalid request or content-policy rejection does not trigger credential failover.
+- **Privacy and identity:** an account pin remains absolute, and continuations and responses with output are never replayed on a different account.
+
+The `/account-rotation` commands operate only on extension-managed pools configured in `account-rotation.json`, not the `account-profiles/` pools managed by the account-manager UI. The `/account-rotation status` command reports a per-pool readiness summary and nonsecret success/failure counters. `/account-rotation reset [pool]` clears in-memory health; `/account-rotation quota <pool> <account> <fraction> [reset-epoch-ms]` lets the user explicitly provide a quota observation. None of these commands reads or prints API keys.
+
 **Privacy warning:** Rotation may send the active conversation and tool results to any included account. Do not mix identities that are not allowed to share that context, such as unrelated personal, client, or organizational accounts. Use separate sessions or a single account when isolation is required.
 
 ## Antigravity Manager

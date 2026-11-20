@@ -93,6 +93,46 @@ function createHarness(configuration: unknown) {
 }
 
 describe("account rotation extension", () => {
+	it("records a completed account request once even when multiple rotation pools share its identity", async () => {
+		const app = createHarness({
+			pools: [
+				{ id: "first", members: [{ provider: "anthropic", model: "sonnet" }] },
+				{ id: "second", members: [{ provider: "anthropic", model: "sonnet" }] },
+			],
+		});
+		await app.handlers.get("message_end")!({
+			type: "message_end",
+			message: { role: "assistant", provider: "anthropic", model: "sonnet", stopReason: "stop" },
+		} as never);
+		const notices: string[] = [];
+		await app.commands.get("account-rotation")!.handler("status", {
+			...app.ctx,
+			hasUI: true,
+			ui: { notify: (message: string) => notices.push(message) },
+		});
+		expect(notices.join("\n").match(/ok 1, failed 0/g)).toHaveLength(2);
+	});
+
+	it("refreshes key availability for status before the first routing attempt", async () => {
+		const previousKey = process.env.PI_TEST_ALT_KEY;
+		delete process.env.PI_TEST_ALT_KEY;
+		try {
+			const app = createHarness(config);
+			await app.handlers.get("session_start")!({ type: "session_start" } as never, app.ctx as never);
+			const notices: string[] = [];
+			await app.commands.get("account-rotation")!.handler("status", {
+				...app.ctx,
+				hasUI: true,
+				ui: { notify: (message: string) => notices.push(message) },
+			});
+			expect(notices.join("\n")).toContain("1/2 ready");
+			expect(notices.join("\n")).toContain("login or model unavailable");
+		} finally {
+			if (previousKey === undefined) delete process.env.PI_TEST_ALT_KEY;
+			else process.env.PI_TEST_ALT_KEY = previousKey;
+		}
+	});
+
 	it("rejects literal key material and duplicate accounts", () => {
 		expect(() =>
 			parseRotationConfiguration({
@@ -277,6 +317,7 @@ describe("account rotation extension", () => {
 			const command = app.commands.get("account-rotation")!;
 			const notices: string[] = [];
 			const ui = {
+				...app.ctx,
 				hasUI: true,
 				ui: {
 					notify: (message: string) => {

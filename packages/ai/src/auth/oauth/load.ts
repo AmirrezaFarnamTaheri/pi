@@ -20,6 +20,7 @@ type OAuthFlowLoaders = {
 	openaiChatGPT: () => OAuthAuth | Promise<OAuthAuth>;
 	githubCopilot: () => OAuthAuth | Promise<OAuthAuth>;
 	openrouter: () => OAuthAuth | Promise<OAuthAuth>;
+	tokendance: () => OAuthAuth | Promise<OAuthAuth>;
 	kimiCoding: () => OAuthAuth | Promise<OAuthAuth>;
 	meta: () => OAuthAuth | Promise<OAuthAuth>;
 	xai: () => OAuthAuth | Promise<OAuthAuth>;
@@ -56,6 +57,11 @@ export const loadGitHubCopilotOAuth = async (): Promise<OAuthAuth> => {
 export const loadOpenRouterOAuth = async (): Promise<OAuthAuth> => {
 	if (bundledLoaders) return bundledLoaders.openrouter();
 	return ((await importOAuthModule("./openrouter.ts")) as { openRouterOAuth: OAuthAuth }).openRouterOAuth;
+};
+
+export const loadTokenDanceOAuth = async (): Promise<OAuthAuth> => {
+	if (bundledLoaders) return bundledLoaders.tokendance();
+	return ((await importOAuthModule("./tokendance.ts")) as { tokenDanceOAuth: OAuthAuth }).tokenDanceOAuth;
 };
 
 export const loadKimiCodingOAuth = async (): Promise<OAuthAuth> => {

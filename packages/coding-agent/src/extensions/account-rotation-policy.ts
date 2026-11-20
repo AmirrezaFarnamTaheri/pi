@@ -27,23 +27,50 @@ export interface RouteInput {
 }
 
 export type RotationStrategy = "round-robin" | "sticky" | "random" | "hybrid";
-export type CredentialFailure = "rate-limit" | "auth" | "overload";
+export type CredentialFailure = "rate-limit" | "quota" | "auth" | "overload";
 
+/**
+ * Recognize failures that are safe to retry on another identity before output.
+ * Adapted from Penguin's distinct credential, quota, throttling and capacity
+ * classifications. A bare 403 is a request rejection, not a bad credential.
+ */
 export function classifyCredentialFailure(message: string): CredentialFailure | undefined {
 	if (/content[ -]?policy|safety|moderation|context[ _-]?(length|window)|invalid request/i.test(message)) {
 		return undefined;
 	}
+	// A number inside a rate/quota detail is not the response status.
+	const status =
+		/(?:^|\bHTTP\s+|\bstatus(?:[ _-]?code)?\s*[:=]?\s*|\bcode\s*[:=]?\s*)(401|403|429|50[0-4]|529)\b/i.exec(
+			message,
+		)?.[1];
 	if (
-		/\b429\b|rate[ -]?limit|usage limit reached|quota[ _-]?(exceeded|exhausted)|insufficient[ _-]?quota|resource[ _-]?exhausted|out of credits/i.test(
+		status === "401" ||
+		/invalid[ _-]?(api[ _-]?)?key|invalid_token|expired_token|token_expired|authentication_error|unauthorized|authentication (failed|error|invalid)/i.test(
+			message,
+		)
+	) {
+		return "auth";
+	}
+	const quota =
+		/insufficient[ _-]?(user[ _-]?)?quota|quota[ _-]?(exceeded|exhausted|reset)|billing[ _-]hard[ _-]limit[ _-]reached|exceeded[ _-]current[ _-]quota|daily quota|out of credits/i.test(
+			message,
+		);
+	if (status === "403" && !quota) return undefined;
+	if (quota) return "quota";
+	if (
+		status === "429" ||
+		/rate[ -_]?limit|usage limit reached|resource[ _-]exhausted|too many requests|tokens per minute|requests per minute/i.test(
 			message,
 		)
 	) {
 		return "rate-limit";
 	}
-	if (/\b401\b|invalid[ _-]?(api[ _-]?)?key|unauthorized|authentication (failed|error|invalid)/i.test(message)) {
-		return "auth";
+	if (
+		["500", "501", "502", "503", "504", "529"].includes(status ?? "") ||
+		/overload(?:ed|ing)?|server busy|service unavailable|capacity exceeded/i.test(message)
+	) {
+		return "overload";
 	}
-	if (/\b50[234]\b|overloaded|service unavailable/i.test(message)) return "overload";
 	return undefined;
 }
 
@@ -55,10 +82,26 @@ const UNITS: Record<string, number> = {
 	day: 86_400_000,
 };
 
-/** Use only explicit reset hints in provider errors; never infer quota from model output. */
+/** Parse explicit provider reset hints, never infer a quota window from a model's output. */
 export function quotaResetDelayMs(error: string): number | undefined {
-	const numeric = /\bretry-after\s*:\s*(\d+)\b/i.exec(error);
-	if (numeric) return Math.min(MAX_COOLDOWN_MS, Number(numeric[1]) * 1_000);
+	const withinLimit = (ms: number): number | undefined =>
+		Number.isFinite(ms) && ms >= 0 ? Math.min(MAX_COOLDOWN_MS, ms) : undefined;
+	const numeric = /\bretry-after\s*:\s*(\d+(?:\.\d+)?)\b/i.exec(error);
+	if (numeric) return withinLimit(Number(numeric[1]) * 1_000);
+
+	const seconds = /\breset_after[:\s]+(\d+(?:\.\d+)?)\s*s?\b/i.exec(error);
+	if (seconds) return withinLimit(Number(seconds[1]) * 1_000);
+
+	// Penguin reports compact reset windows such as "Resets in 1h2m3s".
+	const compact = /\bresets? in ((?:\d+h)?(?:\d+m)?(?:\d+s)?)\b/i.exec(error);
+	if (compact?.[1]) {
+		const parsed = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i.exec(compact[1]);
+		if (parsed) {
+			return withinLimit(
+				(Number(parsed[1] ?? 0) * 3600 + Number(parsed[2] ?? 0) * 60 + Number(parsed[3] ?? 0)) * 1000,
+			);
+		}
+	}
 	const relative =
 		/\b(?:limit will )?reset in ((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:\s*,\s*|\s+and\s+|\s*)?)+)/i.exec(
 			error,
@@ -68,7 +111,7 @@ export function quotaResetDelayMs(error: string): number | undefined {
 	for (const match of relative[1]!.matchAll(/(\d+)\s*(day|hour|minute|second)s?/gi)) {
 		delay += Number(match[1]) * UNITS[match[2]!.toLowerCase()]!;
 	}
-	return delay > 0 && Number.isFinite(delay) ? Math.min(MAX_COOLDOWN_MS, delay) : undefined;
+	return delay > 0 ? withinLimit(delay) : undefined;
 }
 
 export interface RotationChoice {
@@ -85,6 +128,12 @@ export interface RotationStatus extends RotationChoice {
 	enabled: boolean;
 	pinned: boolean;
 	failureCount: number;
+	/** Lifetime counters for this model and account, excluding provider outages. */
+	successfulRequests: number;
+	failedRequests: number;
+	authRejected: boolean;
+	lastSuccessAt?: number;
+	lastFailureAt?: number;
 	healthScore: number;
 	quotaRemaining?: number;
 	lastUsedAt?: number;
@@ -96,8 +145,47 @@ export interface RotationHealth {
 	cooldownUntil?: number;
 	failures?: number;
 	disabled?: boolean;
+	/** A rejected credential stays unavailable until re-login, success, or explicit reset. */
+	authRejected?: boolean;
+	successfulRequests?: number;
+	failedRequests?: number;
+	lastSuccessAt?: number;
+	lastFailureAt?: number;
 	lastUsedAt?: number;
 	quota?: { remaining: number; resetAt?: number };
+}
+
+/** Health summary for one account rotation fleet; never includes credentials. */
+export interface RotationFleetHealth {
+	total: number;
+	ready: number;
+	cooling: number;
+	quotaBlocked: number;
+	authRejected: number;
+	disabled: number;
+	unavailable: number;
+}
+
+/** Partition accounts by their immediate availability, avoiding double-counting. */
+export function summarizeRotationHealth(statuses: readonly RotationStatus[]): RotationFleetHealth {
+	const summary: RotationFleetHealth = {
+		total: statuses.length,
+		ready: 0,
+		cooling: 0,
+		quotaBlocked: 0,
+		authRejected: 0,
+		disabled: 0,
+		unavailable: 0,
+	};
+	for (const status of statuses) {
+		if (!status.available) summary.unavailable++;
+		else if (!status.enabled) summary.disabled++;
+		else if (status.authRejected) summary.authRejected++;
+		else if (status.quotaBlocked) summary.quotaBlocked++;
+		else if (status.readyInMs > 0) summary.cooling++;
+		else summary.ready++;
+	}
+	return summary;
 }
 
 export class RotationPool {
@@ -140,44 +228,70 @@ export class RotationPool {
 		const failed = input.failed;
 		const failedIndex = failed ? this.#indexOf(failed.target) : -1;
 		if (failed && failedIndex < 0) throw new Error("Failed account no longer belongs to this pool");
-		if (input.reason === "retry" && failedIndex >= 0) {
-			const category = classifyCredentialFailure(failed!.errorMessage);
-			if (category && !failed!.hasOutput) {
-				const slot = this.#slot(failedIndex);
-				const count = (slot.failures ?? 0) + 1;
-				slot.failures = count;
-				const exponential = Math.min(MAX_COOLDOWN_MS, this.#cooldownMs * 2 ** Math.min(count - 1, 20));
-				const authDuration = category === "auth" ? Math.max(3_600_000, exponential) : exponential;
-				const explicit = failed!.retryAfterMs;
-				const hinted = quotaResetDelayMs(failed!.errorMessage);
-				const duration = Math.min(
-					MAX_COOLDOWN_MS,
-					Math.max(
-						authDuration,
-						typeof explicit === "number" && Number.isFinite(explicit) && explicit > 0 ? explicit : 0,
-						hinted ?? 0,
-					),
-				);
-				slot.cooldownUntil = now + duration;
-				// A manual pin is an identity boundary, not a selection preference.
-				// Record the failed credential's cooldown, then fail closed without
-				// submitting any part of the request under another account.
-				if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or wait for its cooldown");
-				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
-			}
-			return this.#choice(failedIndex);
-		}
-		if (input.reason === "continuation" || input.reason === "retry") {
+		// Continuations and retries retain the original credential; failure accounting
+		// must still run before rejecting a blocked credential.
+		const retain = (): RotationChoice | undefined => {
 			const previous = this.#indexOf(input.previous);
 			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
-			// Keep a continuation on its original credential, including when manually disabled;
-			// missing authentication must fail closed rather than expose the transcript to another account.
 			if (sticky >= 0) {
 				if (this.#unavailable.has(sticky)) throw new Error("Original account is unavailable during continuation");
 				return this.#choice(sticky);
 			}
 			if (input.previous || input.active) throw new Error("Original account is no longer in this pool");
+			return undefined;
+		};
+		if (input.reason === "continuation") {
+			const original = retain();
+			if (original) return original;
 		}
+		if (input.reason === "retry" && failedIndex >= 0) {
+			const category = classifyCredentialFailure(failed!.errorMessage);
+			if (category && !failed!.hasOutput) {
+				if (category === "overload") {
+					// Retain a continuation's identity even when the provider is overloaded.
+					const original = retain();
+					if (original) return original;
+					// A provider outage is not a credential failure. Try one other
+					// identity without poisoning cooldown, quota, or health metrics.
+					if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or retry later");
+					return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin", failedIndex);
+				}
+				const slot = category === "auth" ? this.#credential(failedIndex) : this.#slot(failedIndex);
+				const requestSlot = this.#slot(failedIndex);
+				const count = (slot.failures ?? 0) + 1;
+				slot.failures = count;
+				requestSlot.failedRequests = (requestSlot.failedRequests ?? 0) + 1;
+				requestSlot.lastFailureAt = now;
+				if (category === "auth") {
+					// Revoked or invalid credentials do not recover on a timer.
+					slot.authRejected = true;
+				} else if (category === "quota") {
+					const resetMs = failed!.retryAfterMs ?? quotaResetDelayMs(failed!.errorMessage);
+					slot.quota = {
+						remaining: 0,
+						...(resetMs === undefined ? {} : { resetAt: now + Math.min(MAX_COOLDOWN_MS, Math.max(0, resetMs)) }),
+					};
+					delete slot.cooldownUntil;
+				} else {
+					const exponential = Math.min(MAX_COOLDOWN_MS, this.#cooldownMs * 2 ** Math.min(count - 1, 20));
+					const explicit = failed!.retryAfterMs ?? quotaResetDelayMs(failed!.errorMessage);
+					const duration = Math.min(MAX_COOLDOWN_MS, Math.max(exponential, explicit ?? 0));
+					slot.cooldownUntil = now + duration;
+				}
+				// A failed continuation is recorded, but must not move to another identity.
+				if (input.previous || input.active)
+					throw new Error("Original account failed during continuation; no cross-account retry");
+				// Manual pinning remains an identity boundary even when a key fails.
+				if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or wait for its cooldown");
+				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
+			}
+			return retain() ?? this.#choice(failedIndex);
+		}
+		if (input.reason === "retry") {
+			const original = retain();
+			if (original) return original;
+		}
+
 		if (this.#pinned >= 0) {
 			if (!this.#eligible(this.#pinned, now)) throw new Error("Pinned account is unavailable; unpin it or wait");
 			return this.#choice(this.#pinned);
@@ -202,21 +316,35 @@ export class RotationPool {
 		return chosen;
 	}
 
-	/** Record a successful physical response to recover the identity's health score. */
-	markSuccess(target: RotationTarget): void {
-		const slot = this.#slot(this.#requireIndex(target));
+	/** A successful physical response proves this model and credential work again. */
+	markSuccess(target: RotationTarget, now = Date.now()): void {
+		const index = this.#requireIndex(target);
+		const slot = this.#slot(index);
 		delete slot.failures;
 		delete slot.cooldownUntil;
-		// A successful request proves a previously reported zero quota is no longer current.
 		if (slot.quota?.remaining === 0) delete slot.quota;
+		slot.successfulRequests = (slot.successfulRequests ?? 0) + 1;
+		slot.lastSuccessAt = now;
+		slot.lastUsedAt = now;
+		const credential = this.#credential(index);
+		delete credential.authRejected;
+		delete credential.failures;
 	}
 
-	/** Called when the user logs in again; keep explicit disable/pin preferences. */
+	/** Re-login replaces the credential, clearing stale health for every model using it. */
 	markReauthenticated(target: RotationTarget): void {
-		const slot = this.#slot(this.#requireIndex(target));
-		delete slot.failures;
-		delete slot.cooldownUntil;
-		delete slot.quota;
+		const index = this.#requireIndex(target);
+		const provider = this.#targets[index]!.provider;
+		const credential = this.#credential(index);
+		delete credential.authRejected;
+		delete credential.failures;
+		const prefix = `[${JSON.stringify(provider)},`;
+		for (const [key, slot] of this.#health) {
+			if (!key.startsWith(prefix)) continue;
+			delete slot.failures;
+			delete slot.cooldownUntil;
+			delete slot.quota;
+		}
 	}
 
 	/** Model/auth discovery may change without resetting cooldowns and manual controls. */
@@ -249,7 +377,10 @@ export class RotationPool {
 	}
 
 	reset(): void {
-		for (let index = 0; index < this.#targets.length; index++) this.#health.delete(this.#key(index));
+		for (let index = 0; index < this.#targets.length; index++) {
+			this.#health.delete(this.#key(index));
+			this.#health.delete(this.#credentialKey(index));
+		}
 		this.#sticky = -1;
 		this.#pinned = -1;
 	}
@@ -264,18 +395,30 @@ export class RotationPool {
 						: Math.max(0, quota.resetAt - now)
 					: 0;
 			const slot = this.#slot(index);
+			const credential = this.#credential(index);
+			const failures = (slot.failures ?? 0) + (credential.failures ?? 0);
 			return {
 				index,
 				target: { ...target },
-				readyInMs: Math.max(0, (slot.cooldownUntil ?? 0) - now, quotaWait),
+				readyInMs: Math.max(
+					0,
+					(slot.cooldownUntil ?? 0) - now,
+					quotaWait,
+					credential.authRejected ? Number.POSITIVE_INFINITY : 0,
+				),
 				available: !this.#unavailable.has(index),
 				quotaBlocked: quota?.remaining === 0,
+				authRejected: credential.authRejected === true,
 				enabled: !slot.disabled,
 				pinned: this.#pinned === index,
-				failureCount: slot.failures ?? 0,
-				healthScore: Math.max(0, 100 - (slot.failures ?? 0) * 20),
+				failureCount: failures,
+				successfulRequests: slot.successfulRequests ?? 0,
+				failedRequests: slot.failedRequests ?? 0,
+				healthScore: Math.max(0, 100 - failures * 20),
 				...(quota ? { quotaRemaining: quota.remaining } : {}),
 				...(slot.lastUsedAt === undefined ? {} : { lastUsedAt: slot.lastUsedAt }),
+				...(slot.lastSuccessAt === undefined ? {} : { lastSuccessAt: slot.lastSuccessAt }),
+				...(slot.lastFailureAt === undefined ? {} : { lastFailureAt: slot.lastFailureAt }),
 			};
 		});
 	}
@@ -288,16 +431,36 @@ export class RotationPool {
 
 	#eligible(index: number, now: number): boolean {
 		const slot = this.#slot(index);
-		if (this.#unavailable.has(index) || slot.disabled || (slot.cooldownUntil ?? 0) > now) return false;
+		if (
+			this.#unavailable.has(index) ||
+			slot.disabled ||
+			this.#credential(index).authRejected ||
+			(slot.cooldownUntil ?? 0) > now
+		) {
+			return false;
+		}
 		return (this.#quotaAt(index, now)?.remaining ?? 1) > 0;
 	}
 
 	#key(index: number): string {
-		return this.#targets[index]!.provider;
+		const target = this.#targets[index]!;
+		// JSON-tuples cannot collide even when a model ID contains punctuation.
+		return JSON.stringify([target.provider, target.model]);
+	}
+
+	#credentialKey(index: number): string {
+		return JSON.stringify([this.#targets[index]!.provider]);
 	}
 
 	#slot(index: number): RotationHealth {
-		const key = this.#key(index);
+		return this.#healthAt(this.#key(index));
+	}
+
+	#credential(index: number): RotationHealth {
+		return this.#healthAt(this.#credentialKey(index));
+	}
+
+	#healthAt(key: string): RotationHealth {
 		let slot = this.#health.get(key);
 		if (!slot) {
 			slot = {};
@@ -323,11 +486,11 @@ export class RotationPool {
 		return { index, target: { ...this.#targets[index]! } };
 	}
 
-	#pick(start: number, now: number, advance: boolean, strategy: RotationStrategy): RotationChoice {
+	#pick(start: number, now: number, advance: boolean, strategy: RotationStrategy, exclude = -1): RotationChoice {
 		const eligible: number[] = [];
 		for (let offset = 0; offset < this.#targets.length; offset++) {
 			const index = (start + offset) % this.#targets.length;
-			if (this.#eligible(index, now)) eligible.push(index);
+			if (index !== exclude && this.#eligible(index, now)) eligible.push(index);
 		}
 		if (eligible.length === 0) throw new Error("All account credentials are cooling down, exhausted, or disabled");
 		let index = eligible[0]!;
