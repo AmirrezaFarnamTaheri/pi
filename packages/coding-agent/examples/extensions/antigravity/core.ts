@@ -638,6 +638,7 @@ export class AgyBridge {
 			if (failure === "auth") throw new Error("Antigravity CLI authentication failed; sign in through agy itself");
 			throw new Error("Antigravity CLI failed or returned empty output; no automatic replay");
 		}
+		if (attempts.length === 0) throw new Error("Requested Antigravity models are cooling down after a quota limit");
 		throw new Error("No eligible Antigravity models completed the request; models may be rate-limited");
 	}
 }

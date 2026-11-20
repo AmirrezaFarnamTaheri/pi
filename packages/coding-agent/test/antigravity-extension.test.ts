@@ -156,8 +156,9 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 		);
 		await expect(bridge.delegate({ prompt: "one", cwd })).rejects.toThrow(/partial output/i);
 		expect(count).toBe(1);
-		await expect(bridge.delegate({ prompt: "two", cwd, model: "Gemini 3 Flash" })).rejects.toThrow(/partial output/i);
-		expect(count).toBe(2);
+		// The partial response is never replayed, and its 429 still cools the model.
+		await expect(bridge.delegate({ prompt: "two", cwd, model: "Gemini 3 Flash" })).rejects.toThrow(/cooling down/i);
+		expect(count).toBe(1);
 	});
 
 	it("keeps unknown-model cooldowns scoped to their own conversations", async () => {
