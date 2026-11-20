@@ -15,15 +15,18 @@ import { type BashToolOutput, createBashTool, createLocalBashOperations } from "
 import { ManualBackgroundController } from "../src/core/tools/manual-background.ts";
 
 const dirs: string[] = [];
-const jobs: Array<{ jobId: string; cwd: string }> = [];
+const jobs: Array<{ jobId: string; cwd: string; synthetic?: boolean }> = [];
 
 afterEach(async () => {
 	for (const job of jobs.splice(0)) {
 		try {
-			await createBackgroundJobTool(job.cwd).execute("cleanup", { action: "stop", jobId: job.jobId });
-			if ((await backgroundJobStatus(job.jobId, job.cwd)).status !== "running") {
-				await rm(backgroundJobFolder(job.jobId), { recursive: true, force: true });
+			// Synthetic records have no worker: stopping one waits for startup timeout.
+			// Real jobs must go through supervised cancellation before removing state.
+			if (!job.synthetic) {
+				await createBackgroundJobTool(job.cwd).execute("cleanup", { action: "stop", jobId: job.jobId });
+				if ((await backgroundJobStatus(job.jobId, job.cwd)).status === "running") continue;
 			}
+			await rm(backgroundJobFolder(job.jobId), { recursive: true, force: true });
 		} catch {
 			// Completed jobs and already-deleted records need no further cancellation.
 		}
@@ -127,7 +130,7 @@ describe("background_job", () => {
 			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() }),
 		);
 		await writeFile(join(folder, "output.log"), "A€B");
-		jobs.push({ jobId, cwd });
+		jobs.push({ jobId, cwd, synthetic: true });
 		const first = await tailBackgroundJob(jobId, cwd, 0, 2);
 		expect(first).toMatchObject({ text: "A", cursor: 1, more: true });
 		const second = await tailBackgroundJob(jobId, cwd, first.cursor, 4);
@@ -143,7 +146,7 @@ describe("background_job", () => {
 			join(folder, "owner.json"),
 			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 60_000 }),
 		);
-		jobs.push({ jobId, cwd });
+		jobs.push({ jobId, cwd, synthetic: true });
 		const stopped = await stopBackgroundJob(jobId, cwd);
 		expect(stopped.status).toBe("lost");
 		expect(await import("node:fs/promises").then((fs) => fs.readFile(join(folder, "cancel"), "utf8"))).toBe("");
@@ -160,7 +163,7 @@ describe("background_job", () => {
 			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 20_000 }),
 			{ mode: 0o600 },
 		);
-		jobs.push({ jobId, cwd });
+		jobs.push({ jobId, cwd, synthetic: true });
 		expect(await backgroundJobStatus(jobId, cwd)).toMatchObject({ status: "lost" });
 	});
 
@@ -211,7 +214,7 @@ describe("background supervisor restart recovery", () => {
 			}),
 			{ mode: 0o600 },
 		);
-		jobs.push({ jobId, cwd });
+		jobs.push({ jobId, cwd, synthetic: true });
 		expect(await backgroundJobStatus(jobId, cwd)).toMatchObject({ status: "lost" });
 	});
 });
