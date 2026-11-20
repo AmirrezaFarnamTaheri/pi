@@ -100,6 +100,36 @@ describe("Penguin per-model credential health in Pi rotation", () => {
 		expect(geminiPool.status(101)[0]?.lastFailureAt).toBeUndefined();
 	});
 
+	it("records authentication rejection on the original continuation identity without replaying on another account", () => {
+		const pool = new RotationPool([claude, backup], 1_000);
+		expect(() =>
+			pool.choose({
+				reason: "retry",
+				previous: claude,
+				active: claude,
+				now: 100,
+				failed: { target: claude, errorMessage: "HTTP 401 invalid_api_key", hasOutput: false },
+			}),
+		).toThrow(/original account failed during continuation/i);
+		expect(pool.status(101)[0]).toMatchObject({ authRejected: true, failedRequests: 1 });
+		expect(pool.status(101)[1]).toMatchObject({ authRejected: false, failedRequests: 0 });
+		expect(pool.choose({ reason: "user", now: 102 }).target).toEqual(backup);
+	});
+
+	it("marks a continuation rate limit while blocking cross-account retry", () => {
+		const pool = new RotationPool([claude, backup], 1_000);
+		expect(() =>
+			pool.choose({
+				reason: "retry",
+				previous: claude,
+				now: 100,
+				failed: { target: claude, errorMessage: "HTTP 429 Too Many Requests", hasOutput: false },
+			}),
+		).toThrow(/original account failed during continuation/i);
+		expect(pool.status(101)[0]).toMatchObject({ readyInMs: 999, failedRequests: 1 });
+		expect(pool.status(101)[1]).toMatchObject({ readyInMs: 0, failedRequests: 0 });
+	});
+
 	it("holds a tool continuation on its original identity after an empty overload", () => {
 		const pool = new RotationPool([claude, backup], 1_000);
 		const result = pool.choose({

@@ -228,21 +228,29 @@ export class RotationPool {
 		const failed = input.failed;
 		const failedIndex = failed ? this.#indexOf(failed.target) : -1;
 		if (failed && failedIndex < 0) throw new Error("Failed account no longer belongs to this pool");
-		if (input.reason === "continuation" || input.reason === "retry") {
+		// Continuations and retries retain the original credential; failure accounting
+		// must still run before rejecting a blocked credential.
+		const retain = (): RotationChoice | undefined => {
 			const previous = this.#indexOf(input.previous);
 			const sticky = previous >= 0 ? previous : this.#indexOf(input.active);
-			// Keep a continuation on its original credential, including when manually disabled;
-			// missing authentication must fail closed rather than expose the transcript to another account.
 			if (sticky >= 0) {
 				if (this.#unavailable.has(sticky)) throw new Error("Original account is unavailable during continuation");
 				return this.#choice(sticky);
 			}
 			if (input.previous || input.active) throw new Error("Original account is no longer in this pool");
+			return undefined;
+		};
+		if (input.reason === "continuation") {
+			const original = retain();
+			if (original) return original;
 		}
 		if (input.reason === "retry" && failedIndex >= 0) {
 			const category = classifyCredentialFailure(failed!.errorMessage);
 			if (category && !failed!.hasOutput) {
 				if (category === "overload") {
+					// Retain a continuation's identity even when the provider is overloaded.
+					const original = retain();
+					if (original) return original;
 					// A provider outage is not a credential failure. Try one other
 					// identity without poisoning cooldown, quota, or health metrics.
 					if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or retry later");
@@ -270,11 +278,17 @@ export class RotationPool {
 					const duration = Math.min(MAX_COOLDOWN_MS, Math.max(exponential, explicit ?? 0));
 					slot.cooldownUntil = now + duration;
 				}
+				// A failed continuation is recorded, but must not move to another identity.
+				if (input.previous || input.active) throw new Error("Original account failed during continuation; no cross-account retry");
 				// Manual pinning remains an identity boundary even when a key fails.
 				if (this.#pinned >= 0) throw new Error("Pinned account failed; unpin it or wait for its cooldown");
 				return this.#pick((failedIndex + 1) % this.#targets.length, now, true, "round-robin");
 			}
-			return this.#choice(failedIndex);
+			return retain() ?? this.#choice(failedIndex);
+		}
+		if (input.reason === "retry") {
+			const original = retain();
+			if (original) return original;
 		}
 
 		if (this.#pinned >= 0) {
