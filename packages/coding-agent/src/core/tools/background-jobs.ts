@@ -232,5 +232,8 @@ export async function stopBackgroundJob(jobId: string, cwd: string): Promise<Bac
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
+	// An inferred loss is not terminal: publish cancellation and return without
+	// waiting on a supervisor that may no longer exist or be suspended.
+	if (current.status === "lost") return current;
 	return waitBackgroundJob(jobId, cwd, 10_000);
 }

@@ -144,7 +144,8 @@ describe("background_job", () => {
 			JSON.stringify({ version: 1, cwd: resolve(cwd), createdAt: Date.now() - 60_000 }),
 		);
 		jobs.push({ jobId, cwd });
-		await stopBackgroundJob(jobId, cwd);
+		const stopped = await stopBackgroundJob(jobId, cwd);
+		expect(stopped.status).toBe("lost");
 		expect(await import("node:fs/promises").then((fs) => fs.readFile(join(folder, "cancel"), "utf8"))).toBe("");
 	});
 
