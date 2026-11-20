@@ -172,7 +172,7 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					return conversation === "flash-conversation"
 						? { stdout: "", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
 						: successful("healthy session");
-			},
+				},
 			},
 		);
 		await expect(bridge.delegate({ prompt: "one", cwd, conversationId: "flash-conversation" })).rejects.toThrow(
@@ -194,10 +194,10 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					if (req.args.includes("Flash")) {
 						now += 100_000;
 					return { stdout: "", stderr: "HTTP 429 Resets in 3m", exitCode: 1 };
-				}
-				proCalls++;
+					}
+					proCalls++;
 					return successful("ok");
-			},
+				},
 			},
 		);
 		const result = await bridge.delegate({ prompt: "first", cwd });
@@ -212,10 +212,10 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 			{
 				exec: async (req) => {
 					if (req.args[0] === "models") return successful("Flash\nPro");
-				calls++;
-				await writeFile(req.args[req.args.indexOf("--log-file") + 1]!, "RESOURCE_EXHAUSTED (code 429)");
+					calls++;
+					await writeFile(req.args[req.args.indexOf("--log-file") + 1]!, "RESOURCE_EXHAUSTED (code 429)");
 					return { stdout: "", stderr: "", exitCode: null, timedOut: true };
-			},
+				},
 			},
 		);
 		await expect(bridge.delegate({ prompt: "timeout", cwd })).rejects.toThrow(/timed out/i);
@@ -234,7 +234,7 @@ describe("Antigravity CLI bridge: execution and failover", () => {
 					return model === "Flash"
 						? { stdout: "partial", stderr: "HTTP 429 Resets in 5m", exitCode: 1 }
 						: successful("Pro answer");
-			},
+				},
 			},
 		);
 		await expect(bridge.delegate({ prompt: "one", cwd })).rejects.toThrow(/partial output/i);
