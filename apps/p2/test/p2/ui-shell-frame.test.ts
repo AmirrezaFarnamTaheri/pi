@@ -8,12 +8,13 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@p2/app/v1";
+import { Familiar } from "../../plugins/familiar/contract.ts";
 import { Models } from "../../plugins/models/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { defineFacet } from "../../src/runtime/chord.ts";
 import { RequestResolvers } from "../../src/runtime/server.ts";
 import { Browser, browserTests } from "./browser.ts";
-import { type Fixture, holdIn, poll, startFixture } from "./helpers.ts";
+import { type Fixture, holdIn, poll, startFixture, until } from "./helpers.ts";
 
 const BRAIN = "/pi/acme/11111111-0000-4000-8000-000000000000";
 
@@ -131,23 +132,56 @@ describe("framed by the Radius shell", { skip: !browserTests }, () => {
 		await poll(() => inApp<boolean>(`Boolean(${row})`), 30_000, "the session's row");
 		assert.equal(await inApp<string>(`${row}.href`), `${shellOrigin}${BRAIN}/s/${session.id}`);
 
-		// Where the app is before the step: its start page, or the session a plugin shows there (the Familiar's).
-		await poll(async () => (await log()).some((message) => message.type === "location"), 30_000, "a report");
-		const start = (await log()).filter((message) => message.type === "location").at(-1)!.path!;
+		// Home is an asynchronous Familiar session, not a stable `/` screen.
+		// Wait for its actual destination before taking the history baseline;
+		// otherwise a late home replace races with our session-row click.
+		const familiar = await holdIn(fixture.browser(), Familiar, {}, "owner");
+		const familiarId = await until(familiar.session, (id) => typeof id === "string");
+		familiar.release();
+		await poll(
+			() => inApp<boolean>(`location.pathname.startsWith(${JSON.stringify(`/s/${familiarId}`)})`),
+			30_000,
+			"the Familiar home route",
+		);
+		const start = await inApp<string>("location.pathname");
 		const shellUrl = (path: string) => (path === "/" ? BRAIN : `${BRAIN}${path}`);
 		await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
 
 		// A plain click acts in the app; the shell's URL follows, one history entry for the step.
 		const entries = await browser.evaluate<number>("history.length");
-		await inApp(`${row}.click()`);
+		// A synthetic Element.click() gives Chrome no user activation. Chrome may then
+		// skip its history entry when Back is pressed. Send a real pointer click.
+		const target = await inApp<{ x: number; y: number }>(
+			`(() => { const r=${row}.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2}; })()`,
+		);
+		const frame = await browser.evaluate<{ x: number; y: number }>(
+			"(() => { const r=document.querySelector('iframe').getBoundingClientRect(); return {x:r.left,y:r.top}; })()",
+		);
+		await browser.clickPoint(frame.x + target.x, frame.y + target.y);
 		await browser.wait(`location.pathname === ${JSON.stringify(`${BRAIN}/s/${session.id}`)}`);
 		assert.equal(await browser.evaluate<number>("history.length"), entries + 1);
 
 		// The browser's Back returns the app to where it was, and the shell's URL with it; Forward again.
-		await browser.evaluate("history.back()");
-		await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
+		// The app owns the navigation entry in the child frame; ask that frame
+		// to traverse its history, then verify the shell mirrors the resulting URL.
+		await inApp("history.back()");
+		try {
+			await browser.wait(`location.pathname === ${JSON.stringify(shellUrl(start))}`);
+		} catch (error) {
+			// Preserve browser/child frame history diagnostics when a history
+			// intervention or a frame transition prevents the expected Back.
+			const shellState = await browser.evaluate<unknown>(
+				"({path:location.pathname, length:history.length, state:history.state, messages:shellLog})",
+			);
+			const frameState = await inApp<unknown>(
+				"({path:location.pathname, length:history.length, state:history.state})",
+			).catch((cause) => ({ error: String(cause) }));
+			throw new Error(`Shell Back did not restore ${start}: ${JSON.stringify({ shellState, frameState })}`, {
+				cause: error,
+			});
+		}
 		assert.equal(await inApp<string>("location.pathname"), start);
-		await browser.evaluate("history.forward()");
+		await inApp("history.forward()");
 		await browser.wait(`location.pathname === ${JSON.stringify(`${BRAIN}/s/${session.id}`)}`);
 		// Only addresses went to the shell, and only to its origin (else the stand-in would not have seen them).
 		assert.ok((await log()).every((message) => message.type === "ready" || message.type === "location"));

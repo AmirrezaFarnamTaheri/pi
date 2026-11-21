@@ -8,7 +8,7 @@ import { BACKGROUND_CONTEXT } from "@p2/app/v1";
 import { Chat } from "../../plugins/chat/contract.ts";
 import { Sessions } from "../../plugins/sessions/contract.ts";
 import { Sharing } from "../../plugins/sharing/contract.ts";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER, setComposer } from "./browser.ts";
 import { type Fixture, holdIn, http, startFixture, until } from "./helpers.ts";
 
 const setInput = (selector: string, value: string) =>
@@ -19,6 +19,38 @@ const cookieOf = (headers: Record<string, string | string[] | undefined>, name: 
 		.flat()
 		.map((cookie) => cookie.split(";")[0]!)
 		.find((cookie) => cookie.startsWith(`${name}=`));
+
+it("opens a redirect's final document without waiting for the superseded loader", async () => {
+	// Owner sign-in replaces /owner with / before the first document is necessarily loaded.
+	const loaded = new Set(["redirected"]);
+	let frames = 0;
+	const browser = Object.assign(Object.create(Browser.prototype), {
+		loaded,
+		call: async (method: string): Promise<unknown> => {
+			if (method === "Page.getFrameTree")
+				return { frameTree: { frame: { loaderId: frames++ === 0 ? "previous" : "redirected" } } };
+			if (method === "Page.navigate") return { loaderId: "superseded" };
+			throw new Error(`Unexpected DevTools command: ${method}`);
+		},
+	}) as Browser;
+	const open = browser.open("http://127.0.0.1/owner#token");
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let openedOnRedirect = false;
+	try {
+		openedOnRedirect = await Promise.race([
+			open.then(() => true),
+			new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), 300);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		// Keep the original implementation's polling from hanging on failure.
+		loaded.add("superseded");
+		await open;
+	}
+	assert.equal(openedOnRedirect, true, "the final document is loaded before the initial one");
+});
 
 describe("share links on loopback", () => {
 	let fixture: Fixture;
@@ -104,7 +136,7 @@ describe("share links on loopback", () => {
 			const owner = await Browser.start();
 			const viewer = await Browser.start();
 			const writer = await Browser.start();
-			const ownerUi = `document.querySelector('.composer textarea') && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
+			const ownerUi = `document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`;
 			try {
 				// The owner's browser opens a sign-in link on the host, as the server prints at startup.
 				const { token } = JSON.parse(
@@ -129,7 +161,7 @@ describe("share links on loopback", () => {
 					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector('.subagent-bar')?.textContent.includes('Joined as Incognito · read-only') && !document.querySelector('.offline')`,
 				);
 				assert.equal(
-					await viewer.evaluate<boolean>(`Boolean(document.querySelector('.composer textarea'))`),
+					await viewer.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(COMPOSER)}))`),
 					false,
 				);
 				const denied = await viewer.evaluate<number[]>(
@@ -142,7 +174,7 @@ describe("share links on loopback", () => {
 					`document.querySelector('nav[aria-label="Shared session"]') && !document.querySelector('.offline')`,
 				);
 				assert.equal(
-					await viewer.evaluate<boolean>(`Boolean(document.querySelector('.composer textarea'))`),
+					await viewer.evaluate<boolean>(`Boolean(document.querySelector(${JSON.stringify(COMPOSER)}))`),
 					false,
 				);
 
@@ -152,9 +184,9 @@ describe("share links on loopback", () => {
 				await writer.evaluate(setInput("#name", "Writer"));
 				await writer.click("#join button");
 				await writer.wait(
-					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector('.composer textarea') && !document.querySelector('.offline')`,
+					`document.querySelector('nav[aria-label="Shared session"]') && document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`,
 				);
-				await writer.evaluate(setInput(".composer textarea", "hello from the writer"));
+				await writer.evaluate(setComposer("hello from the writer"));
 				await writer.click("button[aria-label=Send]");
 				const chat = await holdIn(fixture.browser(), Chat, { session, conversation: 1 }, "participant");
 				await until(chat.view, (value) => JSON.stringify(value?.entries ?? []).includes("hello from the writer"));

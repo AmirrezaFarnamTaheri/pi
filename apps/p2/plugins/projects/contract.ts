@@ -15,6 +15,20 @@ export type ProjectPlace = Static<typeof ProjectPlaceSchema>;
 export const ProjectSchema = obj({ name: str(), places: arr(ProjectPlaceSchema) });
 export type Project = Static<typeof ProjectSchema>;
 
+/** The glyph seed of a project: its first place, or its name when no place exists. */
+export function projectSeed(project: Project): string {
+	return project.places[0]?.path ?? project.name;
+}
+
+/** The project glyph of an environment and working directory, or the place itself. */
+export function placeSeed(projects: readonly Project[], env: string | null, cwd: string, member?: string): string {
+	const project =
+		projects.find((each) => each.name === member) ??
+		projects.find((each) => each.places.some((place) => place.env === env && below(cwd, place.path) !== undefined));
+	return project ? projectSeed(project) : cwd;
+}
+
+
 /** An archived project: it and the sessions it had then are in the Archive until it is restored. */
 export const ArchivedProjectSchema = obj({ name: str(), places: arr(ProjectPlaceSchema), archivedAt: num() });
 export type ArchivedProject = Static<typeof ArchivedProjectSchema>;

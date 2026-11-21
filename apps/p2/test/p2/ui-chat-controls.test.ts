@@ -38,7 +38,7 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			await browser.evaluate<string[]>(
 				`[...document.querySelectorAll('.topbar>button')].map(e=>e.getAttribute('aria-label'))`,
 			),
-			["Sessions", "Annotate", "Terminal", "Workspace files and changes", "Session options"],
+			["Sessions", "Prompt anywhere", "Annotate", "Terminal", "Workspace files and changes", "Session options"],
 		);
 		await browser.click('button[aria-label="Model"]');
 		await browser.wait(`document.querySelector('.command-menu input')?.placeholder==='Search models…'`);
@@ -197,7 +197,14 @@ describe("chat control parity", { skip: !browserTests }, () => {
 			readdirSync(join(fixture.dataDir, "uploads", pasted))
 				.map((file) => file.slice(37))
 				.sort();
-		await poll(() => existsSync(join(fixture.dataDir, "uploads", pasted)) && uploaded().length === 2);
-		assert.deepEqual(uploaded(), ["image.png", "pasted-image.png"]);
+		const expected = ["image.png", "pasted-image.png"];
+		// Materialization writes <name>.<pid>.partial before the atomic rename. Two
+		// directory entries do not mean both uploaded files have finished arriving.
+		await poll(
+			() =>
+				existsSync(join(fixture.dataDir, "uploads", pasted)) &&
+				JSON.stringify(uploaded()) === JSON.stringify(expected),
+		);
+		assert.deepEqual(uploaded(), expected);
 	});
 });

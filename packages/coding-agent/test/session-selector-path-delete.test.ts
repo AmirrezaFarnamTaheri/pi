@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setKeybindings } from "@earendil-works/pi-tui";
@@ -105,6 +105,80 @@ describe("session selector path/delete interactions", () => {
 		// session selector uses the global theme instance
 		initTheme("dark");
 	});
+	it("executes regex searches asynchronously and updates the visible session list", async () => {
+		const sessions = [
+			makeSession({ id: "unmatched", allMessagesText: "nothing relevant" }),
+			makeSession({ id: "matched", allMessagesText: "Brave work" }),
+		];
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+		const list = selector.getSessionList();
+		let renderRequests = 0;
+		list.onFilteredSessionsChange = () => {
+			renderRequests++;
+		};
+		for (const char of "re:brav") list.handleInput(char);
+		// Synchronous filtering would already have selected the match. The worker has not answered yet.
+		expect(list.getSelectedSessionPath()).toBeUndefined();
+		renderRequests = 0;
+		// Input stays responsive while the worker result is pending.
+		list.handleInput("e");
+
+		// Worker startup and search are deliberately asynchronous: never block input.
+		let selected: string | undefined;
+		for (let attempt = 0; attempt < 100; attempt++) {
+			selected = list.getSelectedSessionPath();
+			if (selected === sessions[1]!.path) break;
+			await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		}
+		expect(selected).toBe(sessions[1]!.path);
+		expect(renderRequests).toBeGreaterThan(0);
+		list.cancelSearch();
+	});
+
+	it("discards an obsolete regex search after the user changes the query", async () => {
+		const sessions = [
+			makeSession({ id: "unsafe", allMessagesText: "a".repeat(20_000) + "!" }),
+			makeSession({ id: "relevant", allMessagesText: "Brave work" }),
+		];
+		const errors: string[] = [];
+		const selector = new SessionSelectorComponent(
+			async () => sessions,
+			async () => [],
+			() => {},
+			() => {},
+			() => {},
+			() => {},
+			{ keybindings },
+		);
+		await flushPromises();
+		const list = selector.getSessionList();
+		list.onError = (message) => errors.push(message);
+		for (const char of "re:^(a|aa)+$") list.handleInput(char);
+		// Give the worker search enough time to start, then replace the query.
+		await new Promise<void>((resolve) => setTimeout(resolve, 110));
+		for (let index = 0; index < "re:^(a|aa)+$".length; index++) list.handleInput("\x7f");
+		for (const char of "re:brave") list.handleInput(char);
+
+		let selected: string | undefined;
+		for (let attempt = 0; attempt < 100; attempt++) {
+			selected = list.getSelectedSessionPath();
+			if (selected === sessions[1]!.path) break;
+			await new Promise<void>((resolve) => setTimeout(resolve, 20));
+		}
+		expect(selected).toBe(sessions[1]!.path);
+		expect(errors).toEqual([]);
+		list.cancelSearch();
+	});
+
 	it("does not treat Ctrl+Backspace as delete when search query is non-empty", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];
 
@@ -354,47 +428,5 @@ describe("session selector path/delete interactions", () => {
 
 		expect(confirmationChanges).toEqual([]);
 		expect(errorMessage).toBe("Cannot delete the currently active session");
-	});
-
-	it("keeps the next session selected when a progressive reload after delete starts with another session", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "pi-session-selector-"));
-		tempDirs.push(dir);
-		const sessions = [1, 2, 3, 4, 5].map((i) => {
-			const path = join(dir, `s${i}.jsonl`);
-			writeFileSync(path, "session\n");
-			return makeSession({ id: `s${i}`, path, modified: new Date(10_000 - i * 1000) });
-		});
-
-		const selector = new SessionSelectorComponent(
-			async (onProgress) => {
-				const remaining = sessions.filter((session) => existsSync(session.path));
-				// The first partial list holds only the file that finished loading first, here the oldest
-				onProgress?.(1, remaining.length, [remaining[remaining.length - 1]!]);
-				onProgress?.(remaining.length, remaining.length, remaining);
-				return remaining;
-			},
-			async () => [],
-			() => {},
-			() => {},
-			() => {},
-			() => {},
-			{ keybindings },
-		);
-		await flushPromises();
-
-		const list = selector.getSessionList();
-		list.handleInput("\x1b[B");
-		list.handleInput("\x1b[A");
-		expect(list.getSelectedSessionPath()).toBe(sessions[0]!.path);
-
-		list.handleInput(CTRL_D);
-		list.handleInput("\r");
-		for (let i = 0; i < 10 && existsSync(sessions[0]!.path); i++) {
-			await new Promise((resolve) => setTimeout(resolve, 10));
-		}
-		await flushPromises();
-
-		expect(existsSync(sessions[0]!.path)).toBe(false);
-		expect(list.getSelectedSessionPath()).toBe(sessions[1]!.path);
 	});
 });

@@ -262,7 +262,11 @@ export async function radiusFixture(
 ) {
 	const directory = await mkdtemp(join(tmpdir(), "p2-radius-"));
 	const radius = await fakeRadius(relay);
+	let closeServer: (() => Promise<unknown>) | undefined;
+	// Node runs after hooks in registration order: stop the server before
+	// deleting files its worker may still be writing.
 	t.after(async () => {
+		await closeServer?.();
 		await radius.close();
 		await rm(directory, { recursive: true, force: true });
 	});
@@ -307,7 +311,7 @@ export async function radiusFixture(
 		web: options.web ?? false,
 		facets: [{ name: "radius-probe", facet: probe }],
 	});
-	t.after(() => server.close());
+	closeServer = () => server.close();
 	await radius.hostReady;
 	// The natives the radius and ports plugins contribute once open (their objects live from the load).
 	const natives = await Promise.all([

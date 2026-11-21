@@ -32,6 +32,8 @@ export const ThreadBindingSchema = obj({
 	conversation: int({ minimum: 1 }),
 	name: str(),
 	cursor: union([str(), nul()]),
+	/** Durable pagination checkpoint for bounded reconnect scanning. */
+	catchUpScan: opt(str()),
 });
 
 /** One channel linked to one session, through one bot. A session has at most one, a channel at most one. */
@@ -44,10 +46,14 @@ export const BindingSchema = obj({
 	guildName: str(),
 	session: str(),
 	wake: WakeSchema,
-	/** The last Discord message delivered (null: none yet, the next batch starts with the newest 50). */
+	/** The last Discord message delivered (null: none yet). */
 	cursor: union([str(), nul()]),
+	/** Last message inspected for reconnect mentions, independent of delivery cursor. */
+	catchUpScan: opt(str()),
 	threads: record(ThreadBindingSchema),
 	createdAt: num(),
+	/** Distinguishes successive links of the same channel, including rapid unlink/relink. */
+	generation: opt(str()),
 });
 export type Binding = Static<typeof BindingSchema>;
 
@@ -61,6 +67,15 @@ export const PendingSchema = obj({
 	messageId: str(),
 	submissionId: num(),
 	since: num(),
+	/** Set at delivery to reject replies from a previous incarnation of a link. */
+	linkGeneration: opt(str()),
+	/** The first Discord message not yet confirmed posted; persisted across retries. */
+	nextPost: opt(int({ minimum: 0 })),
+	/** Number of consecutive transient failures and the earliest next attempt. */
+	retryCount: opt(int({ minimum: 0 })),
+	retryAt: opt(num()),
+	/** Keep attachment grouping stable across retried multi-part replies. */
+	uploadLimit: opt(num()),
 });
 export type Pending = Static<typeof PendingSchema>;
 

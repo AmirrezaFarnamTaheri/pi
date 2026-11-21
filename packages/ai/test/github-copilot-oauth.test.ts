@@ -42,9 +42,10 @@ function stubGitHubCopilotLoginFetch(options: {
 	models: () => Response;
 	policy?: (modelId: string) => Response;
 }): void {
-	const fetchMock = vi.fn(async (input: string | URL | Request): Promise<Response> => {
+	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 		const url = getUrl(input);
 		if (url.endsWith("/login/device/code")) {
+			expect(init?.headers).toMatchObject({ "User-Agent": "GitHubCopilotChat/0.43.0" });
 			return jsonResponse({
 				device_code: "device-code",
 				user_code: "ABCD-EFGH",
@@ -54,6 +55,7 @@ function stubGitHubCopilotLoginFetch(options: {
 			});
 		}
 		if (url.endsWith("/login/oauth/access_token")) {
+			expect(init?.headers).toMatchObject({ "User-Agent": "GitHubCopilotChat/0.43.0" });
 			return jsonResponse({ access_token: "ghu_refresh_token" });
 		}
 		if (url.includes("/copilot_internal/v2/token")) {
@@ -115,6 +117,9 @@ async function refreshGitHubCopilotModelsForTest(
 		if (url === modelsUrl) {
 			expect(init?.headers).toMatchObject({
 				Authorization: `Bearer ${accessToken}`,
+				"User-Agent": "GitHubCopilotChat/0.43.0",
+				"Editor-Version": "vscode/1.146.0",
+				"Editor-Plugin-Version": "copilot-chat/0.43.0",
 			});
 			return jsonResponse({ data });
 		}

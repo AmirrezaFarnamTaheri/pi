@@ -116,7 +116,10 @@ describe("LoginDialogComponent OAuth prompts", () => {
 		const lines = renderDialog(dialog);
 		expect(lines.join("\n")).toContain("Paste callback URL:");
 		expect(lines.join("\n")).toContain("Second prompt:");
-		expect(countRenderedValue(lines, "callback-value")).toBe(1);
+		// Manual OAuth callback responses are credentials. Keep the completed
+		// prompt but never expose the previously submitted value in scrollback.
+		expect(countRenderedValue(lines, "callback-value")).toBe(0);
+		expect(lines.join("\\n")).toContain("[secret submitted]");
 		expect(countRenderedValue(lines, "second-secret-demo")).toBe(1);
 
 		dialog.handleInput("\n");

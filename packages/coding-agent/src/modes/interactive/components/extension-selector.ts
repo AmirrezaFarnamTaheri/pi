@@ -14,6 +14,10 @@ export interface ExtensionSelectorOptions {
 	timeout?: number;
 	onToggleToolsExpanded?: () => void;
 	description?: string;
+	/** Optional contextual shortcuts for the currently highlighted row. */
+	onShortcut?: (keyData: string, selectedOption: string | undefined) => boolean;
+	/** Non-selectable, visually separated section headings before these option indices. */
+	sectionLabels?: Readonly<Record<number, string>>;
 }
 
 export class ExtensionSelectorComponent extends Container {
@@ -26,6 +30,8 @@ export class ExtensionSelectorComponent extends Container {
 	private baseTitle: string;
 	private countdown: CountdownTimer | undefined;
 	private onToggleToolsExpanded: (() => void) | undefined;
+	private onShortcut: ExtensionSelectorOptions["onShortcut"];
+	private sectionLabels: ExtensionSelectorOptions["sectionLabels"];
 
 	constructor(
 		title: string,
@@ -40,6 +46,8 @@ export class ExtensionSelectorComponent extends Container {
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
 		this.onToggleToolsExpanded = opts?.onToggleToolsExpanded;
+		this.onShortcut = opts?.onShortcut;
+		this.sectionLabels = opts?.sectionLabels;
 		this.baseTitle = title;
 
 		this.addChild(new DynamicBorder());
@@ -82,6 +90,14 @@ export class ExtensionSelectorComponent extends Container {
 		this.updateList();
 	}
 
+	/** Refresh checkbox/status text without closing the overlay or resetting keyboard focus. */
+	setOptions(options: string[], sectionLabels?: Readonly<Record<number, string>>): void {
+		this.options = options;
+		this.sectionLabels = sectionLabels;
+		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, options.length - 1));
+		this.updateList();
+	}
+
 	private updateList(): void {
 		this.listContainer.clear();
 
@@ -94,6 +110,11 @@ export class ExtensionSelectorComponent extends Container {
 		const endIndex = Math.min(startIndex + maxVisible, this.options.length);
 
 		for (let i = startIndex; i < endIndex; i++) {
+			const heading = this.sectionLabels?.[i];
+			if (heading) {
+				// A visual boundary, not another selectable menu option.
+				this.listContainer.addChild(new Text(theme.fg("border", `  ───── ${heading} ─────`), 1, 0));
+			}
 			const isSelected = i === this.selectedIndex;
 			const text = isSelected
 				? theme.fg("accent", "→ ") + theme.fg("accent", this.options[i])
@@ -117,6 +138,8 @@ export class ExtensionSelectorComponent extends Container {
 		} else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
 			this.selectedIndex = Math.min(this.options.length - 1, this.selectedIndex + 1);
 			this.updateList();
+		} else if (this.onShortcut?.(keyData, this.options[this.selectedIndex])) {
+			// The owner handled this selection without changing its menu.
 		} else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n") {
 			const selected = this.options[this.selectedIndex];
 			if (selected) this.onSelectCallback(selected);

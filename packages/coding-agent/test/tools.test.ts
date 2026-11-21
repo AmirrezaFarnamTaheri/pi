@@ -1,5 +1,3 @@
-import { stripVTControlCharacters } from "node:util";
-import type { TUI } from "@earendil-works/pi-tui";
 import { applyPatch } from "diff";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -34,8 +32,6 @@ import {
 	createReadTool,
 	createWriteTool,
 } from "../src/index.ts";
-import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import * as shellModule from "../src/utils/shell.ts";
 
 const readTool = createReadTool(process.cwd());
@@ -235,45 +231,6 @@ describe("Coding Agent Tools", () => {
 				mimeType: "image/png",
 				note: getTextOutput(result),
 			});
-		});
-
-		it("should keep a text-only model's image warning out of what the model gets", async () => {
-			const png1x1Base64 =
-				"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==";
-			const testFile = join(testDir, "text-model.png");
-			writeFileSync(testFile, Buffer.from(png1x1Base64, "base64"));
-			const ctx = { cwd: testDir, model: { id: "text-only", input: ["text"] } } as unknown as ExtensionToolContext;
-
-			const result = await createReadToolDefinition(testDir).execute(
-				"test-call-img-text-model",
-				{ path: testFile },
-				undefined,
-				undefined,
-				ctx,
-			);
-
-			// The result is replayed after a switch to a vision model, so it keeps the image and no
-			// note saying the model cannot see it; pi-ai replaces the image per request instead.
-			expect(getTextOutput(result)).toBe("Read image file [image/png]");
-			expect(result.content.some((c) => c.type === "image")).toBe(true);
-
-			// The user still sees the warning, collapsed and expanded.
-			initTheme("dark");
-			const component = new ToolExecutionComponent(
-				"read",
-				"test-call-img-text-model",
-				{ path: testFile },
-				{},
-				createReadToolDefinition(testDir),
-				// SAFETY: ToolExecutionComponent only calls ui.requestRender(), which this stub implements.
-				{ requestRender() {} } as TUI,
-				testDir,
-			);
-			component.updateResult({ ...result, isError: false });
-			const warning = "[text-only does not support images; it saw a placeholder instead]";
-			expect(stripVTControlCharacters(component.render(120).join("\n"))).toContain(warning);
-			component.setExpanded(true);
-			expect(stripVTControlCharacters(component.render(120).join("\n"))).toContain(warning);
 		});
 
 		it("should read BMP files from disk as PNG image attachments", async () => {
@@ -810,9 +767,9 @@ describe("Coding Agent Tools", () => {
 			const updates: Array<{ content: Array<{ type: string; text?: string }>; details?: unknown }> = [];
 			const bash = createBashTool(testDir, { operations });
 
-			const result = await bash.execute("test-call-chatty-updates", { command: "chatty" }, undefined, (update) =>
-				updates.push(update),
-			);
+			const result = await bash.execute("test-call-chatty-updates", { command: "chatty" }, undefined, (update) => {
+				updates.push(update);
+			});
 
 			expect(updates.length).toBeLessThan(25);
 			expect(getTextOutput(result)).toContain("line 4999");

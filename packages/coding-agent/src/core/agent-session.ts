@@ -38,7 +38,6 @@ import type {
 	AuthResult,
 	ImageContent,
 	Model,
-	ProviderHeaders,
 	SystemMessage,
 	TextContent,
 	ToolResultMessage,
@@ -62,6 +61,7 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
+import { estimateMessagesTokens, getNextCycleIndex, withoutDeletedHeaders } from "./agent-session-utils.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -74,7 +74,6 @@ import {
 	compact,
 	estimateContextTokens,
 	estimateProjectedContextTokens,
-	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -149,6 +148,7 @@ import {
 } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { ManualBackgroundController } from "./tools/manual-background.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
 import {
@@ -176,28 +176,7 @@ export function markRuntimeStreamFunction(streamFn: StreamFn, modelRuntime: Mode
 // Skill Block Parsing
 // ============================================================================
 
-/** Parsed skill block from a user message */
-export interface ParsedSkillBlock {
-	name: string;
-	location: string;
-	content: string;
-	userMessage: string | undefined;
-}
-
-/**
- * Parse a skill block from message text.
- * Returns null if the text doesn't contain a skill block.
- */
-export function parseSkillBlock(text: string): ParsedSkillBlock | null {
-	const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$/);
-	if (!match) return null;
-	return {
-		name: match[1],
-		location: match[2],
-		content: match[3],
-		userMessage: match[4]?.trim() || undefined,
-	};
-}
+export { type ParsedSkillBlock, parseSkillBlock } from "./agent-session-utils.ts";
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {
@@ -256,12 +235,6 @@ export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
 // ============================================================================
 // Types
 // ============================================================================
-
-function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<string, string> | undefined {
-	return headers
-		? Object.fromEntries(Object.entries(headers).filter((entry): entry is [string, string] => entry[1] !== null))
-		: undefined;
-}
 
 export interface AgentSessionConfig {
 	agent: Agent;
@@ -378,33 +351,9 @@ interface ToolDefinitionEntry {
 	sourceInfo: SourceInfo;
 }
 
-function estimateMessagesTokens(messages: AgentMessage[]): number {
-	let tokens = 0;
-	for (const message of messages) {
-		tokens += estimateTokens(message);
-	}
-	return tokens;
-}
-
 // ============================================================================
 // AgentSession Class
 // ============================================================================
-
-/**
- * Index of the model to cycle to, or undefined when there is nothing to switch to.
- * When the current model is not in the list (currentIndex -1), forward picks the first
- * entry and backward the last, so a one-entry list still selects its only model.
- */
-function getNextCycleIndex(
-	currentIndex: number,
-	length: number,
-	direction: "forward" | "backward",
-): number | undefined {
-	if (length === 0) return undefined;
-	if (currentIndex === -1) return direction === "forward" ? 0 : length - 1;
-	if (length === 1) return undefined;
-	return direction === "forward" ? (currentIndex + 1) % length : (currentIndex - 1 + length) % length;
-}
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -452,6 +401,8 @@ export class AgentSession {
 
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
+	/** Enables Ctrl+B for the local command currently running in the interactive UI. */
+	readonly manualBackgroundController = new ManualBackgroundController();
 	private _pendingBashMessages: BashExecutionMessage[] = [];
 
 	// Extension system
@@ -1285,7 +1236,10 @@ export class AgentSession {
 	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
 		const mapped = this._entryIdsByMessage.get(message);
 		if (mapped) return mapped;
-		for (const entry of [...this.sessionManager.getBranch()].reverse()) {
+		// getBranch() returns a fresh array, so it can be scanned from the newest entry without another copy.
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			const entry = branch[index]!;
 			if (entry.type === "message" && entry.message === message) return entry.id;
 		}
 
@@ -2715,6 +2669,8 @@ export class AgentSession {
 		const availableIds = new Set(
 			this._modelRuntime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),
 		);
+		// Scoped entries wrap the model, so filter their provider through
+		// scoped.model rather than treating the entry itself as a Model.
 		const scopedModels = this._scopedModels.filter((scoped) =>
 			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
 		);
@@ -3791,7 +3747,12 @@ export class AgentSession {
 				)
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: {
+						commandPrefix: shellCommandPrefix,
+						shellPath,
+						backgroundController: this.manualBackgroundController,
+					},
+					powershell: { backgroundController: this.manualBackgroundController },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -3883,7 +3844,11 @@ export class AgentSession {
 	private _isRetryableError(message: AssistantMessage): boolean {
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
-		return isRetryableAssistantError(message);
+		const selected = this.model;
+		return (
+			(selected ? this._modelRuntime.shouldRetryVirtualFailure(selected, message) : false) ||
+			isRetryableAssistantError(message)
+		);
 	}
 
 	/**
@@ -4029,7 +3994,8 @@ export class AgentSession {
 			const result = await executeBashWithOperations(
 				resolvedCommand,
 				this.sessionManager.getCwd(),
-				options?.operations ?? createLocalBashOperations({ shellPath }),
+				options?.operations ??
+					createLocalBashOperations({ shellPath, backgroundController: this.manualBackgroundController }),
 				{
 					onChunk: (delta) => {
 						onChunk?.(delta);
@@ -4530,9 +4496,11 @@ export class AgentSession {
 			.find((m) => {
 				if (m.role !== "assistant") return false;
 				const msg = m as AssistantMessage;
-				// Skip messages without text from a turn that did not end normally: aborted, failed or only
-				// calling tools (#12119). A reply that ended normally stays the last reply even without text.
-				if (msg.stopReason !== "stop" && !msg.content.some((c) => c.type === "text" && c.text.trim())) return false;
+				// Ignore aborted, errored, or tool-call-only turns with no usable text, but
+				// keep normally completed empty responses as the last reply.
+				if (msg.stopReason !== "stop" && !msg.content.some((c) => c.type === "text" && c.text.trim())) {
+					return false;
+				}
 				return true;
 			});
 

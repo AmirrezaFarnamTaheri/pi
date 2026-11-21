@@ -68,7 +68,22 @@ import {
 	imageErrorResult,
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
+import { classifyCredentialFailure, RotationPool } from "../extensions/account-rotation-policy.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
+import { createStoredAccountAlias } from "./account-aliases.ts";
+import {
+	type AccountProfile,
+	type AccountRotationPreferences,
+	addAccountProfile,
+	loadAccountProfiles,
+	loadAccountRotationPreferences,
+	loadPrimaryAccountNames,
+	removeAccountProfile,
+	renameAccountProfile,
+	renamePrimaryAccount,
+	saveAccountRotationPreferences,
+} from "./account-profiles.ts";
+import { getProviderGroupId } from "./account-provider-groups.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
@@ -97,6 +112,7 @@ import {
 interface RegisteredVirtualModel {
 	model: Model<Api>;
 	route: VirtualModelDefinition["route"];
+	shouldRetry?: VirtualModelDefinition["shouldRetry"];
 }
 
 interface ModelRuntimeSnapshot {
@@ -112,6 +128,8 @@ export interface CreateModelRuntimeOptions {
 	credentials?: CredentialStore;
 	authPath?: string;
 	modelsPath?: string | null;
+	/** Defaults to account-profiles.json beside the normal auth configuration; null disables persistence. */
+	accountProfilesPath?: string | null;
 	modelsStore?: ModelsStore;
 	modelsStorePath?: string;
 	/** Allow create() to refresh model catalogs over the network. Defaults to false. */
@@ -182,6 +200,10 @@ export class ModelRuntime implements Models {
 	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
 	private readonly compositionErrors = new Map<string, string>();
 	private readonly modelsPath: string | undefined;
+	private readonly accountProfilesPath: string | undefined;
+	private readonly accountProfiles = new Map<string, AccountProfile>();
+	private readonly accountNames = new Map<string, string>();
+	private readonly accountRotations = new Map<string, AccountRotationPreferences>();
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
 	private snapshot: ModelRuntimeSnapshot = {
@@ -196,11 +218,13 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
+	private extensionRefreshQueued = false;
 
 	private constructor(
 		credentials: RuntimeCredentials,
 		config: ModelConfig,
 		modelsPath: string | undefined,
+		accountProfilesPath: string | undefined,
 		modelsStore: ModelsStore,
 		providers: readonly Provider[],
 		modelNetworkEnabled: boolean,
@@ -208,6 +232,7 @@ export class ModelRuntime implements Models {
 		this.credentials = credentials;
 		this.config = config;
 		this.modelsPath = modelsPath;
+		this.accountProfilesPath = accountProfilesPath;
 		this.modelNetworkEnabled = modelNetworkEnabled;
 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
@@ -219,6 +244,13 @@ export class ModelRuntime implements Models {
 		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
 		const modelsPath =
 			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
+		const accountProfilesPath =
+			options.accountProfilesPath === null
+				? undefined
+				: (options.accountProfilesPath ??
+					(options.modelsPath === null
+						? undefined
+						: join(dirname(options.authPath ?? join(getAgentDir(), "auth.json")), "account-profiles.json")));
 		const config = await ModelConfig.load(modelsPath);
 		const modelsStore =
 			options.modelsStore ??
@@ -243,12 +275,14 @@ export class ModelRuntime implements Models {
 			credentials,
 			config,
 			modelsPath,
+			accountProfilesPath,
 			modelsStore,
 			providers,
 			process.env.PI_OFFLINE === undefined,
 		);
 		runtime.configureRadiusProviders();
 		runtime.rebuildProviders();
+		runtime.restoreAccountAliases();
 		const refreshFromNetwork = runtime.modelNetworkEnabled && options.allowModelNetwork === true;
 		const controller =
 			refreshFromNetwork && options.modelRefreshTimeoutMs !== undefined ? new AbortController() : undefined;
@@ -265,6 +299,7 @@ export class ModelRuntime implements Models {
 		} finally {
 			if (timeout) clearTimeout(timeout);
 		}
+		runtime.configureAutomaticAccountRotation();
 		return runtime;
 	}
 
@@ -526,6 +561,293 @@ export class ModelRuntime implements Models {
 
 	getRegisteredProviderIds(): readonly string[] {
 		return [...new Set([...this.extensionProviders.keys(), ...this.nativeExtensionProviders.keys()])];
+	}
+
+	/** User-defined providers from models.json, including those not yet authenticated. */
+	getConfiguredProviderIds(): readonly string[] {
+		return this.config.getProviderIds();
+	}
+
+	/** Profiles identify independently stored credentials; they never contain API keys or OAuth tokens. */
+	getAccountProfiles(): readonly AccountProfile[] {
+		return [...this.accountProfiles.values()];
+	}
+
+	/** A memorable display name, separate from the stable provider ID used by credentials and sessions. */
+	getAccountLabel(providerId: string): string {
+		return (
+			this.accountProfiles.get(providerId)?.label ??
+			this.accountNames.get(providerId) ??
+			(this.getProvider(providerId) ? "Primary" : providerId)
+		);
+	}
+
+	/** Rename either an additional account or the original provider without touching credentials. */
+	renameAccount(providerId: string, label: string): string {
+		const path = this.accountProfilesPath;
+		if (!path) throw new Error("Account names cannot be saved in this runtime");
+		const existing = this.accountProfiles.get(providerId);
+		if (existing) {
+			const updated = renameAccountProfile(path, providerId, label);
+			if (!updated) throw new Error("Account no longer exists");
+			// Labels belong to account-profiles.json, not provider registration.
+			// Replacing the provider would discard its refreshed catalog and live auth state.
+			this.accountProfiles.set(providerId, updated);
+			return updated.label;
+		}
+		if (providerId === "account-profiles" || !this.models.getProvider(providerId)) {
+			throw new Error("Unknown account");
+		}
+		const name = renamePrimaryAccount(path, providerId, label);
+		this.accountNames.set(providerId, name);
+		return name;
+	}
+
+	private restoreAccountAliases(): void {
+		if (!this.accountProfilesPath) return;
+		for (const [id, name] of Object.entries(loadPrimaryAccountNames(this.accountProfilesPath))) {
+			this.accountNames.set(id, name);
+		}
+		for (const [source, pref] of Object.entries(loadAccountRotationPreferences(this.accountProfilesPath)))
+			this.accountRotations.set(source, pref);
+		for (const profile of loadAccountProfiles(this.accountProfilesPath)) {
+			if (this.models.getProvider(profile.id))
+				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
+			this.accountProfiles.set(profile.id, profile);
+		}
+		// Some providers are registered by extensions after ModelRuntime.create().
+		// Keep their profiles pending rather than preventing Pi from starting.
+		this.attachSavedAccountAliases();
+		this.updateModelSnapshot();
+	}
+
+	/** Attach profiles when their late-loaded extension providers become available. */
+	private attachSavedAccountAliases(sourceFilter?: string): void {
+		for (const profile of this.accountProfiles.values()) {
+			if (sourceFilter && profile.sourceProviderId !== sourceFilter) continue;
+			if (this.nativeExtensionProviders.has(profile.id)) continue;
+			if (
+				this.builtins.has(profile.id) ||
+				this.extensionProviders.has(profile.id) ||
+				this.models.getProvider(profile.id)
+			) {
+				throw new Error(`Account alias conflicts with provider: ${profile.id}`);
+			}
+			const source = this.models.getProvider(profile.sourceProviderId);
+			if (!source) continue;
+			this.nativeExtensionProviders.set(profile.id, createStoredAccountAlias(source, profile.id));
+			this.recomposeProvider(profile.id);
+		}
+	}
+
+	/** Create a new, uniquely named provider identity without replacing any existing login. */
+	addAccountAlias(sourceProviderId: string, label?: string): AccountProfile {
+		const path = this.accountProfilesPath;
+		if (!path) throw new Error("Account profile persistence is disabled for this runtime");
+		if (this.accountProfiles.has(sourceProviderId)) {
+			throw new Error("Select the original provider rather than an account alias");
+		}
+		const source = this.models.getProvider(sourceProviderId);
+		if (!source || (!source.auth.oauth && !source.auth.apiKey?.login)) {
+			throw new Error(`Provider ${sourceProviderId} does not support login`);
+		}
+		// Snapshot the existing pool before adding a new credential. New identities are opt-in.
+		const groupId = this.rotationGroupId(sourceProviderId);
+		if (!this.accountRotations.has(groupId)) {
+			this.setAccountRotationPreferences(groupId, {
+				enabled: false,
+				strategy: "round-robin",
+				memberIds: this.getRotationMemberIds(groupId),
+			});
+		}
+		const profile = addAccountProfile(path, sourceProviderId, [...this.providerIds()], label);
+		try {
+			if (this.models.getProvider(profile.id))
+				throw new Error("Account identity conflicts with an existing provider");
+			const provider = createStoredAccountAlias(source, profile.id);
+			this.registerNativeProvider(provider);
+			this.accountProfiles.set(profile.id, profile);
+			this.configureAutomaticAccountRotation(getProviderGroupId(sourceProviderId, source.name));
+			return profile;
+		} catch (error) {
+			this.accountProfiles.delete(profile.id);
+			removeAccountProfile(path, profile.id);
+			throw error;
+		}
+	}
+
+	/** Explicitly disconnect the selected identity before removing only its profile. */
+	async removeAccountAlias(id: string): Promise<void> {
+		const path = this.accountProfilesPath;
+		if (!path || !this.accountProfiles.has(id)) throw new Error("Account no longer exists");
+		// Remove the saved credential even if the source extension is not currently loaded.
+		if (this.models.getProvider(id)) await this.logout(id);
+		else await this.credentials.delete(id);
+		removeAccountProfile(path, id);
+		const sourceProviderId = this.accountProfiles.get(id)!.sourceProviderId;
+		this.accountProfiles.delete(id);
+		this.nativeExtensionProviders.delete(id);
+		for (const [group, pref] of this.accountRotations) {
+			if (pref.memberIds.includes(id))
+				this.accountRotations.set(group, { ...pref, memberIds: pref.memberIds.filter((member) => member !== id) });
+		}
+		this.configureAutomaticAccountRotation(this.rotationGroupId(sourceProviderId));
+		this.recomposeProvider(id);
+		this.updateModelSnapshot();
+		this.scheduleExtensionRefresh();
+	}
+
+	/** Physical provider IDs remain unchanged; only explicitly mapped families share a rotation group. */
+	private rotationGroupId(sourceProviderId: string): string {
+		const provider = this.getProvider(sourceProviderId);
+		return provider ? getProviderGroupId(sourceProviderId, provider.name) : sourceProviderId;
+	}
+
+	/** Both original credentials and their aliases, irrespective of current connection status. */
+	getRotationMemberIds(groupId: string): string[] {
+		const aliases = new Set(this.accountProfiles.keys());
+		const originals = this.getProviders()
+			.filter((provider) => provider.id !== "account-profiles" && !aliases.has(provider.id))
+			.filter((provider) => getProviderGroupId(provider.id, provider.name) === groupId)
+			.map((provider) => provider.id);
+		const sources = new Set(originals);
+		return [
+			...originals,
+			...[...this.accountProfiles.values()]
+				.filter((profile) => sources.has(profile.sourceProviderId))
+				.map((profile) => profile.id),
+		];
+	}
+
+	getAccountRotationPreferences(groupId: string): AccountRotationPreferences {
+		const saved = this.accountRotations.get(groupId);
+		return saved
+			? { ...saved, memberIds: [...saved.memberIds] }
+			: { enabled: false, strategy: "round-robin", memberIds: this.getRotationMemberIds(groupId) };
+	}
+
+	setAccountRotationPreferences(groupId: string, preferences: AccountRotationPreferences): void {
+		const path = this.accountProfilesPath;
+		if (!path) throw new Error("Account rotation preferences cannot be saved in this runtime");
+		const valid = new Set(this.getRotationMemberIds(groupId));
+		if (valid.size === 0 || preferences.memberIds.some((id) => !valid.has(id))) {
+			throw new Error("Rotation includes an identity outside this provider");
+		}
+		saveAccountRotationPreferences(path, groupId, preferences);
+		this.accountRotations.set(groupId, { ...preferences, memberIds: [...preferences.memberIds] });
+		this.configureAutomaticAccountRotation(groupId);
+	}
+
+	/** Keep a virtual model for each provider with multiple distinct identities. */
+	private configureAutomaticAccountRotation(sourceFilter?: string): void {
+		const sources = new Set(
+			[...this.accountProfiles.values()].map((profile) => this.rotationGroupId(profile.sourceProviderId)),
+		);
+		// Some providers (notably NVIDIA I and II) are distinct original IDs, not profiles.
+		for (const provider of this.getProviders()) {
+			if (provider.id !== "account-profiles" && getProviderGroupId(provider.id, provider.name) === "nvidia")
+				sources.add("nvidia");
+		}
+		const candidates = sourceFilter ? [sourceFilter] : [...sources];
+		for (const groupId of candidates) {
+			const allMembers = this.getRotationMemberIds(groupId);
+			if (allMembers.length < 2) {
+				if (this.virtualModels.get("account-profiles")?.has(groupId))
+					this.unregisterVirtualModel("account-profiles", groupId);
+				continue;
+			}
+			const preference = this.getAccountRotationPreferences(groupId);
+			const memberIds = allMembers.filter((id) => preference.memberIds.includes(id));
+			if (memberIds.length === 0) {
+				if (this.virtualModels.get("account-profiles")?.has(groupId))
+					this.unregisterVirtualModel("account-profiles", groupId);
+				continue;
+			}
+			const pools = new Map<string, RotationPool>();
+			const memberSet = new Set(memberIds);
+			this.registerVirtualModel({
+				provider: "account-profiles",
+				id: groupId,
+				name: `Rotate ${groupId} (${memberIds.length} accounts)`,
+				thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+				shouldRetry: (message) =>
+					message.stopReason === "error" &&
+					memberSet.has(message.provider) &&
+					classifyCredentialFailure(message.errorMessage ?? "") !== undefined &&
+					message.content.every(
+						(block) =>
+							block.type !== "toolCall" &&
+							(block.type !== "text" || block.text.length === 0) &&
+							(block.type !== "thinking" || block.thinking.length === 0),
+					),
+				route: (request) => {
+					if (request.signal?.aborted) throw new Error("Account rotation cancelled");
+					const previous = request.previous?.model;
+					const failed = request.failed?.model;
+					const state = (request.state as { active?: { provider: string; model: string } } | undefined)?.active;
+					const retained =
+						request.reason === "retry" ? failed : request.reason === "continuation" ? previous : undefined;
+					const preferredId =
+						retained && memberSet.has(retained.provider)
+							? retained.id
+							: state && memberSet.has(state.provider)
+								? state.model
+								: previous && memberSet.has(previous.provider)
+									? previous.id
+									: undefined;
+					const primaryModelId =
+						preferredId && memberIds.some((id) => !!this.getPhysicalModel(id, preferredId))
+							? preferredId
+							: memberIds.flatMap((id) => this.getModels(id)).find((model) => !isVirtualModel(model))?.id;
+					if (!primaryModelId) throw new Error("No physical models found for these accounts");
+					let pool = pools.get(primaryModelId);
+					if (!pool) {
+						pool = new RotationPool(
+							memberIds.map((provider) => ({ provider, model: primaryModelId })),
+							60_000,
+							preference.strategy,
+						);
+						pools.set(primaryModelId, pool);
+					}
+					for (const provider of memberIds) {
+						pool.setAvailable(
+							{ provider, model: primaryModelId },
+							!!this.getPhysicalModel(provider, primaryModelId) && this.hasConfiguredAuth(provider),
+						);
+					}
+					const toTarget = (model: Model<Api> | undefined) =>
+						model && memberSet.has(model.provider) && model.id === primaryModelId
+							? { provider: model.provider, model: model.id }
+							: undefined;
+					const previousTarget = toTarget(previous);
+					if (previousTarget && request.reason !== "retry") pool.markSuccess(previousTarget);
+					const failedTarget = toTarget(failed);
+					const failedMessage = request.failed?.message;
+					const result = pool.choose({
+						reason: request.reason,
+						previous: previousTarget,
+						active: state && state.model === primaryModelId && memberSet.has(state.provider) ? state : undefined,
+						...(failedTarget && failedMessage
+							? {
+									failed: {
+										target: failedTarget,
+										errorMessage: failedMessage.errorMessage ?? "",
+										hasOutput: failedMessage.content.some(
+											(block) =>
+												block.type === "toolCall" ||
+												(block.type === "text" && block.text.length > 0) ||
+												(block.type === "thinking" && block.thinking.length > 0),
+										),
+									},
+								}
+							: {}),
+					});
+					const model = this.getPhysicalModel(result.target.provider, result.target.model);
+					if (!model) throw new Error("Selected account model is no longer available");
+					return { model, thinkingLevel: request.thinkingLevel, state: { active: result.target } };
+				},
+			});
+		}
 	}
 
 	getRegisteredNativeProvider(providerId: string): Provider | undefined {
@@ -883,6 +1205,8 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		// An explicitly requested refresh subsumes any queued registration batch.
+		this.extensionRefreshQueued = false;
 		this.config = await ModelConfig.load(this.modelsPath);
 		this.configureRadiusProviders();
 		if (options.providers) {
@@ -891,6 +1215,9 @@ export class ModelRuntime implements Models {
 		} else {
 			this.rebuildProviders();
 		}
+		// A models.json provider may become available only after a later refresh.
+		this.attachSavedAccountAliases();
+		this.updateModelSnapshot();
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,
@@ -925,18 +1252,31 @@ export class ModelRuntime implements Models {
 		return { aborted: result.aborted || (options.signal?.aborted ?? false), errors };
 	}
 
+	private scheduleExtensionRefresh(): void {
+		if (this.extensionRefreshQueued) return;
+		this.extensionRefreshQueued = true;
+		queueMicrotask(() => {
+			if (!this.extensionRefreshQueued) return;
+			this.extensionRefreshQueued = false;
+			// Synchronous registrations already refreshed provider and model snapshots.
+			void this.refresh({ allowNetwork: false });
+		});
+	}
+
 	registerNativeProvider(provider: Provider): void {
+		if (this.accountProfiles.has(provider.id)) throw new Error("Cannot override a managed account identity");
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
 		this.recomposeProvider(provider.id);
+		this.attachSavedAccountAliases(provider.id);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
 			provider.id,
 			configuredRequestAuthStatus(this.config.getProvider(provider.id), undefined),
 			provider.auth.oauth && !provider.auth.apiKey ? "oauth" : "api_key",
 		);
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	/**
@@ -963,6 +1303,7 @@ export class ModelRuntime implements Models {
 	}
 
 	registerProvider(providerId: string, config: ProviderConfigInput): void {
+		if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
 		// Validate the incoming registration on its own, like the legacy registry:
 		// a broken re-registration must throw without touching the stored config.
 		validateExtensionProvider(providerId, this.builtins.get(providerId), this.config.getProvider(providerId), config);
@@ -976,21 +1317,74 @@ export class ModelRuntime implements Models {
 		}
 		this.extensionProviders.set(providerId, effective);
 		this.recomposeProvider(providerId);
+		this.attachSavedAccountAliases(providerId);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
 			providerId,
 			configuredRequestAuthStatus(this.config.getProvider(providerId), effective),
 			effective.oauth && !effective.apiKey ? "oauth" : "api_key",
 		);
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
+	}
+
+	/**
+	 * Apply validated provider registrations with one final model snapshot.
+	 * Individual registerProvider calls keep their existing synchronous semantics.
+	 */
+	registerProviderBatch(registrations: readonly { providerId: string; config: ProviderConfigInput }[]): void {
+		if (registrations.length === 0) return;
+		const staged = new Map<string, ProviderConfigInput>();
+		for (const { providerId, config } of registrations) {
+			if (this.accountProfiles.has(providerId)) throw new Error("Cannot override a managed account identity");
+			validateExtensionProvider(
+				providerId,
+				this.builtins.get(providerId),
+				this.config.getProvider(providerId),
+				config,
+			);
+			const previous = staged.get(providerId) ?? this.extensionProviders.get(providerId);
+			const effective: ProviderConfigInput = { ...previous };
+			for (const [key, value] of Object.entries(config)) {
+				if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
+			}
+			staged.set(providerId, effective);
+		}
+		for (const [providerId, config] of staged) {
+			this.nativeExtensionProviders.delete(providerId);
+			this.extensionProviders.set(providerId, config);
+			this.recomposeProvider(providerId);
+		}
+		this.attachSavedAccountAliases();
+		this.updateModelSnapshot();
+		const configuredProviders = new Set(this.snapshot.configuredProviders);
+		const auth = new Map(this.snapshot.auth);
+		for (const [providerId, config] of staged) {
+			const status = configuredRequestAuthStatus(this.config.getProvider(providerId), config);
+			if (!this.snapshot.storedProviders.has(providerId) && !status?.configured) continue;
+			configuredProviders.add(providerId);
+			if (!auth.get(providerId)) {
+				auth.set(providerId, {
+					type: config.oauth && !config.apiKey ? "oauth" : "api_key",
+					source: "configured provider",
+				});
+			}
+		}
+		this.snapshot = {
+			...this.snapshot,
+			configuredProviders,
+			auth,
+			available: this.snapshot.all.filter((model) => configuredProviders.has(model.provider)),
+		};
+		this.scheduleExtensionRefresh();
 	}
 
 	unregisterProvider(providerId: string): void {
+		if (this.accountProfiles.has(providerId)) throw new Error("Cannot unregister a managed account identity");
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	/**
@@ -1006,7 +1400,11 @@ export class ModelRuntime implements Models {
 			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
 		}
 		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
-		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		models.set(id, {
+			model: createVirtualModel(definition),
+			route: (request) => definition.route(request),
+			...(definition.shouldRetry ? { shouldRetry: definition.shouldRetry } : {}),
+		});
 		this.virtualModels.set(providerId, models);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
@@ -1016,7 +1414,7 @@ export class ModelRuntime implements Models {
 			this.snapshot = { ...this.snapshot, auth, configuredProviders };
 		}
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
 	}
 
 	unregisterVirtualModel(providerId: string, id: string): void {
@@ -1025,7 +1423,13 @@ export class ModelRuntime implements Models {
 		if (models.size === 0) this.virtualModels.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
-		void this.refresh({ allowNetwork: false });
+		this.scheduleExtensionRefresh();
+	}
+
+	/** Allow opt-in, scoped recovery without changing ordinary provider retry policy. */
+	shouldRetryVirtualFailure(model: Model<Api>, message: AssistantMessage): boolean {
+		if (!isVirtualModel(model) || message.stopReason !== "error") return false;
+		return this.virtualModels.get(model.provider)?.get(model.id)?.shouldRetry?.(message) ?? false;
 	}
 
 	/**

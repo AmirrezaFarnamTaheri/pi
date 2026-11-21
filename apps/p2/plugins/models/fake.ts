@@ -62,12 +62,14 @@ const SCRIPTED: Record<string, () => ReturnType<typeof fauxToolCall>> = {
 			].join("\n"),
 		}),
 	// Code mode across a worker restart: the slow middle call is interrupted, the script catches it and continues.
+	// Chord stops workers after a 5 s grace period: a 5 s sleep races shutdown and can write "two" before SIGKILL.
+	// A longer sleep makes both the killed-worker and graceful-restart recovery tests deterministic.
 	"codemode-restart": () =>
 		fauxToolCall("codemode", {
 			code: [
 				'const one = (await tools.bash({ command: "echo one >> codemode.log; printf one" })).output;',
 				"let two;",
-				'try { two = (await tools.bash({ command: "sleep 5; echo two >> codemode.log; printf two" })).output; }',
+				'try { two = (await tools.bash({ command: "sleep 30; echo two >> codemode.log; printf two" })).output; }',
 				'catch (error) { two = "two failed: " + error.message; }',
 				'const three = (await tools.bash({ command: "echo three >> codemode.log; printf three" })).output;',
 				'return [one, two, three].join(" | ");',

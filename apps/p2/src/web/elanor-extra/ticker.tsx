@@ -120,14 +120,20 @@ function TickerRoot({
 		};
 	}, [element, drum]);
 	const currentIndex = Math.min(last, Math.max(0, Math.round(position)));
-	// Another item faces the reader: a detent (not on the first render).
-	const faced = useRef(currentIndex);
+	// During a live run, several steps can arrive before the wheel first mounts.
+	// Count those detents as well; for an already-settled/history wheel the first
+	// render is silent. The first live face (index 0) produces no tick.
+	const faced = useRef(active ? 0 : currentIndex);
 	const turned = useRef(onTurn);
 	turned.current = onTurn;
 	useEffect(() => {
-		if (faced.current === currentIndex) return;
+		const distance = Math.abs(currentIndex - faced.current);
+		if (!distance) return;
 		faced.current = currentIndex;
-		turned.current?.();
+		// Rapid new steps may arrive in one React render. The wheel traversed
+		// multiple detents even when no intermediate frame committed.
+		// Bound native feedback in case an entire history arrives at once.
+		for (let step = 0; step < Math.min(distance, 8); step++) turned.current?.();
 	}, [currentIndex]);
 	const keyOf = (item: ReactElement | undefined) => (item?.key == null ? undefined : item.key);
 	const shared = {

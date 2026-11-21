@@ -58,47 +58,80 @@ export class Browser {
 		});
 	}
 	static async start(flags: string[] = []): Promise<Browser> {
-		const profile = mkdtempSync(join(tmpdir(), "p2-browser-"));
-		const process = spawn(
-			chromium,
-			[
-				...(globalThis.process.env.PREFIX ? [`--browser-subprocess-path=${chromium}`] : []),
-				"--headless=new",
-				"--no-sandbox",
-				"--no-zygote",
-				"--disable-gpu",
-				"--disable-dev-shm-usage",
-				"--remote-debugging-address=127.0.0.1",
-				"--remote-debugging-port=0",
-				`--user-data-dir=${profile}`,
-				...flags,
-				"about:blank",
-			],
-			{ stdio: "ignore" },
-		);
-		await poll(() => existsSync(join(profile, "DevToolsActivePort")), 20_000, "Chromium debugging port");
-		const port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
-		const targets = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
-			type: string;
-			webSocketDebuggerUrl: string;
-		}[];
-		// Google Chrome also lists its component extensions' background pages; drive the tab.
-		const page = targets.find((target) => target.type === "page") ?? targets[0]!;
-		const socket = new WebSocket(page.webSocketDebuggerUrl);
-		await new Promise<void>((resolve, reject) => {
-			socket.once("open", resolve);
-			socket.once("error", reject);
-		});
-		const browser = new Browser(process, profile, socket);
-		await browser.call("Page.enable");
-		await browser.call("Page.setLifecycleEventsEnabled", { enabled: true });
-		return browser;
+		// A heavily loaded CI runner may fail to bring up the first Chromium process.
+		// Retry startup, but keep the test failing with Chromium's diagnostics if neither attempt works.
+		let lastError: unknown;
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const profile = mkdtempSync(join(tmpdir(), "p2-browser-"));
+			const process = spawn(
+				chromium,
+				[
+					...(globalThis.process.env.PREFIX ? [`--browser-subprocess-path=${chromium}`] : []),
+					"--headless=new",
+					"--no-sandbox",
+					"--no-zygote",
+					"--disable-gpu",
+					"--disable-dev-shm-usage",
+					"--remote-debugging-address=127.0.0.1",
+					"--remote-debugging-port=0",
+					`--user-data-dir=${profile}`,
+					...flags,
+					"about:blank",
+				],
+				{ stdio: ["ignore", "ignore", "pipe"] },
+			);
+			let diagnostics = "";
+			process.stderr?.on("data", (chunk: Buffer) => {
+				diagnostics = (diagnostics + chunk.toString()).slice(-4000);
+			});
+			process.on("error", (error) => {
+				diagnostics = `${diagnostics}\n${error.message}`;
+			});
+			let socket: WebSocket | undefined;
+			try {
+				const activePort = join(profile, "DevToolsActivePort");
+				await poll(
+					() => existsSync(activePort) || process.exitCode !== null || process.signalCode !== null,
+					30_000,
+					"Chromium debugging port",
+				);
+				if (!existsSync(activePort)) throw new Error("Chromium exited before opening its debugging port");
+				const port = readFileSync(activePort, "utf8").split("\n")[0];
+				const targets = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
+					type: string;
+					webSocketDebuggerUrl: string;
+				}[];
+				const page = targets.find((target) => target.type === "page") ?? targets[0];
+				if (!page) throw new Error("Chromium has no DevTools targets");
+				socket = new WebSocket(page.webSocketDebuggerUrl);
+				await new Promise<void>((resolve, reject) => {
+					socket!.once("open", resolve);
+					socket!.once("error", reject);
+				});
+				const browser = new Browser(process, profile, socket);
+				await browser.call("Page.enable");
+				await browser.call("Page.setLifecycleEventsEnabled", { enabled: true });
+				return browser;
+			} catch (error) {
+				lastError = new Error(
+					`Chromium startup attempt ${attempt + 1} failed: ${error instanceof Error ? error.message : String(error)}\n${diagnostics}`,
+				);
+				socket?.close();
+				process.kill("SIGKILL");
+				rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+			}
+		}
+		throw lastError;
 	}
+
 	/** Sends a DevTools command to the page, or to an attached target's flat session (`evaluateInFrame`). */
 	call(method: string, params: object = {}, sessionId?: string): Promise<unknown> {
 		return new Promise((resolve, reject) => {
 			const id = ++this.id;
-			this.pending.set(id, { resolve, reject });
+			this.pending.set(id, {
+				resolve,
+				reject: (error) => reject(new Error(`${method}: ${error.message}`, { cause: error })),
+			});
 			this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
 		});
 	}
@@ -140,7 +173,26 @@ export class Browser {
 		return response.result.value;
 	}
 	wait(expression: string): Promise<void> {
-		return poll(() => this.evaluate<boolean>(`Boolean(${expression})`), 30_000, expression);
+		return poll(
+			async () => {
+				try {
+					return await this.evaluate<boolean>(`Boolean(${expression})`);
+				} catch (error) {
+					// A cross-document redirect can invalidate the current JS context
+					// between DevTools evaluation and the result. Poll the next document.
+					if (
+						error instanceof Error &&
+						/Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id/.test(
+							error.message,
+						)
+					)
+						return false;
+					throw error;
+				}
+			},
+			30_000,
+			expression,
+		);
 	}
 	/** Gives this profile the local owner's session cookie, as the owner's sign-in link would. */
 	async signIn(owner: { readonly port: number; readonly cookie: string }): Promise<void> {
@@ -162,9 +214,22 @@ export class Browser {
 		});
 	}
 	async open(url: string): Promise<void> {
+		const before = (await this.call("Page.getFrameTree")) as { frameTree: { frame: { loaderId: string } } };
 		const result = (await this.call("Page.navigate", { url })) as { loaderId?: string; errorText?: string };
 		if (result.errorText) throw new Error(result.errorText);
-		if (result.loaderId) await poll(() => this.loaded.has(result.loaderId!), 30_000, "new document loaded");
+		if (result.loaderId)
+			await poll(
+				async () => {
+					if (this.loaded.has(result.loaderId!)) return true;
+					// A one-time sign-in page can redirect before its DOMContentLoaded event.
+					// Accept the redirected document's load, never the previously open page's.
+					const current = (await this.call("Page.getFrameTree")) as { frameTree: { frame: { loaderId: string } } };
+					const loader = current.frameTree.frame.loaderId;
+					return loader !== before.frameTree.frame.loaderId && this.loaded.has(loader);
+				},
+				30_000,
+				"new document loaded",
+			);
 	}
 	/**
 	 * Runs a browser-only component fixture (`test/fixtures/<name>`) in the open page, compiled like the web bundle
@@ -175,6 +240,14 @@ export class Browser {
 		await this.evaluate(await buildBrowserScript(fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))));
 	}
 	async click(selector: string): Promise<void> {
+		await this.wait(
+			`document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`,
+		);
+		// A test may click an older transcript row outside the viewport. Like a
+		// pointer-driven browser, bring it into view before checking hit-testing.
+		await this.evaluate(
+			`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({ block: "center", inline: "nearest" })`,
+		);
 		await this.wait(
 			`(() => { const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)return false;for(let p=e;p;p=p.parentElement)if(p.getAnimations().some(a=>a.playState==='running'&&a.effect?.getTiming().iterations!==Infinity))return false;const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return r.width>0&&r.height>0&&e.contains(hit); })()`,
 		);

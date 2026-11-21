@@ -232,6 +232,12 @@ test(
 			assert.deepEqual(await browser.evaluate("window.filled"), ["2-9"]);
 			await browser.evaluate("document.querySelector('button.history-edge.earlier').click()");
 			assert.deepEqual(await browser.evaluate("window.filled"), ["2-9", "2-9"]);
+			// A virtual gap row may unmount after clicking. Scroll to it again before testing loading.
+			await browser.evaluate("document.querySelector('.scroller.transcript').scrollTop = 0");
+			await browser.wait("document.querySelector('button.history-edge.earlier')");
+			await browser.evaluate(
+				"document.querySelector('button.history-edge.earlier').scrollIntoView({ block: 'center' })",
+			);
 			// While it loads it is disabled and shows the spinner, as the top edge does.
 			await browser.evaluate(`window.showGap(${JSON.stringify(view)}, true)`);
 			await browser.wait("document.querySelector('button.history-edge.earlier.loading')?.disabled===true");

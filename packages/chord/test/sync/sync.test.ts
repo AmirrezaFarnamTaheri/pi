@@ -783,7 +783,7 @@ describe("bounded memory", { timeout: 30_000 }, () => {
 		const replica = device("replica", store);
 		await replica.pull();
 		expect(await reads(await replica.store())).toEqual(await reads(await laptop.store()));
-	});
+	}, 30_000);
 
 	it("applies a large batch in chunks of APPLY_BYTES, and a pull stopped between them resumes", async () => {
 		const store = await remote();

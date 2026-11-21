@@ -15,6 +15,27 @@ function storedEntries(build: (source: SessionManager) => void): SessionEntry[] 
 }
 
 describe("SessionManager.inMemory with preloaded entries", () => {
+	it("loads legacy assistant messages without usage metadata", () => {
+		const legacy = {
+			type: "message",
+			id: "legacy-assistant",
+			parentId: null,
+			timestamp: "2025-01-01T00:00:00Z",
+			message: {
+				role: "assistant",
+				provider: "anthropic",
+				model: "older-model",
+				content: [{ type: "text", text: "reply" }],
+				timestamp: 100,
+			},
+		} as unknown as SessionMessageEntry;
+		const session = SessionManager.inMemory("/project", undefined, [legacy]);
+		expect(session.getEntries()).toEqual([legacy]);
+		expect(session.getLatestProviderRequestTimestamp()).toBeUndefined();
+		session.appendMessage(userMessage("next"));
+		expect(session.getEntries()).toHaveLength(2);
+	});
+
 	it("adopts entries verbatim", () => {
 		const entries = storedEntries((source) => {
 			source.appendMessage(userMessage("hello"));

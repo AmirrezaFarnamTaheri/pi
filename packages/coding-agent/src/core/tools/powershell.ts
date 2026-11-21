@@ -1,4 +1,5 @@
 import { win32 } from "node:path";
+import type { ShellConfig } from "../../utils/shell.ts";
 import { getPowerShellConfig } from "../../utils/shell.ts";
 import {
 	type BashOperations,
@@ -12,6 +13,7 @@ import {
 	createShellToolDefinition,
 	type ShellToolConfig,
 } from "./bash.ts";
+import type { ManualBackgroundController } from "./manual-background.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 const UTF8_OUTPUT_PREFIX = "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\n";
@@ -25,8 +27,14 @@ const WINDOWS_POWERSHELL_EXIT_SUFFIX =
 	'\n;\nif ($?) { exit 0 }\nif (($LASTEXITCODE -eq 0) -and ("$($Error[0].FullyQualifiedErrorId)" -like "NativeCommandError*")) { exit 0 }\nexit 1';
 
 export const powershellToolSystemPromptContribution = {
-	snippet: "Execute PowerShell commands",
-	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
+	snippet:
+		"Execute PowerShell commands; background: true is for independent local commands, not tests needed for the next decision",
+	guidelines: [
+		"You can inspect PI_* environment variables for current model and session details.",
+		"Choose shell background execution by dependency, never by duration: if test results, command output, or the exit code are needed for your next step or next decision, run in the foreground and await the result even if it takes a long time.",
+		"For independent work whose result is not needed to continue, use background: true in the local shell tool and continue useful work. Do not impose an arbitrary time threshold. The user's Ctrl+B may instead detach an already running local command.",
+		"A background PID only means started, never passed. Inspect the log and its sibling state.json and confirm a completed status and exit code before relying on its results, reporting success, or ending work that depends on it.",
+	],
 } as const;
 
 export type PowerShellOperations = BashOperations;
@@ -36,19 +44,26 @@ export type PowerShellToolDetails = BashToolDetails;
 export type PowerShellToolInput = BashToolInput;
 
 export interface PowerShellToolOptions
-	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook"> {}
+	extends Pick<BashToolOptions, "operations" | "exposeSessionEnvironment" | "spawnHook" | "backgroundController"> {}
 
-export function createLocalPowerShellOperations(): PowerShellOperations {
+/** Normalize PowerShell 5.1 native stderr exits on every local execution path. */
+export function preparePowerShellCommand(command: string, shellConfig: ShellConfig = getPowerShellConfig()): string {
+	// A final backtick must not continue the user's last line into the status suffix.
+	const suffix =
+		win32.basename(shellConfig.shell).toLowerCase() === "powershell.exe" && !command.endsWith("`")
+			? WINDOWS_POWERSHELL_EXIT_SUFFIX
+			: "";
+	return `${UTF8_OUTPUT_PREFIX}${command}${suffix}`;
+}
+
+export function createLocalPowerShellOperations(
+	backgroundController?: ManualBackgroundController,
+): PowerShellOperations {
 	return {
 		exec: async (command, cwd, options) => {
 			const shellConfig = getPowerShellConfig();
-			// A final backtick would continue the user's last line into the suffix, so leave such commands unchanged.
-			const suffix =
-				win32.basename(shellConfig.shell).toLowerCase() === "powershell.exe" && !command.endsWith("`")
-					? WINDOWS_POWERSHELL_EXIT_SUFFIX
-					: "";
-			return createLocalShellOperations("PowerShell", () => shellConfig).exec(
-				`${UTF8_OUTPUT_PREFIX}${command}${suffix}`,
+			return createLocalShellOperations("PowerShell", () => shellConfig, backgroundController).exec(
+				preparePowerShellCommand(command, shellConfig),
 				cwd,
 				options,
 			);
@@ -72,7 +87,14 @@ export function createPowerShellToolDefinition(
 ): ReturnType<typeof createShellToolDefinition> {
 	return createShellToolDefinition(cwd, powershellToolConfig, {
 		...options,
-		operations: options?.operations ?? createLocalPowerShellOperations(),
+		operations: options?.operations ?? createLocalPowerShellOperations(options?.backgroundController),
+		// Default operations are local; injected operations may be remote and cannot be backgrounded.
+		...(options?.operations
+			? {}
+			: {
+					backgroundShellConfig: getPowerShellConfig,
+					backgroundCommandTransform: preparePowerShellCommand,
+				}),
 	});
 }
 

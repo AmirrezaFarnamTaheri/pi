@@ -75,6 +75,16 @@ Prefix a command with `!` to run it and include its output in the conversation:
 
 Use `!!` when you want to run a command without sending its output to the model.
 
+### Run long shell commands in the background
+
+For long-running commands, the agent's local `bash` tool supports `background: true`. It returns immediately with a process ID and a private output log path, leaving the command running even after Pi exits. The agent can check progress by reading or tailing the log, and you can stop the process using its PID. For example, ask Pi:
+
+```text
+Run the test suite in the background and give me the PID and log path.
+```
+
+Background execution is opt-in. It is only available with Pi's local Bash backend; extensions that replace shell operations, remote backends, and PowerShell do not support it. A `timeout` cannot be combined with `background: true`. Stopping Pi or cancelling a later tool call **does not stop** an already detached command. The caller is responsible for stopping it and cleaning up its log when appropriate.
+
 ## Copy, export, or share results
 
 Press `Ctrl+X` or run `/copy` to copy the last assistant response. Use `/export` to save the session as HTML or JSONL.

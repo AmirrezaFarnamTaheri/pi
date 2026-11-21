@@ -136,7 +136,7 @@ async function mcpHost(
 				SessionLocks,
 				(_params, _principal, self) => {
 					locks = self.state<Record<string, SessionLock>>({});
-					return { locks, set: UNUSED };
+					return { locks, writeIds: constant({}), set: UNUSED, compareAndSet: UNUSED };
 				},
 			],
 			[

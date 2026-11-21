@@ -104,12 +104,24 @@ describe("sheet parity", { skip: !browserTests }, () => {
 		);
 		await poll(() => existsSync(join(profile, "DevToolsActivePort")), 20_000, "Chromium debugging port");
 		const port = readFileSync(join(profile, "DevToolsActivePort"), "utf8").split("\n")[0];
-		const pages = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as {
-			type: string;
-			webSocketDebuggerUrl: string;
-		}[];
+		// DevToolsActivePort appears before Chromium is guaranteed to serve /json.
+		const targets: { pages: { type: string; webSocketDebuggerUrl: string }[] } = { pages: [] };
+		await poll(
+			async () => {
+				try {
+					const response = await fetch(`http://127.0.0.1:${port}/json`);
+					if (!response.ok) return false;
+					targets.pages = (await response.json()) as { type: string; webSocketDebuggerUrl: string }[];
+					return targets.pages.length > 0;
+				} catch {
+					return false;
+				}
+			},
+			20_000,
+			"Chromium DevTools targets",
+		);
 		// Google Chrome also lists its component extensions' background pages; drive the tab.
-		const page = pages.find((target) => target.type === "page") ?? pages[0]!;
+		const page = targets.pages.find((target) => target.type === "page") ?? targets.pages[0]!;
 		socket = new WebSocket(page.webSocketDebuggerUrl);
 		await new Promise<void>((resolve, reject) => {
 			socket.once("open", resolve);
@@ -140,7 +152,18 @@ describe("sheet parity", { skip: !browserTests }, () => {
 	after(async () => {
 		await call("Browser.close").catch(() => {});
 		socket?.close();
-		process?.kill("SIGTERM");
+		if (process) {
+			// CDP acknowledges Browser.close before the browser finishes writing its profile.
+			// Wait for the process to exit before deleting the still-active directory.
+			const exited = () => process.exitCode !== null || process.signalCode !== null;
+			process.kill("SIGTERM");
+			try {
+				await poll(exited, 5_000, "sheet Chromium shutdown");
+			} catch {
+				process.kill("SIGKILL");
+				await poll(exited, 5_000, "sheet Chromium termination");
+			}
+		}
 		await fixture?.close();
 		if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 	});

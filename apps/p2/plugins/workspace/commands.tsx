@@ -9,6 +9,7 @@ import {
 	SearchIcon,
 	useCanWrite,
 	useCommandTarget,
+	useOwner,
 	useRoute,
 	type WorkspaceTab,
 } from "@p2/app/v1/web";
@@ -50,5 +51,10 @@ function showTab(ctx: CommandContext, tab: WorkspaceTab): void {
 /** Renders `children` while the reader may open the session's workspace (the owner, or a guest who may write). */
 function Writable({ children }: { children: ReactNode }) {
 	const writer = useCanWrite(commandSession(useCommandTarget(), useRoute()));
-	return writer ? <NotArchived>{children}</NotArchived> : null;
+	const owner = useOwner();
+	if (!writer) return null;
+	// Owner commands still hide archived sessions. A full-access guest may not
+	// have a readable catalog row yet, but its grant already authorizes this workspace.
+	if (!owner) return children;
+	return <NotArchived>{children}</NotArchived>;
 }

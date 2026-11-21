@@ -4,6 +4,7 @@ import type { AnyModel, Api, ClassifierApi, ClassifierModel, ImageApi, ImageMode
 import { amazonBedrockProvider } from "./amazon-bedrock.ts";
 import { antLingProvider } from "./ant-ling.ts";
 import { anthropicProvider } from "./anthropic.ts";
+import { antigravityProvider } from "./antigravity.ts";
 import { azureProvider } from "./azure.ts";
 import { basetenProvider } from "./baseten.ts";
 import { cerebrasProvider } from "./cerebras.ts";
@@ -36,6 +37,7 @@ import { qwenTokenPlanIndividualProvider } from "./qwen-token-plan-individual.ts
 import { qwenTokenPlanIndividualCnProvider } from "./qwen-token-plan-individual-cn.ts";
 import { radiusProvider } from "./radius.ts";
 import { togetherProvider } from "./together.ts";
+import { tokendanceProvider } from "./tokendance.ts";
 import { typesafeProvider } from "./typesafe.ts";
 import { vercelAIGatewayProvider } from "./vercel-ai-gateway.ts";
 import { xaiProvider } from "./xai.ts";
@@ -46,7 +48,7 @@ import { xiaomiTokenPlanSgpProvider } from "./xiaomi-token-plan-sgp.ts";
 import { zaiProvider } from "./zai.ts";
 import { zaiCodingCnProvider } from "./zai-coding-cn.ts";
 
-export { radiusProvider };
+export { antigravityProvider, radiusProvider };
 
 /** Providers present in the generated catalog. `KnownProvider` additionally
  * includes purely dynamic providers (e.g. "radius") that have no static
@@ -137,6 +139,7 @@ export function getAllBuiltinModels<TProvider extends BuiltinProvider>(provider:
 export function builtinProviders(): Provider[] {
 	return [
 		amazonBedrockProvider(),
+		antigravityProvider(),
 		antLingProvider(),
 		anthropicProvider(),
 		azureProvider(),
@@ -170,6 +173,7 @@ export function builtinProviders(): Provider[] {
 		qwenTokenPlanIndividualCnProvider(),
 		radiusProvider(),
 		togetherProvider(),
+		tokendanceProvider(),
 		typesafeProvider(),
 		vercelAIGatewayProvider(),
 		xaiProvider(),

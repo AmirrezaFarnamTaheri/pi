@@ -31,6 +31,7 @@ function webLink(text: string, url: string): string {
 export class LoginDialogComponent extends Container implements Focusable {
 	private contentContainer: Container;
 	private input: Input;
+	private secretPrompt = false;
 	private tui: TUI;
 	/** The shown sign-in URL, which `app.message.copy` copies. */
 	private authUrl?: AuthUrlComponent;
@@ -69,7 +70,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 
 		// Title
-		this.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+		this.addChild(new TruncatedText(theme.fg("accent", theme.bold(title)), 1, 0));
+		this.addChild(new TruncatedText(theme.fg("muted", "Account setup  ·  Esc to cancel"), 1, 0));
+		this.addChild(new Spacer(1));
 
 		// Dynamic content area
 		this.contentContainer = new Container();
@@ -80,8 +83,11 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.input.onSubmit = () => {
 			if (this.inputResolver) {
 				const value = this.input.getValue();
-				this.replaceInputWithSubmittedText(value);
+				this.input.clearSensitiveValue();
+				this.replaceInputWithSubmittedText(this.secretPrompt ? "[secret submitted]" : value);
 				this.inputResolver(value);
+				this.secretPrompt = false;
+				this.input.setMask(false);
 				this.inputResolver = undefined;
 				this.inputRejecter = undefined;
 			}
@@ -114,6 +120,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 
 	private cancel(): void {
 		this.clearDeviceCodeAction();
+		this.input.clearSensitiveValue();
+		this.input.setMask(false);
+		this.secretPrompt = false;
 		this.abortController.abort();
 		if (this.inputRejecter) {
 			this.inputRejecter(new Error("Login cancelled"));
@@ -209,9 +218,15 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 */
 	showManualInput(prompt: string): Promise<string> {
 		this.clearDeviceCodeAction();
+		// OAuth callback URLs and one-time codes are credentials too.
+		this.secretPrompt = true;
+		this.input.setMask(true);
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
+		this.contentContainer.addChild(
+			new TruncatedText(theme.fg("muted", "● One-time authorization response is hidden"), 1, 0),
+		);
 		this.contentContainer.addChild(this.input);
 		this.contentContainer.addChild(new Text(`(${keyHint("tui.select.cancel", "to cancel")})`, 1, 0));
 		this.tui.requestRender();
@@ -226,11 +241,18 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Called by onPrompt callback - show prompt and wait for input
 	 * Note: Does NOT clear content, appends to existing (preserves URL from showAuth)
 	 */
-	showPrompt(message: string, placeholder?: string): Promise<string> {
+	showPrompt(message: string, placeholder?: string, secret = false): Promise<string> {
 		this.clearDeviceCodeAction();
+		this.secretPrompt = secret;
+		this.input.setMask(secret);
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
-		if (placeholder) {
+		if (secret) {
+			this.contentContainer.addChild(
+				new TruncatedText(theme.fg("muted", "● Hidden input  ·  cleared after submission"), 1, 0),
+			);
+		}
+		if (placeholder && !secret) {
 			this.contentContainer.addChild(new Text(theme.fg("dim", `e.g., ${placeholder}`), 1, 0));
 		}
 		this.contentContainer.addChild(this.input);

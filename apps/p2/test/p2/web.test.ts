@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders, request } from "node:http";
 import { after, before, describe, it } from "node:test";
 import { WebSocket as NodeWebSocket } from "ws";
-import { Browser, browserTests } from "./browser.ts";
+import { Browser, browserTests, COMPOSER } from "./browser.ts";
 import { type Fixture, startFixture, webAssets } from "./helpers.ts";
 
 function get(
@@ -173,20 +173,27 @@ describe("web host", () => {
 						"window.cspViolations=[];document.addEventListener('securitypolicyviolation',(e)=>window.cspViolations.push(e.violatedDirective+' '+e.blockedURI))",
 				});
 				await browser.open(`http://127.0.0.1:${fixture.server.port}/`);
-				await browser.wait("document.querySelector('.composer textarea') && !document.querySelector('.offline')");
+				await browser.wait(
+					`document.querySelector(${JSON.stringify(COMPOSER)}) && !document.querySelector('.offline')`,
+				);
 				assert.deepEqual(await browser.evaluate("window.cspViolations"), []);
 				// A page of another origin (another port, same site) framing the app: Chromium refuses to render it.
 				await browser.open(`http://127.0.0.1:${framerPort}/`);
 				await new Promise((resolve) => setTimeout(resolve, 1500));
+				// The parent owns an iframe element, even when CSP refuses the child before Chrome attaches a frame.
+				await browser.wait(
+					`document.querySelector("iframe#app")?.getAttribute("src") === "http://127.0.0.1:${fixture.server.port}/"`,
+				);
 				const tree = (await browser.call("Page.getFrameTree")) as {
 					frameTree: { childFrames?: { frame: { url: string; unreachableUrl?: string } }[] };
 				};
 				const child = tree.frameTree.childFrames?.[0]?.frame;
-				assert.ok(child, "the framer has its iframe");
-				assert.ok(
-					child.url.startsWith("chrome-error:") || child.unreachableUrl !== undefined,
-					JSON.stringify(child),
-				);
+				// Chromium can omit a CSP-blocked child frame entirely, or retain its error page.
+				if (child)
+					assert.ok(
+						child.url.startsWith("chrome-error:") || child.unreachableUrl !== undefined,
+						JSON.stringify(child),
+					);
 			} finally {
 				await browser.close();
 				await new Promise<void>((resolve) => framer.close(() => resolve()));

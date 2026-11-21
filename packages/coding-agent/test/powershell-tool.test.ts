@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { win32 } from "node:path";
+import { readFile, rm } from "node:fs/promises";
+import { dirname, win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLocalPowerShellOperations, createPowerShellTool } from "../src/core/tools/powershell.ts";
 import type * as Shell from "../src/utils/shell.ts";
@@ -38,6 +39,50 @@ function findPowerShell(fileName: "powershell.exe" | "pwsh.exe"): string | undef
 
 afterEach(() => {
 	shellOverride.path = undefined;
+});
+
+describe("PowerShell background execution", () => {
+	it("rejects background execution through custom or remote operations", async () => {
+		const operations = { exec: vi.fn(async () => ({ exitCode: 0 })) };
+		const tool = createPowerShellTool(process.cwd(), { operations });
+		await expect(
+			tool.execute("remote-ps", {
+				command: "Write-Output unsafe",
+				background: true,
+			}),
+		).rejects.toThrow(/Background execution is not supported/);
+		expect(operations.exec).not.toHaveBeenCalled();
+	});
+
+	it.skipIf(process.platform !== "win32")(
+		"starts a real detached PowerShell command and captures output",
+		async () => {
+			const tool = createPowerShellTool(process.cwd());
+			const result = await tool.execute("local-ps", {
+				command: "Write-Output 'background-ready'; Start-Sleep -Milliseconds 500",
+				background: true,
+			});
+			const data = result.structuredContent as { background_pid?: number; background_output_path?: string };
+			expect(data.background_pid).toBeGreaterThan(0);
+			expect(data.background_output_path).toBeTruthy();
+			try {
+				await vi.waitFor(
+					async () => {
+						const output = await readFile(data.background_output_path!, "utf8");
+						expect(output).toContain("background-ready");
+					},
+					{ timeout: 10000 },
+				);
+			} finally {
+				await rm(dirname(data.background_output_path!), {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
+			}
+		},
+	);
 });
 
 describe("powershell tool", () => {

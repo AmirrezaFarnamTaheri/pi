@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { describe, expect, it } from "vitest";
-import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
+import { describe, expect, it, vi } from "vitest";
+import { type CustomEntry, type SessionEntry, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
 
 describe("SessionManager append and tree traversal", () => {
@@ -128,6 +128,120 @@ describe("SessionManager append and tree traversal", () => {
 
 			const id3 = session.appendThinkingLevelChange("high");
 			expect(session.getLeafId()).toBe(id3);
+		});
+	});
+
+	describe("indexed tree navigation", () => {
+		it("does not rescan every stored entry to revisit the same parent's children", () => {
+			const session = SessionManager.inMemory();
+			const root = session.appendMessage(userMsg("root"));
+			const children: string[] = [];
+			for (let i = 0; i < 240; i++) {
+				session.branch(root);
+				children.push(session.appendMessage(userMsg(`child-${i}`)));
+			}
+			const map = (session as unknown as { byId: Map<string, unknown> }).byId;
+			const originalValues = map.values.bind(map);
+			let fullHistoryScans = 0;
+			const spy = vi.spyOn(map, "values").mockImplementation(() => {
+				fullHistoryScans++;
+				return originalValues();
+			});
+			try {
+				expect(session.getChildren(root).map((entry) => entry.id)).toEqual(children);
+				const scansAfterFirstLookup = fullHistoryScans;
+				expect(session.getChildren(root).map((entry) => entry.id)).toEqual(children);
+				expect(fullHistoryScans).toBe(scansAfterFirstLookup);
+				session.branch(root);
+				const newChild = session.appendMessage(userMsg("late child"));
+				expect(session.getChildren(root).at(-1)?.id).toBe(newChild);
+				const detached = session.getChildren(root);
+				detached.length = 0;
+				expect(session.getChildren(root)).toHaveLength(241);
+				session.newSession();
+				expect(session.getChildren(root)).toEqual([]);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+	});
+
+	describe("malformed and extreme session trees", () => {
+		it("detects a cyclic parent chain instead of hanging the agent", () => {
+			const manager = SessionManager.inMemory();
+			const root = manager.appendCustomEntry("root");
+			const leaf = manager.appendCustomEntry("leaf");
+			manager.getEntry(root)!.parentId = leaf;
+			const index = (manager as unknown as { byId: Map<string, SessionEntry> }).byId;
+			const originalGet = index.get.bind(index);
+			let reads = 0;
+			const guard = vi.spyOn(index, "get").mockImplementation((key) => {
+				if (++reads > 20) throw new Error("Fixture traversal guard exceeded");
+				return originalGet(key);
+			});
+			try {
+				expect(() => manager.getBranch()).toThrow(/cycle|cyclic/i);
+			} finally {
+				guard.mockRestore();
+			}
+		});
+
+		it("renders a root with 140,000 children without stack-argument overflow", () => {
+			const manager = SessionManager.inMemory();
+			const root = manager.appendCustomEntry("root");
+			const backing = manager as unknown as { fileEntries: unknown[] };
+			const rows = backing.fileEntries.slice();
+			for (let index = 0; index < 140_000; index++) {
+				rows.push({
+					type: "custom",
+					customType: "branch",
+					id: `child-${index}`,
+					parentId: root,
+					timestamp: "2025-01-01T00:00:00Z",
+				});
+			}
+			backing.fileEntries = rows;
+			const tree = manager.getTree();
+			expect(tree).toHaveLength(1);
+			expect(tree[0]!.children).toHaveLength(140_000);
+		});
+	});
+
+	describe("tree correctness and timestamp sorting", () => {
+		it("rejects cycles in a disconnected component even when another root is valid", () => {
+			const session = SessionManager.inMemory();
+			session.appendCustomEntry("valid-root");
+			session.resetLeaf();
+			const first = session.appendCustomEntry("cycle-a");
+			const second = session.appendCustomEntry("cycle-b");
+			session.getEntry(first)!.parentId = second;
+			expect(() => session.getTree()).toThrow(/cycle/i);
+		});
+
+		it("reads each child timestamp once while sorting wide siblings", () => {
+			const session = SessionManager.inMemory();
+			const root = session.appendCustomEntry("root");
+			const backing = session as unknown as { fileEntries: unknown[] };
+			const rows = backing.fileEntries.slice();
+			let timestampReads = 0;
+			for (let i = 0; i < 160; i++) {
+				const timestamp = new Date(Date.UTC(2025, 0, 1, 0, 0, 160 - i)).toISOString();
+				const item = { type: "custom", customType: "wide", id: "child-" + i, parentId: root };
+				Object.defineProperty(item, "timestamp", {
+					get: () => {
+						timestampReads++;
+						return timestamp;
+					},
+					enumerable: true,
+				});
+				rows.push(item);
+			}
+			backing.fileEntries = rows;
+			const tree = session.getTree();
+			expect(tree[0]!.children.map(({ entry }) => entry.id)).toEqual(
+				Array.from({ length: 160 }, (_, i) => "child-" + (159 - i)),
+			);
+			expect(timestampReads).toBeLessThanOrEqual(160);
 		});
 	});
 

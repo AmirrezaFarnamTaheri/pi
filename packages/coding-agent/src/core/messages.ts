@@ -91,8 +91,10 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
 	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
 		text += `\n\nCommand exited with code ${msg.exitCode}`;
 	}
-	if (msg.truncated && msg.fullOutputPath) {
-		text += `\n\n[Output truncated. Full output: ${msg.fullOutputPath}]`;
+	if (msg.truncated) {
+		text += msg.fullOutputPath
+			? `\n\n[Output truncated. Full output: ${msg.fullOutputPath}]`
+			: "\n\n[Output truncated. Full output unavailable.]";
 	}
 	return text;
 }

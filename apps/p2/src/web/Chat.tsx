@@ -9,6 +9,7 @@ import {
 	useLayoutEffect,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import type { ShownImage } from "../runtime/entry-images.ts";
 import { plainReferences, referenceParts } from "../runtime/references.ts";
@@ -555,10 +556,18 @@ function Thought({ item }: { item: Extract<ChatItem, { type: "thought" }> }) {
  * The agent's answer: the last text of its turn, as prose, with Copy, Branch, Reply and its time once complete; a stop,
  * an error or the length limit below it.
  */
+const noBranchChanges = () => () => {};
+
+/** Only answers whose "newest" status changed need another render. */
 const Answer = memo(function Answer({ item }: { item: Extract<ChatItem, { type: "answer" }> }) {
 	const reply = useReply(item.streaming ? undefined : item.entryId, "Pi");
 	const branch = useContext(BranchFrom);
 	const { message, entryId } = item;
+	const isLast = useSyncExternalStore(
+		branch?.subscribeEnd ?? noBranchChanges,
+		() => branch !== undefined && entryId !== undefined && entryId === branch.end,
+		() => false,
+	);
 	const text = item.text.trim();
 	return (
 		<div className="assistant" data-entry={entryId} {...reply.gesture}>
@@ -568,7 +577,7 @@ const Answer = memo(function Answer({ item }: { item: Extract<ChatItem, { type: 
 					{!item.streaming && (
 						<div className="message-actions">
 							<CopyButton text={text} />
-							{branch && entryId !== undefined && entryId !== branch.end && (
+							{branch && entryId !== undefined && !isLast && (
 								<button
 									type="button"
 									className="copy"

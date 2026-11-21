@@ -36,8 +36,20 @@ function Provider({ children }: { children: ReactNode }) {
 			if (event.defaultPrevented || event.isComposing || event.repeat || !matchesBinding(event, "p2.commands.open"))
 				return;
 			event.preventDefault();
-			if (openMenu(getNavigation().route)) void closeMenu();
-			else pushMenu(currentTarget(sources));
+			// Read the navigation at keydown time: a guest can join between the
+			// session's first render and this effect's next subscription.
+			const route = getNavigation().route;
+			if (openMenu(route)) void closeMenu();
+			else {
+				const target = currentTarget(sources);
+				// A stale new-session target must not hide session commands after
+				// navigation. Visibility and permission remain enforced by each command.
+				const fallback =
+					route.session && route.page === undefined && (target === undefined || target.type === "new-session")
+						? { type: "session" as const, id: route.session, kind: "Session", label: "" }
+						: target;
+				pushMenu(fallback);
+			}
 		};
 		window.addEventListener("keydown", key);
 		return () => window.removeEventListener("keydown", key);

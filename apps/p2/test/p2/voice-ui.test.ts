@@ -85,7 +85,11 @@ describe("voice mode in the browser", { skip: !browserTests }, () => {
 		await browser.evaluate("(history.back(), true)");
 		await browser.wait('document.querySelector(".voice-orb")');
 		assert.equal(mode.enabled.value, true);
-		// Off again (once the answer is read: a tap while it is read stops only the speech): the switch follows.
+		// Turning voice mode off is a different action from interrupting playback:
+		// after returning to the session, wait until no speech is being read.
+		await browser.wait(
+			'document.querySelector(".voice-chip")?.getAttribute("aria-label")?.includes("Turn voice mode off")',
+		);
 		await browser.click(".voice-chip");
 		await browser.wait('!document.querySelector(".voice-orb") && !document.querySelector(".voice-mute")');
 		await until(mode.enabled, (enabled) => !enabled);

@@ -47,6 +47,8 @@ describe("OAuthSelectorComponent", () => {
 					getProviders: () => providers,
 					getProviderAuthStatus: () => ({ configured: false }),
 					isUsingOAuth: () => false,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
 				},
 			},
 		};
@@ -69,6 +71,35 @@ describe("OAuthSelectorComponent", () => {
 		expect(getLoginProviderOptions.call(fakeThis, "oauth")).toMatchObject([
 			{ id: "anthropic", name: "Anthropic", authType: "oauth" },
 		]);
+	});
+
+	it("keeps provider branding and account nicknames visually separate in login and add", () => {
+		const provider = {
+			id: "anthropic",
+			name: "Anthropic",
+			accountLabel: "Client projects",
+			authType: "oauth" as const,
+			status: { type: "oauth" as const, source: "OAuth" },
+		};
+		const login = new OAuthSelectorComponent(
+			"login",
+			[provider],
+			() => {},
+			() => {},
+		);
+		const loginLines = stripAnsi(login.render(120).join("\n"));
+		expect(loginLines).toContain("Anthropic · Client projects");
+		expect(loginLines).toContain("configured");
+		const add = new OAuthSelectorComponent(
+			"add",
+			[{ ...provider, accountLabel: undefined }],
+			() => {},
+			() => {},
+		);
+		const addLines = stripAnsi(add.render(120).join("\n"));
+		expect(addLines).toContain("Anthropic");
+		expect(addLines).not.toContain("Client projects");
+		expect(addLines).not.toContain("configured");
 	});
 
 	it("renders an option without compiled auth status as not configured", () => {
@@ -171,6 +202,8 @@ describe("OAuthSelectorComponent", () => {
 					getProviders: () => providers,
 					getProviderAuthStatus: () => ({ configured: false }),
 					isUsingOAuth: () => false,
+					getAccountLabel: (providerId: string) =>
+						providers.find((provider) => provider.id === providerId)?.name ?? providerId,
 				},
 			},
 		};

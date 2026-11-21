@@ -7,6 +7,7 @@ import { openaiChatGPTOAuth } from "./auth/oauth/openai-chatgpt.ts";
 import { openaiCodexOAuth } from "./auth/oauth/openai-codex.ts";
 import { openRouterOAuth } from "./auth/oauth/openrouter.ts";
 import { createRadiusOAuth } from "./auth/oauth/radius.ts";
+import { tokenDanceOAuth } from "./auth/oauth/tokendance.ts";
 import { xaiOAuth } from "./auth/oauth/xai.ts";
 
 /** Register OAuth flows statically embedded in the standalone Bun binary. */
@@ -17,6 +18,7 @@ export function registerBunOAuthFlows(): void {
 		openaiChatGPT: () => openaiChatGPTOAuth,
 		githubCopilot: () => githubCopilotOAuth,
 		openrouter: () => openRouterOAuth,
+		tokendance: () => tokenDanceOAuth,
 		kimiCoding: () => kimiCodingOAuth,
 		meta: () => metaOAuth,
 		xai: () => xaiOAuth,

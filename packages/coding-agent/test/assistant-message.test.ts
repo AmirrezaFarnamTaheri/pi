@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Markdown, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -64,6 +64,50 @@ describe("AssistantMessageComponent", () => {
 		component.invalidate();
 		expect(component.render(80)).toEqual(new AssistantMessageComponent(message).render(80));
 		initTheme("dark");
+	});
+
+	test("does not reset unchanged Markdown block caches during ordinary streaming", () => {
+		initTheme("dark");
+		const sets = vi.spyOn(Markdown.prototype, "setText");
+		const component = new AssistantMessageComponent();
+		const make = (tail: string) =>
+			createAssistantMessage([
+				{ type: "text" as const, text: "**unchanged**" },
+				{ type: "text" as const, text: tail },
+			]);
+		component.updateContent(make("first"), true);
+		component.render(80);
+		sets.mockClear();
+
+		component.updateContent(make("second"), true);
+		component.render(80);
+		// Only the updated tail of the streamed message needs a new transform/wrap.
+		expect(sets).toHaveBeenCalledTimes(1);
+		expect(sets).toHaveBeenCalledWith("second");
+		sets.mockClear();
+
+		component.updateContent(make("second"), false);
+		component.render(80);
+		// End-of-stream transitions must refresh transform dependencies.
+		expect(sets).toHaveBeenCalledTimes(2);
+	});
+
+	test("still recomputes extension Markdown transformers when external state changes", () => {
+		initTheme("dark");
+		let externalState = "initial";
+		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", 1, [
+			(text, { isStreaming }) => `${text}-${externalState}-${isStreaming}`,
+		]);
+		const message = createAssistantMessage([{ type: "text", text: "unchanged" }]);
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("unchanged-initial-true");
+
+		externalState = "changed";
+		component.updateContent(message, true);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("unchanged-changed-true");
+
+		component.updateContent(message, false);
+		expect(stripAnsi(component.render(80).join("\n"))).toContain("unchanged-changed-false");
 	});
 
 	test("adds OSC 133 zone markers to assistant messages without tool calls", () => {

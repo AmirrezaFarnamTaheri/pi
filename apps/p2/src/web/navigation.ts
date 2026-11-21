@@ -51,6 +51,15 @@ export const HOME: Route = { conversation: 1, layers: [] };
 /** The new-session screen. */
 export const NEW_SESSION: Route = { newSession: true, conversation: 1, layers: [] };
 
+/** Strictly parse the command target locator of a subagent conversation (`session/number`). */
+export function conversationOf(id: string): { readonly session: string; readonly conversation: number } | undefined {
+	const slash = id.lastIndexOf("/");
+	const conversation = Number(id.slice(slash + 1));
+	return slash > 0 && Number.isInteger(conversation) && conversation > 0
+		? { session: id.slice(0, slash), conversation }
+		: undefined;
+}
+
 /**
  * Another conversation, with no modal layers, and with its session's panels (session-panels.ts): within the open
  * session the open ones stay (the workspace on the same tab at the new working tree's root, the same terminal); another

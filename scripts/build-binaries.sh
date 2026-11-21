@@ -25,6 +25,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/bun-compiler-path.sh
 
 SKIP_INSTALL=false
 SKIP_BUILD=false
@@ -77,9 +78,7 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="packages/coding-agent/binaries"
 fi
-if [[ "$OUTPUT_DIR" != /* ]]; then
-    OUTPUT_DIR="$(pwd)/$OUTPUT_DIR"
-fi
+OUTPUT_DIR="$(pi_normalize_output_dir "$OUTPUT_DIR")"
 
 if [[ "$SKIP_INSTALL" == "false" ]]; then
     echo "==> Installing dependencies..."
@@ -131,17 +130,23 @@ for platform in "${PLATFORMS[@]}"; do
     # project env files do not leak into pi's environment (see #10473). Enable
     # package.json autoload so extension dependencies resolve through their
     # package.json main/exports entries instead of only a root index.* (see #12012).
+    outfile="$OUTPUT_DIR/$platform/pi"
     if [[ "$platform" == windows-* ]]; then
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi.exe"
-    else
-        bun build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json --target="$bun_target" ./dist/bun/cli.js ./src/utils/image-resize-worker.ts ./src/extensions/codemode/worker.ts --outfile "$OUTPUT_DIR/$platform/pi"
+        outfile="$OUTPUT_DIR/$platform/pi.exe"
     fi
+    pi_bun_compile "$platform" "$bun_target" "$outfile"
 done
 
 echo "==> Creating release archives..."
 
 # Copy shared files to each platform directory
 for platform in "${PLATFORMS[@]}"; do
+    # Include a native, user-scoped installer in every standalone archive.
+    if [[ "$platform" == windows-* ]]; then
+        cp ../../scripts/install-standalone.ps1 "$OUTPUT_DIR/$platform/install.ps1"
+    else
+        cp ../../scripts/install-standalone.sh "$OUTPUT_DIR/$platform/install.sh"
+    fi
     cp package.json "$OUTPUT_DIR/$platform/"
     cp README.md "$OUTPUT_DIR/$platform/"
     cp CHANGELOG.md "$OUTPUT_DIR/$platform/"
@@ -168,7 +173,15 @@ for platform in "${PLATFORMS[@]}"; do
     if [[ "$platform" == windows-* ]]; then
         # Windows (zip)
         echo "Creating pi-$platform.zip..."
-        (cd "$platform" && zip -r ../pi-$platform.zip .)
+        if command -v powershell.exe >/dev/null 2>&1; then
+            # Git for Windows does not guarantee that zip/unzip are installed.
+            export PI_ARCHIVE_SOURCE="$(cygpath -w "$OUTPUT_DIR/$platform")"
+            export PI_ARCHIVE_OUTPUT="$(cygpath -w "$OUTPUT_DIR/pi-$platform.zip")"
+            powershell.exe -NoProfile -NonInteractive -Command \
+                'Compress-Archive -Path (Join-Path $env:PI_ARCHIVE_SOURCE "*") -DestinationPath $env:PI_ARCHIVE_OUTPUT -Force'
+        else
+            (cd "$platform" && zip -r "../pi-$platform.zip" .)
+        fi
     else
         # Unix platforms (tar.gz) - use wrapper directory for mise compatibility
         echo "Creating pi-$platform.tar.gz..."
@@ -181,7 +194,15 @@ echo "==> Extracting archives for testing..."
 for platform in "${PLATFORMS[@]}"; do
     rm -rf "$platform"
     if [[ "$platform" == windows-* ]]; then
-        mkdir -p "$platform" && (cd "$platform" && unzip -q ../pi-$platform.zip)
+        mkdir -p "$platform"
+        if command -v powershell.exe >/dev/null 2>&1; then
+            export PI_ARCHIVE_INPUT="$(cygpath -w "$OUTPUT_DIR/pi-$platform.zip")"
+            export PI_ARCHIVE_DESTINATION="$(cygpath -w "$OUTPUT_DIR/$platform")"
+            powershell.exe -NoProfile -NonInteractive -Command \
+                'Expand-Archive -LiteralPath $env:PI_ARCHIVE_INPUT -DestinationPath $env:PI_ARCHIVE_DESTINATION -Force'
+        else
+            (cd "$platform" && unzip -q "../pi-$platform.zip")
+        fi
     else
         tar -xzf pi-$platform.tar.gz && mv pi "$platform"
     fi

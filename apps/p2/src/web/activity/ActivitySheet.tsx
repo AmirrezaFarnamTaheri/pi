@@ -72,7 +72,14 @@ export function ActivityLayer({ rows }: { rows: readonly { item: ChatItem }[] })
 								row.item.entries?.some((entry) => entry.kind !== "call" && entry.id === place.step)),
 					)?.item
 				: undefined));
-	if (!place || item?.type !== "activity" || !shown) return null;
+	// Detail 4 replaces a whole-run wheel with individual step rows. A restored
+	// selection of the old wheel no longer names a visible action: close that
+	// history entry instead of leaving an invisible side panel blocking Back.
+	const obsoleteWheel = item?.type === "activity" && item.rows && !place?.step;
+	useEffect(() => {
+		if (obsoleteWheel) closePanel();
+	}, [obsoleteWheel]);
+	if (!place || item?.type !== "activity" || !shown || obsoleteWheel) return null;
 	return (
 		<ActivityPanel
 			key={item.key}
