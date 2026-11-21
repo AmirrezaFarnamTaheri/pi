@@ -1,9 +1,9 @@
 // The words hints use for the reader's device: "tap" on a touch screen, "click" with a mouse, both on a touch laptop;
 // Cmd and Option on Apple's platforms, Ctrl and Alt on Windows and Linux.
 import { useSyncExternalStore } from "react";
-import { pointerKind, type PointerKind } from "../runtime/pointer-hints.ts";
+import { type PointerKind, pointerKind } from "../runtime/pointer-hints.ts";
 
-export { pointerKind, pressVerb, type PointerKind } from "../runtime/pointer-hints.ts";
+export { type PointerKind, pointerKind, pressVerb } from "../runtime/pointer-hints.ts";
 
 const COARSE = "(any-pointer: coarse)";
 const FINE = "(any-pointer: fine)";
