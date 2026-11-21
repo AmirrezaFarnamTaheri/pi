@@ -71,6 +71,7 @@ export {
 export type { JsonValue } from "@earendil-works/chord/json";
 export type { NativeWatchable, WatchCall, WatchHandle } from "@earendil-works/chord/watch";
 export * from "../../runtime/access.ts";
+export { pointerKind, pressVerb } from "../../runtime/pointer-hints.ts";
 export * from "../../runtime/chord.ts";
 export * from "../../runtime/composer.ts";
 export * from "../../runtime/contribute.ts";
