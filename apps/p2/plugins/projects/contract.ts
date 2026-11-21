@@ -28,7 +28,6 @@ export function placeSeed(projects: readonly Project[], env: string | null, cwd:
 	return project ? projectSeed(project) : cwd;
 }
 
-
 /** An archived project: it and the sessions it had then are in the Archive until it is restored. */
 export const ArchivedProjectSchema = obj({ name: str(), places: arr(ProjectPlaceSchema), archivedAt: num() });
 export type ArchivedProject = Static<typeof ArchivedProjectSchema>;
