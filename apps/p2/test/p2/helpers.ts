@@ -137,16 +137,22 @@ export async function startFixture(
 	options: ServerOptions & {
 		/** settings.json written into the data directory before the server starts (keys read at the start: `telemetry`). */
 		readonly settings?: Readonly<Record<string, unknown>>;
+		/** models.json installed before server and worker startup (e.g. model capability overrides). */
+		readonly modelsConfig?: Readonly<Record<string, unknown>>;
 	} = {},
 ): Promise<Fixture> {
 	const root = mkdtempSync(join(tmpdir(), "p2-test-"));
 	const dataDir = join(root, "data");
 	const workspace = join(root, "workspace");
 	mkdirSync(workspace, { recursive: true });
-	const { settings, ...serverOptions } = options;
+	const { settings, modelsConfig, ...serverOptions } = options;
 	if (settings !== undefined) {
 		mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 		writeFileSync(join(dataDir, "settings.json"), JSON.stringify(settings), { mode: 0o600 });
+	}
+	if (modelsConfig !== undefined) {
+		mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+		writeFileSync(join(dataDir, "models.json"), JSON.stringify(modelsConfig), { mode: 0o600 });
 	}
 	let server: P2Server;
 	try {

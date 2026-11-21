@@ -1,4 +1,4 @@
-// Request validation as Pi Mobile does it: unknown models, thinking levels outside off…max, blank messages; a single
+// Request validation as Pi Mobile does it: unknown models, unsupported thinking levels, blank messages; a single
 // configured field still updates the session's catalog entry.
 
 import assert from "node:assert/strict";
@@ -26,7 +26,7 @@ describe("validation (fake provider)", () => {
 		await fixture?.close();
 	});
 
-	it("refuses unknown models and thinking levels when creating", async () => {
+	it("rejects unknown levels and clamps unsupported model-specific efforts when creating", async () => {
 		await assert.rejects(
 			sessions.create(
 				{ cwd: fixture.workspace, model: { provider: "faux", modelId: "missing" } },
@@ -39,7 +39,7 @@ describe("validation (fake provider)", () => {
 			"invalid",
 		);
 		const created = await sessions.create({ cwd: fixture.workspace, thinkingLevel: "low" }, BACKGROUND_CONTEXT);
-		assert.equal(created.thinkingLevel, "low");
+		assert.equal(created.thinkingLevel, "off", "the fake model cannot perform reasoning");
 	});
 
 	it("refuses a blank message without attachments", async () => {
@@ -47,12 +47,42 @@ describe("validation (fake provider)", () => {
 		await assert.rejects(chat.send({ text: "", requestId: "empty" }, BACKGROUND_CONTEXT), /Invalid content/);
 	});
 
-	it("refuses unknown thinking levels and updates the catalog from a single field", async () => {
+	it("refuses unknown and unsupported thinking levels", async () => {
 		await expectChord(chat.configure({ thinkingLevel: "extreme" }, BACKGROUND_CONTEXT), "invalid");
-		await chat.configure({ thinkingLevel: "minimal" }, BACKGROUND_CONTEXT);
-		await until(sessions.sessions, (list) => list?.find((s) => s.id === session.id)?.thinkingLevel === "minimal");
-		await chat.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
-		const list = await until(sessions.sessions, (value) => Boolean(value?.find((s) => s.id === session.id)));
-		assert.equal(list?.find((s) => s.id === session.id)?.thinkingLevel, "minimal", "the other field keeps its value");
+		await assert.rejects(
+			chat.configure({ thinkingLevel: "minimal" }, BACKGROUND_CONTEXT),
+			/Thinking level is not supported by the selected model/,
+		);
+	});
+
+	it("publishes a real reasoning-level transition and preserves it on a model-only update", async () => {
+		const reasoning = await startFixture({
+			modelsConfig: { providers: { faux: { modelOverrides: { "faux-1": { reasoning: true } } } } },
+		});
+		try {
+			const host = reasoning.browser();
+			const catalog = await holdIn(host, Sessions, {}, "owner");
+			const created = await catalog.create({ cwd: reasoning.workspace, thinkingLevel: "off" }, BACKGROUND_CONTEXT);
+			const conversation = await holdIn(host, Chat, { session: created.id, conversation: 1 }, "participant");
+
+			await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "off",
+			);
+			await conversation.configure({ thinkingLevel: "low" }, BACKGROUND_CONTEXT);
+			await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low",
+			);
+
+			await conversation.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
+			const updated = await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low",
+			);
+			assert.equal(updated?.find((entry) => entry.id === created.id)?.thinkingLevel, "low");
+		} finally {
+			await reasoning.close();
+		}
 	});
 });

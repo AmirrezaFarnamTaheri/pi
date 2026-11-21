@@ -355,7 +355,7 @@ test("model selector configures the conversation; Ctrl+S saves the default; /mod
 	send(DOWN);
 	send(ENTER);
 	await poll(() => (calls.configure?.length ?? 0) === 1);
-	assert.deepEqual(calls.configure?.[0], { model: { provider: "faux", modelId: "faux-2" } });
+	assert.deepEqual(calls.configure?.[0], { model: { provider: "faux", modelId: "faux-2" }, thinkingLevel: "off" });
 	send("\x0c");
 	await poll(async () => (await screen()).includes("Model Name"));
 	send(CTRL_S);
@@ -364,7 +364,7 @@ test("model selector configures the conversation; Ctrl+S saves the default; /mod
 	typed(send, "/model faux/faux-1");
 	send(ENTER);
 	await poll(() => (calls.configure?.length ?? 0) >= 3);
-	assert.deepEqual(calls.configure?.at(-1), { model: { provider: "faux", modelId: "faux-1" } });
+	assert.deepEqual(calls.configure?.at(-1), { model: { provider: "faux", modelId: "faux-1" }, thinkingLevel: "off" });
 });
 
 test("Shift+Tab cycles the model's thinking levels; Ctrl+P cycles the scope with its level; /thinking selects", async (t) => {
@@ -375,8 +375,8 @@ test("Shift+Tab cycles the model's thinking levels; Ctrl+P cycles the scope with
 	assert.deepEqual(calls.configure?.[0], { thinkingLevel: "low" });
 	send(CTRL_P);
 	await poll(() => (calls.configure?.length ?? 0) === 2);
-	// The scope is [faux-2:low, faux-1]; the current model is faux-1, so the next is faux-2 with its level.
-	assert.deepEqual(calls.configure?.[1], { model: { provider: "faux", modelId: "faux-2" }, thinkingLevel: "low" });
+	// The scope requests faux-2:low, but faux-2 supports only off, so model cycling clamps it.
+	assert.deepEqual(calls.configure?.[1], { model: { provider: "faux", modelId: "faux-2" }, thinkingLevel: "off" });
 	typed(send, "/thinking");
 	send(ENTER);
 	await poll(async () => (await screen()).includes("Thinking Level"));

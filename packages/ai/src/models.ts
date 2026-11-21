@@ -1312,14 +1312,15 @@ export function getSupportedThinkingLevels<TApi extends Api>(model: Model<TApi>)
 	});
 }
 
-export function clampThinkingLevel<TApi extends Api>(
-	model: Model<TApi>,
-	level: ModelThinkingLevel,
-): ModelThinkingLevel {
-	const availableLevels = getSupportedThinkingLevels(model);
-	if (availableLevels.includes(level)) return level;
+/**
+ * Resolve a requested thinking effort against the selected model's supported levels.
+ * This is also used by UI metadata which contains level strings rather than full models.
+ */
+export function clampThinkingLevelToSupported(levels: readonly string[], requested: string): ModelThinkingLevel {
+	const availableLevels = EXTENDED_THINKING_LEVELS.filter((level) => levels.includes(level));
+	if (availableLevels.includes(requested as ModelThinkingLevel)) return requested as ModelThinkingLevel;
 
-	const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(level);
+	const requestedIndex = EXTENDED_THINKING_LEVELS.indexOf(requested as ModelThinkingLevel);
 	if (requestedIndex === -1) return availableLevels[0] ?? "off";
 
 	for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
@@ -1331,6 +1332,13 @@ export function clampThinkingLevel<TApi extends Api>(
 		if (availableLevels.includes(candidate)) return candidate;
 	}
 	return availableLevels[0] ?? "off";
+}
+
+export function clampThinkingLevel<TApi extends Api>(
+	model: Model<TApi>,
+	level: ModelThinkingLevel,
+): ModelThinkingLevel {
+	return clampThinkingLevelToSupported(getSupportedThinkingLevels(model), level);
 }
 
 /**
