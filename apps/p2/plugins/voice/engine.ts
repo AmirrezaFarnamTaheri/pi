@@ -23,8 +23,7 @@
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ConversationView } from "@earendil-works/pi-durable";
-import { follow, type Watchable } from "@p2/app/v1";
-import { pointerKind, pressVerb } from "@p2/app/v1/web";
+import { follow, pointerKind, pressVerb, type Watchable } from "@p2/app/v1";
 import { BargeInDetector, type BargeInPhase, Pcm16kResampler } from "./barge-in.ts";
 import { Interruption } from "./interruption.ts";
 import { SpeechPlayback } from "./playback.ts";
