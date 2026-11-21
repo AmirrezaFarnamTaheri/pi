@@ -122,9 +122,9 @@ describe("sandbox UI", { skip: !browserTests }, () => {
 		);
 		await browser.open(`http://127.0.0.1:${fixture.server.port}/s/${session.id}`);
 		await browser.wait(`document.querySelector('.title-cwd .title-lock')`);
-		// Its folder in the sidebar shows a lock instead of a folder.
+		// The project-organized sidebar lists ungrouped sandbox sessions under Other; its location retains the lock.
 		await browser.wait(
-			`[...document.querySelectorAll('.sidebar-group')].some(g=>g.querySelector('.group-link').title==='box1:/workspace' && g.querySelector('.nav-marker svg[aria-label=Sandbox]'))`,
+			`document.querySelector('.sidebar-section[data-key=other] .session-row[data-session=${JSON.stringify(session.id)}]')`,
 		);
 		await browser.evaluate(`document.querySelector('.title-cwd').click()`);
 		await browser.wait(`document.querySelector('[role=dialog][aria-label="Location"] .location-machines')`);
