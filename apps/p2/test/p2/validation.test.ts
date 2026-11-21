@@ -65,13 +65,20 @@ describe("validation (fake provider)", () => {
 			const created = await catalog.create({ cwd: reasoning.workspace, thinkingLevel: "off" }, BACKGROUND_CONTEXT);
 			const conversation = await holdIn(host, Chat, { session: created.id, conversation: 1 }, "participant");
 
-			await until(catalog.sessions, (list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "off");
+			await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "off",
+			);
 			await conversation.configure({ thinkingLevel: "low" }, BACKGROUND_CONTEXT);
-			await until(catalog.sessions, (list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low");
+			await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low",
+			);
 
 			await conversation.configure({ model: { provider: "faux", modelId: "faux-1" } }, BACKGROUND_CONTEXT);
-			const updated = await until(catalog.sessions, (list) =>
-				list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low",
+			const updated = await until(
+				catalog.sessions,
+				(list) => list?.find((entry) => entry.id === created.id)?.thinkingLevel === "low",
 			);
 			assert.equal(updated?.find((entry) => entry.id === created.id)?.thinkingLevel, "low");
 		} finally {
