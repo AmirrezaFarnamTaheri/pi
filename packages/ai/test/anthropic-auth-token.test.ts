@@ -229,7 +229,7 @@ describe("Anthropic-compatible user agents", () => {
 		await streamAnthropic(anthropicModel, context, { apiKey: "sk-ant-oat-test" }).result();
 
 		const headers = mockState.constructorOpts?.defaultHeaders as Record<string, string>;
-		expect(headers["user-agent"]).toBe("claude-cli/2.1.322");
+		expect(headers["user-agent"]).toBe("claude-cli/2.1.330");
 		expect(headers["x-app"]).toBe("cli");
 	});
 
