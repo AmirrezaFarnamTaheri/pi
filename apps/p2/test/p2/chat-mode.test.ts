@@ -179,7 +179,7 @@ describe("chat-mode on a bare session host", () => {
 		const text = JSON.stringify(asked?.model?.[0]?.content);
 		assert.match(text, /Owner: lunch first\? \[attached: menu\.txt\]\\nAlice \(guest\): yes\\n<\/chat>/);
 		assert.match(text, /Alice \(guest\) mentioned you:\\n@pi which place\?/);
-		assert.match(text, /<file name=\[File #1\] path=\\"[^\"]*menu\.txt\\" \/>/, "attachments are listed by path");
+		assert.match(text, /<file name=\[File #1\] path=\\"[^"]*menu\.txt\\" \/>/, "attachments are listed by path");
 		assert.equal(await until(mode.waiting, (value) => value === 0), 0, "the mention passed the chat on");
 		// An ordinary input with chat mode off is a p2.input entry with the same kind of data.
 		await mode.set({ enabled: false }, BACKGROUND_CONTEXT);
