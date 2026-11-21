@@ -83,6 +83,7 @@ export * from "../../runtime/input.ts";
 export * from "../../runtime/link-limits.ts";
 export * from "../../runtime/location.ts";
 export * from "../../runtime/notices.ts";
+export { pointerKind, pressVerb } from "../../runtime/pointer-hints.ts";
 export * from "../../runtime/principals.ts";
 export * from "../../runtime/references.ts";
 export * from "../../runtime/refs.ts";
