@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
+import { clampThinkingLevelToSupported, getSupportedThinkingLevels } from "@earendil-works/pi-ai/models";
 import {
 	type AgentState,
 	type ConversationId,
@@ -403,10 +403,28 @@ export default defineFacet((host) => {
 					return { mimeType: image.mimeType, data: image.data };
 				},
 				configure: async ({ model, thinkingLevel }, ctx) => {
-					if (model && !models()?.getModel(model.provider, model.modelId)) throw new Error("Unknown model");
 					const current = target().conversation;
+					const selected = model ?? (await current.agent(ctx)).model;
+					const physical = selected ? models()?.getModel(selected.provider, selected.modelId) : undefined;
+					if (model && !physical) throw new Error("Unknown model");
+					if (
+						thinkingLevel &&
+						physical &&
+						!getSupportedThinkingLevels(physical).some((level) => level === thinkingLevel)
+					)
+						throw new Error("Thinking level is not supported by the selected model");
+					// Switching models without an explicit effort keeps the user's intent, but never sends
+					// an unsupported effort to the next model.
+					const selectedLevel =
+						thinkingLevel ??
+						(model && physical
+							? clampThinkingLevelToSupported(
+									getSupportedThinkingLevels(physical),
+									(await current.agent(ctx)).thinkingLevel ?? "off",
+								)
+							: undefined);
 					await current.configure(
-						{ ...(model ? { model } : {}), ...(thinkingLevel ? { thinkingLevel: thinkingLevel as never } : {}) },
+						{ ...(model ? { model } : {}), ...(selectedLevel ? { thinkingLevel: selectedLevel as never } : {}) },
 						ctx,
 					);
 					for (const after of configured.value.values()) await after(current, ctx);

@@ -47,13 +47,14 @@ describe("user bash output truncation (#10164)", () => {
 
 	it("exposes detached output only as a background log, never as full output", async () => {
 		const outputPath = "/tmp/pi-detached-output.log";
+		const jobId = "job_00000000-0000-0000-0000-000000000000";
 		const result = await executeBashWithOperations("long test", process.cwd(), {
 			exec: async (_command, _cwd, { onData }) => {
 				onData(Buffer.from("started\\n"));
-				return { exitCode: null, background: { pid: 4321, outputPath } };
+				return { exitCode: null, background: { jobId, pid: 4321, outputPath } };
 			},
 		});
-		expect(result.background).toEqual({ pid: 4321, outputPath });
+		expect(result.background).toEqual({ jobId, pid: 4321, outputPath });
 		expect(result.fullOutputPath).toBeUndefined();
 		expect(result.output).toContain(outputPath);
 	});

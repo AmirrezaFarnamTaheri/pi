@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { ModelRuntime } from "../src/core/model-runtime.ts";
+import { intersectSupportedThinkingLevels, ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
@@ -202,6 +202,24 @@ describe("getBranchSelection", () => {
 		}, runtime);
 		expect(selection).toEqual({ provider: "faux", modelId: "large" });
 		expect(lookups).toEqual([]);
+	});
+});
+
+describe("account rotation thinking capabilities", () => {
+	it("advertises only thinking levels shared by eligible physical models", async () => {
+		const { runtime } = await createRuntime();
+		const reasoner = runtime.getModel("faux", "large")!;
+		const advanced = { ...reasoner, thinkingLevelMap: { xhigh: "high" as const, max: "high" as const } };
+		const limited = { ...reasoner, thinkingLevelMap: { xhigh: null, max: null } };
+		expect(intersectSupportedThinkingLevels([advanced, limited])).toEqual([
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+		]);
+		expect(intersectSupportedThinkingLevels([advanced, runtime.getModel("faux", "small")!])).toEqual(["off"]);
+		expect(intersectSupportedThinkingLevels([])).toEqual(["off"]);
 	});
 });
 
