@@ -1,18 +1,12 @@
 // The words hints use for the reader's device: "tap" on a touch screen, "click" with a mouse, both on a touch laptop;
 // Cmd and Option on Apple's platforms, Ctrl and Alt on Windows and Linux.
 import { useSyncExternalStore } from "react";
+import { pointerKind, type PointerKind } from "../runtime/pointer-hints.ts";
 
-/** How the device points: only by touch, only with a mouse (trackpad, pen), or both (a touch laptop). */
-export type PointerKind = "touch" | "mouse" | "both";
+export { pointerKind, pressVerb, type PointerKind } from "../runtime/pointer-hints.ts";
 
 const COARSE = "(any-pointer: coarse)";
 const FINE = "(any-pointer: fine)";
-
-/** The device's pointer kind now. A device with no pointer at all counts as a mouse: its hints name clicks. */
-export function pointerKind(): PointerKind {
-	if (!matchMedia(COARSE).matches) return "mouse";
-	return matchMedia(FINE).matches ? "both" : "touch";
-}
 
 /** `pointerKind()`, re-rendering when it changes (a tablet's keyboard with a trackpad attached or taken off). */
 export function usePointerKind(): PointerKind {
@@ -25,11 +19,6 @@ function subscribePointerKind(onChange: () => void): () => void {
 	return () => {
 		for (const query of queries) query.removeEventListener("change", onChange);
 	};
-}
-
-/** The verb for a press: "tap", "click" or "click or tap". */
-export function pressVerb(kind: PointerKind): string {
-	return kind === "touch" ? "tap" : kind === "mouse" ? "click" : "click or tap";
 }
 
 /** The verb for what opens more choices (`useLongPress` and `contextmenu`): "long-press", "right-click" or both. */
