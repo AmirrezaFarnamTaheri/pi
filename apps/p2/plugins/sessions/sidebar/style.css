@@ -543,7 +543,8 @@
 	justify-content: flex-end;
 	min-inline-size: calc(var(--nav-row) - var(--nav-glyph-inset));
 }
-@media (hover: hover) and (not (pointer: coarse)) {
+/* Preserve the fork's wide-screen fallback for browser devices reporting a coarse pointer. */
+@media (hover: hover) and (pointer: fine), (min-width: 900px) {
 	.nav-row > .nav-control.item-action {
 		display: inline-flex;
 		opacity: 0;
