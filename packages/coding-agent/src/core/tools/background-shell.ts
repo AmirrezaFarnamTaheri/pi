@@ -1,12 +1,15 @@
 /** Launch a local shell using a detached Node supervisor with capped output. */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
+import { getAgentDir } from "../../config.ts";
 import { killProcessTree, type ShellConfig } from "../../utils/shell.ts";
 
 export interface BackgroundShellResult {
+	jobId: string;
 	pid: number;
 	outputPath: string;
 	/** Uncapped foreground spool; only requested for commands that Ctrl+B may detach. */
@@ -17,6 +20,11 @@ export interface BackgroundShellResult {
 export const BACKGROUND_LOG_MAX_BYTES = 2_000_000;
 
 export const BACKGROUND_SUPERVISOR_FLAG = "--pi-internal-background-supervisor";
+
+/** Stable private storage for local background runs, accessible after restarting the CLI. */
+export function backgroundJobsRoot(): string {
+	return join(getAgentDir(), "background-jobs");
+}
 
 /** A compiled Pi binary cannot interpret Node's -e; use Pi's internal worker route. */
 export function backgroundSupervisorInvocation(
@@ -49,7 +57,8 @@ const request=JSON.parse(fs.readFileSync(requestPath,"utf8"));
 fs.rmSync(requestPath,{force:true});
 const statePath=join(folder,"state.json");
 const detachPath=join(folder,"detached");
-let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false;
+const cancelPath=join(folder,"cancel");
+let fd=null,foregroundFd=null,child=null,used=0,truncated=false,done=false,cancelRequested=false;
 const save=(patch)=>{
   const state={version:1,workerPid:process.pid,childPid:child?.pid??null,
     outputTruncated:truncated,foregroundOutputTruncated:false,updatedAt:Date.now(),...patch};
@@ -63,6 +72,8 @@ const closeForeground=()=>{
 const finish=(status,exitCode,signal,error)=>{
   if(done)return;
   done=true;
+  clearInterval(cancelTimer);
+  clearInterval(heartbeatTimer);
   try{if(fd!==null){fs.closeSync(fd);fd=null;}closeForeground();}catch{}
   try{save({status,exitCode,signal:signal||null,error:error||null,finishedAt:Date.now()});}
   catch{process.exitCode=1;}
@@ -73,6 +84,7 @@ const stopChildTree=()=>{
     if(process.platform==="win32"){
       spawnSync("taskkill",["/PID",String(child.pid),"/T","/F"],{windowsHide:true});
     }else{
+      if(process.platform==="darwin")try{process.kill(-child.pid,"SIGSTOP");}catch{}
       process.kill(-child.pid,"SIGKILL");
     }
   }catch{try{child.kill();}catch{}}
@@ -82,6 +94,17 @@ const fail=e=>{
   stopChildTree();
   finish("failed",null,null,e?.message||e?.code||String(e));
 };
+const cancelTimer=setInterval(()=>{
+  if(done||cancelRequested||!fs.existsSync(cancelPath))return;
+  cancelRequested=true;
+  stopChildTree();
+},100);
+cancelTimer.unref();
+const heartbeatTimer=setInterval(()=>{
+  if(done||!child?.pid)return;
+  try{save({status:"running",exitCode:null});}catch(e){fail(e);}
+},5000);
+heartbeatTimer.unref();
 const writeFully=(target,buf,count)=>{
   let pos=0;
   while(pos<count){
@@ -127,7 +150,7 @@ try{
     const guard=setTimeout(()=>{child.stdout.destroy();child.stderr.destroy();},1000);
     guard.unref();
   });
-  child.once("close",(code,signal)=>finish(code===0?"completed":"failed",code,signal,null));
+  child.once("close",(code,signal)=>finish(cancelRequested?"canceled":code===0?"completed":"failed",code,signal,null));
 }catch(e){fail(e);}
 `;
 
@@ -142,12 +165,29 @@ export async function startBackgroundShell(
 	shellConfig: ShellConfig,
 	env: NodeJS.ProcessEnv,
 	tempFilePrefix: string,
-	options?: { captureForegroundOutput?: boolean },
+	options?: { captureForegroundOutput?: boolean; workspaceCwd?: string },
 ): Promise<BackgroundShellResult> {
 	await access(cwd, constants.F_OK);
-	const folder = await mkdtemp(join(tmpdir(), `${tempFilePrefix}-`));
+	const jobId = `job_${randomUUID()}`;
+	const root = backgroundJobsRoot();
+	await mkdir(root, { recursive: true, mode: 0o700 });
+	await chmod(root, 0o700);
+	const folder = join(root, jobId);
+	await mkdir(folder, { mode: 0o700 });
 	let worker: ReturnType<typeof spawn> | undefined;
 	try {
+		await writeFile(
+			join(folder, "owner.json.tmp"),
+			JSON.stringify({
+				version: 1,
+				cwd: resolve(options?.workspaceCwd ?? cwd),
+				kind: tempFilePrefix,
+				createdAt: Date.now(),
+				captureForegroundOutput: options?.captureForegroundOutput === true,
+			}),
+			{ flag: "wx", mode: 0o600 },
+		);
+		await rename(join(folder, "owner.json.tmp"), join(folder, "owner.json"));
 		await writeFile(
 			join(folder, "request.json"),
 			JSON.stringify({
@@ -183,6 +223,7 @@ export async function startBackgroundShell(
 				};
 				if (typeof state.childPid === "number" && state.childPid > 0) {
 					return {
+						jobId,
 						pid: state.childPid,
 						outputPath: join(folder, "output.log"),
 						...(options?.captureForegroundOutput ? { foregroundOutputPath: join(folder, "foreground.log") } : {}),
